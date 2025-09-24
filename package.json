@@ -5,20 +5,24 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch --env-file .env.dev index.js",
-    "start": "node --env-file .env index.js"
+    "start": "node --env-file .env index.js",
+    "seed": "node --env-file .env.dev ./scripts/seed"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "This is a backend for a user authentication system using Node.js, Express, bcryptjs for password hashing, and jsonwebtoken for token generation.",
   "dependencies": {
+    "bcrypt": "^6.0.0",
     "bcryptjs": "3.0.2",
+    "cors": "^2.8.5",
     "dotenv": "17.2.2",
     "express": "5.1.0",
     "express-validator": "7.2.1",
     "jsonwebtoken": "9.0.2",
     "morgan": "1.10.1",
-    "pg": "8.16.3"
+    "pg": "8.16.3",
+    "zod": "^4.1.11"
   },
   "devDependencies": {
     "@types/node": "24.3.1"
