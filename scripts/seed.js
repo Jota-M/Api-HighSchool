@@ -1,35 +1,78 @@
 import { pool } from '../src/db/pool.js';
 
-async function createTables(client) {
-    const userTable = `
-        CREATE TABLE IF NOT EXISTS roles (
-            id SERIAL PRIMARY KEY,
-            name VARCHAR(50) UNIQUE NOT NULL
-        );
-        
-        CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
-            username VARCHAR(100) UNIQUE NOT NULL,
-            password VARCHAR(255) NOT NULL,
-            role_id INTEGER REFERENCES roles(id) ON DELETE SET NULL
-        );
-    `;
+async function createTables() {
+  try {
+    await pool.query(`
+      -- Tabla: Estudiante
+      CREATE TABLE IF NOT EXISTS estudiante (
+        id SERIAL PRIMARY KEY,
+        nombres VARCHAR(100) NOT NULL,
+        apellido_paterno VARCHAR(100) NOT NULL,
+        apellido_materno VARCHAR(100),
+        ci VARCHAR(20) UNIQUE NOT NULL,
+        fecha_nacimiento DATE,
+        genero VARCHAR(20),
+        nacionalidad VARCHAR(50),
+        institucion_procedencia VARCHAR(150),
+        ultimo_grado_cursado VARCHAR(100),
+        grado_solicitado VARCHAR(100),
+        repite_grado BOOLEAN DEFAULT false,
+        turno VARCHAR(50),
+        discapacidad BOOLEAN DEFAULT false,
+        descripcion_discapacidad TEXT,
+        direccion TEXT,
+        numero_casa VARCHAR(20),
+        departamento VARCHAR(100),
+        ciudad VARCHAR(100),
+        telefono_domicilio VARCHAR(20),
+        telefono_movil VARCHAR(20),
+        correo VARCHAR(100)
+      );
 
-    await client.query(userTable);
-    await client.query(`INSERT INTO roles (name) VALUES ('admin'), ('user') ON CONFLICT DO NOTHING;`);
+      -- Tabla: Representante
+      CREATE TABLE IF NOT EXISTS representante (
+        id SERIAL PRIMARY KEY,
+        tipo_representante VARCHAR(50),
+        nombres VARCHAR(100) NOT NULL,
+        apellido_paterno VARCHAR(100) NOT NULL,
+        apellido_materno VARCHAR(100),
+        ci VARCHAR(20) UNIQUE NOT NULL,
+        fecha_nacimiento DATE,
+        genero VARCHAR(20),
+        nacionalidad VARCHAR(50),
+        profesion VARCHAR(100),
+        lugar_trabajo VARCHAR(150),
+        telefono VARCHAR(20),
+        correo VARCHAR(100)
+      );
+
+      -- Tabla: Preinscripción
+      CREATE TABLE IF NOT EXISTS preinscripcion (
+        id SERIAL PRIMARY KEY,
+        estudiante_id INT REFERENCES estudiante(id) ON DELETE CASCADE,
+        representante_id INT REFERENCES representante(id) ON DELETE CASCADE,
+        fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        estado VARCHAR(50) DEFAULT 'pendiente'
+      );
+
+      -- Tabla: Documentos
+      CREATE TABLE IF NOT EXISTS documentos (
+        id SERIAL PRIMARY KEY,
+        preinscripcion_id INT REFERENCES preinscripcion(id) ON DELETE CASCADE,
+        cedula_estudiante TEXT,
+        certificado_nacimiento TEXT,
+        libreta_notas TEXT,
+        cedula_representante TEXT,
+        fecha_subida TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    console.log("✅ Tablas creadas correctamente.");
+  } catch (err) {
+    console.error("❌ Error al crear tablas:", err);
+  } finally {
+    pool.end();
+  }
 }
 
-async function seed() {
-    const client = await pool.connect();
-    try {
-        console.log('Conectado a la BD');
-        await createTables(client);
-        console.log('Tablas creadas y roles insertados');
-    } catch (error) {
-        console.error('Error en el seeding:', error);
-    } finally {
-        client.release();
-    }
-}
-
-seed();
+createTables();
