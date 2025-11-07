@@ -1,14 +1,16 @@
 import express from "express";
-import { createPreinscripcion } from "../controllers/preinscripcionController.js";
 import multer from "multer";
+import {
+  createPreinscripcion,
+  getAllPreinscripciones,
+  getPreinscripcionById,
+  deletePreinscripcion,
+  updateEstadoPreinscripcion
+} from "../controllers/preinscripcionController.js";
 
 const router = express.Router();
-
-// Configuración Multer
 const storage = multer.diskStorage({});
 const upload = multer({ storage });
-
-// Multiples archivos
 const cpUpload = upload.fields([
   { name: "cedula_estudiante", maxCount: 1 },
   { name: "certificado_nacimiento", maxCount: 1 },
@@ -17,5 +19,9 @@ const cpUpload = upload.fields([
 ]);
 
 router.post("/", cpUpload, createPreinscripcion);
+router.get("/", getAllPreinscripciones);
+router.get("/:id", getPreinscripcionById);
+router.delete("/:id", deletePreinscripcion);
+router.put("/:id/estado", updateEstadoPreinscripcion);
 
 export default router;
