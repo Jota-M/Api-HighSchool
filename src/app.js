@@ -22,7 +22,7 @@ app.use("/api/preinscripcion", preinscripcionRoutes);
 app.use('/api/auth', userRoutes);
 app.use("/api/teachers", teacherRoutes);
 app.use("/api/periodos", periodoRoutes);
-app.use("/api/niveles", nivelRoutes);
+app.use("/api/niveles-academicos", nivelRoutes);
 app.use("/api/grados", gradoRoutes);
 app.use("/api/paralelos", paraleloRoutes);
 app.use("/api/materias", materiaRoutes);

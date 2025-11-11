@@ -1,16 +1,17 @@
 import { pool } from "../db/pool.js";
 
 export const GradoMateriaModel = {
-  async getAll() {
-    const { rows } = await pool.query(`
-      SELECT gm.*, g.nombre AS grado, m.nombre AS materia
-      FROM GradoMateria gm
-      JOIN Grado g ON gm.grado_id = g.id
-      JOIN Materia m ON gm.materia_id = m.id
-      ORDER BY gm.id;
-    `);
-    return rows;
-  },
+async getAll() {
+  const { rows } = await pool.query(`
+    SELECT gm.*, g.nombre AS grado, m.nombre AS materia
+    FROM grado_materia gm
+    JOIN grado g ON gm.grado_id = g.id
+    JOIN materia m ON gm.materia_id = m.id
+    ORDER BY gm.id;
+  `);
+  return rows;
+},
+
   async getById(id) {
     const { rows } = await pool.query(
       "SELECT * FROM GradoMateria WHERE id = $1;",
