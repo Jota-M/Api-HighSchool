@@ -1,7 +1,7 @@
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
+import bcrypt from 'bcryptjs';
 import authConfig from '../config/auth.js';
-import bcrypt from 'bcryptjs';  // Mueve bcrypt al import superior
 
 class TokenUtils {
   // Generar token de acceso (corta duración)
@@ -27,12 +27,12 @@ class TokenUtils {
     }
   }
 
-  // Verificar refresh token (corrigiendo nombre para no duplicar)
+  // Verificar refresh token
   static verifyRefreshToken(token) {
     try {
       return jwt.verify(token, authConfig.jwtRefreshSecret);
     } catch (error) {
-      return null;
+      throw new Error('Refresh token inválido o expirado');
     }
   }
 
