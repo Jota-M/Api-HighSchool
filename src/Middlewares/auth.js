@@ -176,7 +176,7 @@ const requireRole = (...rolesRequeridos) => {
     }
 
     // Cambiar 'nombre' por el nombre real de la columna en tu tabla de roles
-    const rolesUsuario = usuario.roles?.map(r => r.name) || []; 
+    const rolesUsuario = usuario.roles?.map(r => r.nombre) || []; 
     const tieneRol = rolesRequeridos.some(rol => rolesUsuario.includes(rol));
 
     if (!tieneRol) {
