@@ -1,13 +1,42 @@
-import { Router } from "express";
-import { NivelAcademicoController } from "../controllers/nivelAcademicoController.js";
+import express from 'express';
+import { NivelAcademicoController } from '../controllers/academicControllers.js';
+import { authenticate, authorize, logActivity } from '../middlewares/auth.js';
 
-const router = Router();
+const router = express.Router();
 
-router.get('/', NivelAcademicoController.getAll);
-router.get('/stats', NivelAcademicoController.getStats);
-router.get('/:id', NivelAcademicoController.getById);
-router.post('/', NivelAcademicoController.create);
-router.put('/:id', NivelAcademicoController.update);
-router.delete('/:id', NivelAcademicoController.delete);
+router.use(authenticate);
+
+router.get(
+  '/',
+  authorize('nivel_academico.leer'),
+  NivelAcademicoController.listar
+);
+
+router.get(
+  '/:id',
+  authorize('nivel_academico.leer'),
+  NivelAcademicoController.obtenerPorId
+);
+
+router.post(
+  '/',
+  authorize('nivel_academico.crear'),
+  logActivity('crear', 'nivel_academico'),
+  NivelAcademicoController.crear
+);
+
+router.put(
+  '/:id',
+  authorize('nivel_academico.actualizar'),
+  logActivity('actualizar', 'nivel_academico'),
+  NivelAcademicoController.actualizar
+);
+
+router.delete(
+  '/:id',
+  authorize('nivel_academico.eliminar'),
+  logActivity('eliminar', 'nivel_academico'),
+  NivelAcademicoController.eliminar
+);
 
 export default router;

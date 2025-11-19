@@ -3,20 +3,28 @@ import { pool } from '../db/pool.js';
 import TokenUtils from '../utils/jwt.js';
 
 class Usuario {
-  // Crear usuario
-  static async create(data) {
-    const { username, email, password, rolIds = [] } = data;
+  // Crear usuario CON SOPORTE DE TRANSACCIONES
+  static async create(data, client = null) {
+    const { username, email, password, rolIds = [], activo = true } = data;
     const hashedPassword = await TokenUtils.hashPassword(password);
     const tokenVerificacion = TokenUtils.generateRandomToken();
 
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
+    const db = client || pool;
+    const shouldCommit = !client; // Solo hacer commit si no hay transacción externa
 
-      const result = await client.query(
-        `INSERT INTO usuarios (username, email, password, token_verificacion)
-         VALUES ($1, $2, $3, $4) RETURNING *`,
-        [username, email, hashedPassword, tokenVerificacion]
+    let localClient;
+    try {
+      if (shouldCommit) {
+        localClient = await pool.connect();
+        await localClient.query('BEGIN');
+      }
+
+      const executeQuery = shouldCommit ? localClient : db;
+
+      const result = await executeQuery.query(
+        `INSERT INTO usuarios (username, email, password, token_verificacion, activo)
+         VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+        [username, email, hashedPassword, tokenVerificacion, activo]
       );
 
       const usuario = result.rows[0];
@@ -24,22 +32,59 @@ class Usuario {
       // Asignar roles si se proporcionaron
       if (rolIds.length > 0) {
         for (const rolId of rolIds) {
-          await client.query(
+          await executeQuery.query(
             `INSERT INTO usuario_roles (usuario_id, rol_id) VALUES ($1, $2)`,
             [usuario.id, rolId]
           );
         }
       }
 
-      await client.query('COMMIT');
+      if (shouldCommit) {
+        await localClient.query('COMMIT');
+      }
+
       delete usuario.password;
       return usuario;
     } catch (error) {
-      await client.query('ROLLBACK');
+      if (shouldCommit && localClient) {
+        await localClient.query('ROLLBACK');
+      }
       throw error;
     } finally {
-      client.release();
+      if (shouldCommit && localClient) {
+        localClient.release();
+      }
     }
+  }
+
+  // Buscar por username (con soporte de transacción)
+  static async findByUsername(username, client = null) {
+    const db = client || pool;
+    const result = await db.query(
+      'SELECT * FROM usuarios WHERE username = $1 AND deleted_at IS NULL',
+      [username]
+    );
+    return result.rows[0];
+  }
+
+  // Buscar por email (con soporte de transacción)
+  static async findByEmail(email, client = null) {
+    const db = client || pool;
+    const result = await db.query(
+      'SELECT * FROM usuarios WHERE email = $1 AND deleted_at IS NULL',
+      [email]
+    );
+    return result.rows[0];
+  }
+
+  // Buscar por ID (con soporte de transacción)
+  static async findById(id, client = null) {
+    const db = client || pool;
+    const result = await db.query(
+      'SELECT * FROM usuarios WHERE id = $1 AND deleted_at IS NULL',
+      [id]
+    );
+    return result.rows[0];
   }
 
   // Buscar por username o email
