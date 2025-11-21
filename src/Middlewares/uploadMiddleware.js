@@ -1,52 +1,47 @@
-import multer from 'multer';
+import multer from "multer";
 
-// Configurar multer para usar memoria (no guardar en disco)
 const storage = multer.memoryStorage();
 
 const fileFilter = (req, file, cb) => {
-  // Validar tipo de archivo
-  const validMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
-  
+  const validMimeTypes = [
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+    "application/pdf"     // ⬅️ permitimos PDF
+  ];
+
   if (validMimeTypes.includes(file.mimetype)) {
-    cb(null, true);
-  } else {
-    cb(new Error('Tipo de archivo no válido. Solo se permiten imágenes (JPG, PNG, GIF, WEBP)'), false);
+    return cb(null, true);
   }
+
+  cb(new Error("Archivo no permitido. Solo imágenes o PDF."), false);
 };
 
-// Configuración de multer
 const upload = multer({
-  storage: storage,
-  fileFilter: fileFilter,
+  storage,
+  fileFilter,
   limits: {
-    fileSize: 5 * 1024 * 1024 // 5MB máximo
+    fileSize: 10 * 1024 * 1024, // ⬅️ 10MB máximo para cualquier documento
   }
 });
 
-// Middleware para manejar errores de multer
 const handleMulterError = (err, req, res, next) => {
   if (err instanceof multer.MulterError) {
-    if (err.code === 'LIMIT_FILE_SIZE') {
+    if (err.code === "LIMIT_FILE_SIZE") {
       return res.status(400).json({
         success: false,
-        message: 'El archivo es demasiado grande. Máximo 5MB.'
+        message: "Archivo demasiado grande (máximo 10MB)"
       });
     }
-    
-    return res.status(400).json({
-      success: false,
-      message: 'Error al subir archivo: ' + err.message
-    });
+    return res.status(400).json({ success: false, message: err.message });
   }
-  
+
   if (err) {
-    return res.status(400).json({
-      success: false,
-      message: err.message
-    });
+    return res.status(400).json({ success: false, message: err.message });
   }
-  
+
   next();
 };
-
 export { upload, handleMulterError };

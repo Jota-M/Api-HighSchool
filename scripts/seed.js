@@ -7,12 +7,12 @@ async function createTables() {
     // ==========================================
     // 🔥 DROP TABLES (orden seguro)
     // ==========================================
-    await pool.query(`DROP TABLE IF EXISTS area_conocimiento CASCADE;`);
-    await pool.query(`DROP TABLE IF EXISTS campo_educativo CASCADE;`);
-    await pool.query(`DROP TABLE IF EXISTS campo_area CASCADE;`);
-    await pool.query(`DROP TABLE IF EXISTS materia CASCADE;`);
-    await pool.query(`DROP TABLE IF EXISTS materia_campo CASCADE;`);
-    await pool.query(`DROP TABLE IF EXISTS grado_materia CASCADE;`);
+    // await pool.query(`DROP TABLE IF EXISTS area_conocimiento CASCADE;`);
+    // await pool.query(`DROP TABLE IF EXISTS campo_educativo CASCADE;`);
+    // await pool.query(`DROP TABLE IF EXISTS campo_area CASCADE;`);
+    // await pool.query(`DROP TABLE IF EXISTS materia CASCADE;`);
+    // await pool.query(`DROP TABLE IF EXISTS materia_campo CASCADE;`);
+    // await pool.query(`DROP TABLE IF EXISTS grado_materia CASCADE;`);
     
     
 

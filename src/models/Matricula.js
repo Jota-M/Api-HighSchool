@@ -30,6 +30,85 @@ class Matricula {
     return result.rows[0];
   }
 
+  // Verificar capacidad del paralelo
+  static async checkCapacidad(paralelo_id, periodo_academico_id) {
+    const query = `
+      SELECT 
+        p.capacidad_maxima,
+        COUNT(m.id) as matriculas_actuales
+      FROM paralelo p
+      LEFT JOIN matricula m ON p.id = m.paralelo_id 
+        AND m.periodo_academico_id = $2 
+        AND m.estado = 'activo' 
+        AND m.deleted_at IS NULL
+      WHERE p.id = $1
+      GROUP BY p.id, p.capacidad_maxima
+    `;
+
+    const result = await pool.query(query, [paralelo_id, periodo_academico_id]);
+    const data = result.rows[0];
+
+    return {
+      capacidad_maxima: data.capacidad_maxima,
+      matriculas_actuales: parseInt(data.matriculas_actuales || 0),
+      disponible: parseInt(data.matriculas_actuales || 0) < data.capacidad_maxima
+    };
+  }
+
+  // =============================================
+  // GENERAR NÚMERO DE MATRÍCULA CON BLOQUEO
+  // =============================================
+  static async generateNumeroMatricula(periodo_academico_id, client = null) {
+    const conn = client || pool;
+
+    // Si hay client (transacción), bloquear la tabla
+    if (client) {
+      await client.query('LOCK TABLE matricula IN SHARE ROW EXCLUSIVE MODE');
+    }
+
+    // Obtener código del periodo
+    const periodoQuery = 'SELECT codigo FROM periodo_academico WHERE id = $1';
+    const periodoResult = await conn.query(periodoQuery, [periodo_academico_id]);
+    const periodoCodigo = periodoResult.rows[0]?.codigo || new Date().getFullYear();
+
+    // Obtener último número para este periodo
+    const query = `
+      SELECT numero_matricula 
+      FROM matricula 
+      WHERE periodo_academico_id = $1 
+        AND numero_matricula IS NOT NULL
+        AND numero_matricula LIKE $2
+      ORDER BY numero_matricula DESC 
+      LIMIT 1
+    `;
+
+    const prefix = `MAT-${periodoCodigo}-%`;
+    const result = await conn.query(query, [periodo_academico_id, prefix]);
+
+    if (result.rows.length === 0) {
+      return `MAT-${periodoCodigo}-0001`;
+    }
+
+    const lastNumber = result.rows[0].numero_matricula;
+    // Formato esperado: MAT-GEST-2025-0001
+    // Dividir por '-' y tomar el ÚLTIMO elemento (el número secuencial)
+    const parts = lastNumber.split('-');
+    const lastNum = parseInt(parts[parts.length - 1]); // Tomar el último elemento
+    const newNum = (lastNum + 1).toString().padStart(4, '0');
+
+    return `MAT-${periodoCodigo}-${newNum}`;
+  }
+
+  // Verificar si ya existe matrícula
+  static async exists(estudiante_id, periodo_academico_id) {
+    const query = `
+      SELECT id FROM matricula 
+      WHERE estudiante_id = $1 AND periodo_academico_id = $2 AND deleted_at IS NULL
+    `;
+    const result = await pool.query(query, [estudiante_id, periodo_academico_id]);
+    return result.rows[0];
+  }
+
   // Listar matrículas con filtros
   static async findAll(filters = {}) {
     const { 
@@ -86,7 +165,6 @@ class Matricula {
 
     const whereClause = whereConditions.join(' AND ');
 
-    // Contar total
     const countQuery = `
       SELECT COUNT(*)
       FROM matricula m
@@ -98,7 +176,6 @@ class Matricula {
     const countResult = await pool.query(countQuery, queryParams);
     const total = parseInt(countResult.rows[0].count);
 
-    // Obtener datos
     const dataQuery = `
       SELECT m.*,
         e.codigo as estudiante_codigo,
@@ -177,41 +254,6 @@ class Matricula {
 
     const result = await pool.query(query, [id]);
     return result.rows[0];
-  }
-
-  // Verificar si ya existe matrícula
-  static async exists(estudiante_id, periodo_academico_id) {
-    const query = `
-      SELECT id FROM matricula 
-      WHERE estudiante_id = $1 AND periodo_academico_id = $2 AND deleted_at IS NULL
-    `;
-    const result = await pool.query(query, [estudiante_id, periodo_academico_id]);
-    return result.rows[0];
-  }
-
-  // Verificar capacidad del paralelo
-  static async checkCapacidad(paralelo_id, periodo_academico_id) {
-    const query = `
-      SELECT 
-        p.capacidad_maxima,
-        COUNT(m.id) as matriculas_actuales
-      FROM paralelo p
-      LEFT JOIN matricula m ON p.id = m.paralelo_id 
-        AND m.periodo_academico_id = $2 
-        AND m.estado = 'activo' 
-        AND m.deleted_at IS NULL
-      WHERE p.id = $1
-      GROUP BY p.id, p.capacidad_maxima
-    `;
-
-    const result = await pool.query(query, [paralelo_id, periodo_academico_id]);
-    const data = result.rows[0];
-
-    return {
-      capacidad_maxima: data.capacidad_maxima,
-      matriculas_actuales: parseInt(data.matriculas_actuales || 0),
-      disponible: parseInt(data.matriculas_actuales || 0) < data.capacidad_maxima
-    };
   }
 
   // Actualizar matrícula
@@ -303,35 +345,6 @@ class Matricula {
     return result.rows;
   }
 
-  // Generar número de matrícula
-  static async generateNumeroMatricula(periodo_academico_id) {
-    // Obtener código del periodo
-    const periodoQuery = 'SELECT codigo FROM periodo_academico WHERE id = $1';
-    const periodoResult = await pool.query(periodoQuery, [periodo_academico_id]);
-    const periodoCodigo = periodoResult.rows[0]?.codigo || new Date().getFullYear();
-
-    // Obtener último número
-    const query = `
-      SELECT numero_matricula 
-      FROM matricula 
-      WHERE periodo_academico_id = $1 
-      ORDER BY numero_matricula DESC 
-      LIMIT 1
-    `;
-
-    const result = await pool.query(query, [periodo_academico_id]);
-
-    if (result.rows.length === 0) {
-      return `MAT-${periodoCodigo}-0001`;
-    }
-
-    const lastNumber = result.rows[0].numero_matricula;
-    const lastNum = parseInt(lastNumber.split('-')[2]);
-    const newNum = (lastNum + 1).toString().padStart(4, '0');
-
-    return `MAT-${periodoCodigo}-${newNum}`;
-  }
-
   // Transferir estudiante a otro paralelo
   static async transferirParalelo(matricula_id, nuevo_paralelo_id, motivo) {
     const client = await pool.connect();
@@ -339,18 +352,15 @@ class Matricula {
     try {
       await client.query('BEGIN');
 
-      // Obtener matrícula actual
       const matriculaQuery = 'SELECT * FROM matricula WHERE id = $1';
       const matriculaResult = await client.query(matriculaQuery, [matricula_id]);
       const matricula = matriculaResult.rows[0];
 
-      // Verificar capacidad del nuevo paralelo
       const capacidadQuery = await this.checkCapacidad(nuevo_paralelo_id, matricula.periodo_academico_id);
       if (!capacidadQuery.disponible) {
         throw new Error('El paralelo destino no tiene capacidad disponible');
       }
 
-      // Actualizar matrícula
       const updateQuery = `
         UPDATE matricula
         SET paralelo_id = $1, observaciones = CONCAT(
@@ -376,9 +386,10 @@ class Matricula {
   }
 }
 
-// models/MatriculaDocumento.js
+// =============================================
+// MATRICULA DOCUMENTO
+// =============================================
 class MatriculaDocumento {
-  // Agregar documento
   static async create(data) {
     const {
       matricula_id, tipo_documento, nombre_archivo, 
@@ -402,7 +413,6 @@ class MatriculaDocumento {
     return result.rows[0];
   }
 
-  // Listar documentos de una matrícula
   static async findByMatricula(matricula_id) {
     const query = `
       SELECT md.*,
@@ -417,7 +427,6 @@ class MatriculaDocumento {
     return result.rows;
   }
 
-  // Verificar documento
   static async verificar(id, verificado_por) {
     const query = `
       UPDATE matricula_documento
@@ -432,14 +441,12 @@ class MatriculaDocumento {
     return result.rows[0];
   }
 
-  // Eliminar documento
   static async delete(id) {
     const query = 'DELETE FROM matricula_documento WHERE id = $1 RETURNING *';
     const result = await pool.query(query, [id]);
     return result.rows[0];
   }
 
-  // Verificar documentos completos
   static async checkDocumentosCompletos(matricula_id, documentos_requeridos) {
     const query = `
       SELECT tipo_documento, verificado

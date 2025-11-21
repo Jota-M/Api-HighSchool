@@ -1,9 +1,12 @@
 import { pool } from "../db/pool.js";
 
-
 class Estudiante {
-  // Crear estudiante
-  static async create(data) {
+  // =============================================
+  // CREAR ESTUDIANTE - VERSIÓN ÚNICA Y CORRECTA
+  // =============================================
+  static async create(data, client = null) {
+    const conn = client || pool;
+    
     const {
       usuario_id, codigo, nombres, apellido_paterno, apellido_materno,
       fecha_nacimiento, ci, lugar_nacimiento, genero, direccion, zona,
@@ -24,7 +27,7 @@ class Estudiante {
       RETURNING *
     `;
 
-    const result = await pool.query(query, [
+    const result = await conn.query(query, [
       usuario_id, codigo, nombres, apellido_paterno, apellido_materno,
       fecha_nacimiento, ci, lugar_nacimiento, genero, direccion, zona,
       ciudad, telefono, email, foto_url, contacto_emergencia,
@@ -35,7 +38,88 @@ class Estudiante {
     return result.rows[0];
   }
 
-  // Listar estudiantes con filtros y paginación
+  // =============================================
+  // GENERAR CÓDIGO CON BLOQUEO (PARA TRANSACCIONES)
+  // =============================================
+  static async generateCodeWithLock(client, year = new Date().getFullYear()) {
+    if (!client) {
+      throw new Error('Se requiere un client de transacción para generateCodeWithLock');
+    }
+
+    // Bloquear la tabla para evitar race conditions
+    await client.query('LOCK TABLE estudiante IN SHARE ROW EXCLUSIVE MODE');
+
+    const prefix = `EST-${year}-`;
+    
+    const query = `
+      SELECT codigo FROM estudiante 
+      WHERE codigo LIKE $1 
+      ORDER BY codigo DESC 
+      LIMIT 1
+    `;
+
+    const result = await client.query(query, [`${prefix}%`]);
+
+    if (result.rows.length === 0) {
+      return `${prefix}0001`;
+    }
+
+    const lastCode = result.rows[0].codigo;
+    const lastNumber = parseInt(lastCode.split('-')[2]);
+    const newNumber = (lastNumber + 1).toString().padStart(4, '0');
+
+    return `${prefix}${newNumber}`;
+  }
+
+  // =============================================
+  // GENERAR CÓDIGO SIN BLOQUEO (PARA USO FUERA DE TRANSACCIONES)
+  // =============================================
+  static async generateCode(year = new Date().getFullYear()) {
+    const prefix = `EST-${year}-`;
+    
+    const query = `
+      SELECT codigo FROM estudiante 
+      WHERE codigo LIKE $1 
+      ORDER BY codigo DESC 
+      LIMIT 1
+    `;
+
+    const result = await pool.query(query, [`${prefix}%`]);
+
+    if (result.rows.length === 0) {
+      return `${prefix}0001`;
+    }
+
+    const lastCode = result.rows[0].codigo;
+    const lastNumber = parseInt(lastCode.split('-')[2]);
+    const newNumber = (lastNumber + 1).toString().padStart(4, '0');
+
+    return `${prefix}${newNumber}`;
+  }
+
+  // =============================================
+  // BUSCAR POR CI
+  // =============================================
+  static async findByCI(ci, client = null) {
+    const conn = client || pool;
+    const query = 'SELECT * FROM estudiante WHERE ci = $1 AND deleted_at IS NULL';
+    const result = await conn.query(query, [ci]);
+    return result.rows[0];
+  }
+
+  // =============================================
+  // BUSCAR POR CÓDIGO
+  // =============================================
+  static async findByCode(codigo, client = null) {
+    const conn = client || pool;
+    const query = 'SELECT * FROM estudiante WHERE codigo = $1 AND deleted_at IS NULL';
+    const result = await conn.query(query, [codigo]);
+    return result.rows[0];
+  }
+
+  // =============================================
+  // LISTAR ESTUDIANTES CON FILTROS Y PAGINACIÓN
+  // =============================================
   static async findAll(filters = {}) {
     const { page = 1, limit = 10, search, genero, activo, grado_id, paralelo_id } = filters;
     const offset = (page - 1) * limit;
@@ -69,7 +153,6 @@ class Estudiante {
       paramCounter++;
     }
 
-    // Filtrar por grado o paralelo (requiere join con matrícula)
     if (grado_id || paralelo_id) {
       joins = `
         INNER JOIN matricula m ON e.id = m.estudiante_id AND m.deleted_at IS NULL AND m.estado = 'activo'
@@ -91,7 +174,6 @@ class Estudiante {
 
     const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
 
-    // Contar total
     const countQuery = `
       SELECT COUNT(DISTINCT e.id)
       FROM estudiante e
@@ -101,7 +183,6 @@ class Estudiante {
     const countResult = await pool.query(countQuery, queryParams);
     const total = parseInt(countResult.rows[0].count);
 
-    // Obtener datos
     const dataQuery = `
       SELECT DISTINCT e.*,
         (SELECT COUNT(*) FROM matricula m WHERE m.estudiante_id = e.id AND m.deleted_at IS NULL) as total_matriculas
@@ -125,7 +206,9 @@ class Estudiante {
     };
   }
 
-  // Buscar por ID con información completa
+  // =============================================
+  // BUSCAR POR ID CON INFORMACIÓN COMPLETA
+  // =============================================
   static async findById(id) {
     const query = `
       SELECT e.*,
@@ -154,21 +237,9 @@ class Estudiante {
     return result.rows[0];
   }
 
-  // Buscar por código
-  static async findByCode(codigo) {
-    const query = 'SELECT * FROM estudiante WHERE codigo = $1 AND deleted_at IS NULL';
-    const result = await pool.query(query, [codigo]);
-    return result.rows[0];
-  }
-
-  // Buscar por CI
-  static async findByCI(ci) {
-    const query = 'SELECT * FROM estudiante WHERE ci = $1 AND deleted_at IS NULL';
-    const result = await pool.query(query, [ci]);
-    return result.rows[0];
-  }
-
-  // Actualizar estudiante
+  // =============================================
+  // ACTUALIZAR ESTUDIANTE
+  // =============================================
   static async update(id, data) {
     const {
       nombres, apellido_paterno, apellido_materno, fecha_nacimiento,
@@ -203,9 +274,10 @@ class Estudiante {
     return result.rows[0];
   }
 
-  // Soft delete
+  // =============================================
+  // SOFT DELETE
+  // =============================================
   static async softDelete(id) {
-    // Verificar que no tenga matrículas activas
     const checkQuery = `
       SELECT COUNT(*) FROM matricula 
       WHERE estudiante_id = $1 AND estado = 'activo' AND deleted_at IS NULL
@@ -226,7 +298,9 @@ class Estudiante {
     return result.rows[0];
   }
 
-  // Obtener tutores del estudiante
+  // =============================================
+  // OBTENER TUTORES DEL ESTUDIANTE
+  // =============================================
   static async getTutores(estudiante_id) {
     const query = `
       SELECT et.*, pf.*,
@@ -242,35 +316,15 @@ class Estudiante {
     const result = await pool.query(query, [estudiante_id]);
     return result.rows;
   }
-
-  // Generar código automático
-  static async generateCode(year = new Date().getFullYear()) {
-    const query = `
-      SELECT codigo FROM estudiante 
-      WHERE codigo LIKE $1 
-      ORDER BY codigo DESC 
-      LIMIT 1
-    `;
-
-    const prefix = `EST-${year}-`;
-    const result = await pool.query(query, [`${prefix}%`]);
-
-    if (result.rows.length === 0) {
-      return `${prefix}0001`;
-    }
-
-    const lastCode = result.rows[0].codigo;
-    const lastNumber = parseInt(lastCode.split('-')[2]);
-    const newNumber = (lastNumber + 1).toString().padStart(4, '0');
-
-    return `${prefix}${newNumber}`;
-  }
 }
 
-// models/PadreFamilia.js
+// =============================================
+// PADRE FAMILIA
+// =============================================
 class PadreFamilia {
-  // Crear padre/tutor
-  static async create(data) {
+  static async create(data, client = null) {
+    const conn = client || pool;
+    
     const {
       usuario_id, nombres, apellido_paterno, apellido_materno, ci,
       fecha_nacimiento, telefono, celular, email, direccion,
@@ -289,7 +343,7 @@ class PadreFamilia {
       RETURNING *
     `;
 
-    const result = await pool.query(query, [
+    const result = await conn.query(query, [
       usuario_id, nombres, apellido_paterno, apellido_materno, ci,
       fecha_nacimiento, telefono, celular, email, direccion,
       ocupacion, lugar_trabajo, telefono_trabajo, parentesco,
@@ -299,63 +353,13 @@ class PadreFamilia {
     return result.rows[0];
   }
 
-  // Listar padres
-  static async findAll(filters = {}) {
-    const { page = 1, limit = 10, search, parentesco } = filters;
-    const offset = (page - 1) * limit;
-
-    let whereConditions = ['deleted_at IS NULL'];
-    let queryParams = [];
-    let paramCounter = 1;
-
-    if (search) {
-      whereConditions.push(`(
-        nombres ILIKE $${paramCounter} OR 
-        apellido_paterno ILIKE $${paramCounter} OR 
-        apellido_materno ILIKE $${paramCounter} OR
-        ci ILIKE $${paramCounter}
-      )`);
-      queryParams.push(`%${search}%`);
-      paramCounter++;
-    }
-
-    if (parentesco) {
-      whereConditions.push(`parentesco = $${paramCounter}`);
-      queryParams.push(parentesco);
-      paramCounter++;
-    }
-
-    const whereClause = whereConditions.join(' AND ');
-
-    // Contar total
-    const countQuery = `SELECT COUNT(*) FROM padre_familia WHERE ${whereClause}`;
-    const countResult = await pool.query(countQuery, queryParams);
-    const total = parseInt(countResult.rows[0].count);
-
-    // Obtener datos
-    const dataQuery = `
-      SELECT *,
-        (SELECT COUNT(*) FROM estudiante_tutor WHERE padre_familia_id = padre_familia.id) as total_estudiantes
-      FROM padre_familia
-      WHERE ${whereClause}
-      ORDER BY apellido_paterno, apellido_materno, nombres
-      LIMIT $${paramCounter} OFFSET $${paramCounter + 1}
-    `;
-
-    const result = await pool.query(dataQuery, [...queryParams, limit, offset]);
-
-    return {
-      tutores: result.rows,
-      paginacion: {
-        total,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        totalPages: Math.ceil(total / limit)
-      }
-    };
+  static async findByCI(ci, client = null) {
+    const conn = client || pool;
+    const query = 'SELECT * FROM padre_familia WHERE ci = $1 AND deleted_at IS NULL';
+    const result = await conn.query(query, [ci]);
+    return result.rows[0];
   }
 
-  // Buscar por ID
   static async findById(id) {
     const query = `
       SELECT pf.*,
@@ -376,14 +380,6 @@ class PadreFamilia {
     return result.rows[0];
   }
 
-  // Buscar por CI
-  static async findByCI(ci) {
-    const query = 'SELECT * FROM padre_familia WHERE ci = $1 AND deleted_at IS NULL';
-    const result = await pool.query(query, [ci]);
-    return result.rows[0];
-  }
-
-  // Actualizar
   static async update(id, data) {
     const {
       nombres, apellido_paterno, apellido_materno, ci, fecha_nacimiento,
@@ -411,7 +407,6 @@ class PadreFamilia {
     return result.rows[0];
   }
 
-  // Soft delete
   static async softDelete(id) {
     const query = `
       UPDATE padre_familia
@@ -424,10 +419,13 @@ class PadreFamilia {
   }
 }
 
-// models/EstudianteTutor.js
+// =============================================
+// ESTUDIANTE TUTOR
+// =============================================
 class EstudianteTutor {
-  // Asignar tutor a estudiante
-  static async assign(data) {
+  static async assign(data, client = null) {
+    const conn = client || pool;
+    
     const {
       estudiante_id, padre_familia_id, es_tutor_principal,
       vive_con_estudiante, autorizado_recoger, puede_autorizar_salidas,
@@ -444,7 +442,7 @@ class EstudianteTutor {
       RETURNING *
     `;
 
-    const result = await pool.query(query, [
+    const result = await conn.query(query, [
       estudiante_id, padre_familia_id, es_tutor_principal ?? false,
       vive_con_estudiante ?? false, autorizado_recoger ?? true,
       puede_autorizar_salidas ?? true, recibe_notificaciones ?? true,
@@ -454,22 +452,6 @@ class EstudianteTutor {
     return result.rows[0];
   }
 
-  // Obtener relación específica
-  static async findById(id) {
-    const query = `
-      SELECT et.*, 
-        e.nombres as estudiante_nombres, e.apellido_paterno as estudiante_apellido,
-        pf.nombres as tutor_nombres, pf.apellido_paterno as tutor_apellido
-      FROM estudiante_tutor et
-      INNER JOIN estudiante e ON et.estudiante_id = e.id
-      INNER JOIN padre_familia pf ON et.padre_familia_id = pf.id
-      WHERE et.id = $1
-    `;
-    const result = await pool.query(query, [id]);
-    return result.rows[0];
-  }
-
-  // Verificar si ya existe la relación
   static async exists(estudiante_id, padre_familia_id) {
     const query = `
       SELECT id FROM estudiante_tutor 
@@ -479,7 +461,6 @@ class EstudianteTutor {
     return result.rows[0];
   }
 
-  // Actualizar relación
   static async update(id, data) {
     const {
       es_tutor_principal, vive_con_estudiante, autorizado_recoger,
@@ -506,7 +487,6 @@ class EstudianteTutor {
     return result.rows[0];
   }
 
-  // Remover relación
   static async remove(id) {
     const query = 'DELETE FROM estudiante_tutor WHERE id = $1 RETURNING *';
     const result = await pool.query(query, [id]);

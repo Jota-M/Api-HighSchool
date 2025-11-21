@@ -1,42 +1,37 @@
+// routes/registroCompletoRoutes.js
 import express from 'express';
 import RegistroCompletoController from '../controllers/registroCompletoController.js';
 import { authenticate, authorize, logActivity } from '../middlewares/auth.js';
-import { upload, handleMulterError } from '../middlewares/uploadMiddleware.js';
+import { upload, handleMulterError } from '../Middlewares/uploadMiddleware.js';
 
 const router = express.Router();
 
 router.use(authenticate);
 
-// ========================================
-// Registro completo de estudiante + tutores
-// ========================================
+// POST /api/registro-completo - Registro completo con documentos
 router.post(
   '/',
   authorize('estudiante.crear'),
-  upload.single('foto'),
+  upload.fields([
+    { name: 'foto', maxCount: 1 }, // Foto del estudiante
+    { name: 'documentos', maxCount: 10 } // Hasta 10 documentos
+  ]),
   handleMulterError,
   logActivity('registro_completo', 'estudiante'),
-  (req, res) => RegistroCompletoController.registroCompleto(req, res)
+  RegistroCompletoController.registroCompleto
 );
 
-// ========================================
-// Crear usuario para un estudiante existente
-// ========================================
+// Otros endpoints...
 router.post(
-  '/estudiante/:id/usuario',
-  authorize('estudiante.actualizar', 'usuarios.crear'),
-  logActivity('crear_usuario_estudiante', 'estudiante'),
-  (req, res) => RegistroCompletoController.crearUsuarioEstudiante(req, res)
+  '/usuario-estudiante/:id',
+  authorize('estudiante.actualizar'),
+  RegistroCompletoController.crearUsuarioEstudiante
 );
 
-// ========================================
-// Crear usuario para un tutor existente
-// ========================================
 router.post(
-  '/tutor/:id/usuario',
-  authorize('padre_familia.actualizar', 'usuarios.crear'),
-  logActivity('crear_usuario_tutor', 'padre_familia'),
-  (req, res) => RegistroCompletoController.crearUsuarioTutor(req, res)
+  '/usuario-tutor/:id',
+  authorize('padre_familia.actualizar'),
+  RegistroCompletoController.crearUsuarioTutor
 );
 
 export default router;

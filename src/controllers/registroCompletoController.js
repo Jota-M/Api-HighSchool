@@ -1,33 +1,34 @@
+// controllers/registroCompletoController.js
 import { pool } from '../db/pool.js';
 import { Estudiante, PadreFamilia, EstudianteTutor } from '../models/Estudiantes.js';
+import { Matricula, MatriculaDocumento } from '../models/Matricula.js';
 import Usuario from '../models/Usuario.js';
 import ActividadLog from '../models/actividadLog.js';
 import RequestInfo from '../utils/requestInfo.js';
 import UploadImage from '../utils/uploadImage.js';
-import TokenUtils from '../utils/tokenUtils.js';
 
 class RegistroCompletoController {
   /**
    * Registro completo en un solo endpoint
-   * Crea: Estudiante + Tutores + Usuarios (opcional)
+   * Flujo: Estudiante → Usuario → Update Estudiante → Tutores → Matrícula → Documentos
    */
   static async registroCompleto(req, res) {
     const client = await pool.connect();
+    let foto_url = null;
+    const documentos_urls = []; // Para eliminar si hay error
     
     try {
       await client.query('BEGIN');
-
+      
       const {
-        // Datos del estudiante
         estudiante,
-        // Array de tutores
         tutores,
-        // Configuración de usuarios
         crear_usuario_estudiante,
         crear_usuarios_tutores,
-        // Credenciales opcionales
         credenciales_estudiante,
-        credenciales_tutores
+        credenciales_tutores,
+        matricula,
+        documentos // Array de metadata de documentos
       } = req.body;
 
       // ========================================
@@ -49,12 +50,38 @@ class RegistroCompletoController {
         });
       }
 
+      // Validar datos de matrícula si se proporcionan
+      if (matricula) {
+        if (!matricula.paralelo_id || !matricula.periodo_academico_id) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: 'Debe proporcionar paralelo y periodo académico para la matrícula'
+          });
+        }
+
+        // Verificar capacidad del paralelo
+        const capacidad = await Matricula.checkCapacidad(
+          matricula.paralelo_id, 
+          matricula.periodo_academico_id
+        );
+        
+        if (!capacidad.disponible) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({
+            success: false,
+            message: `El paralelo está lleno (${capacidad.matriculas_actuales}/${capacidad.capacidad_maxima})`
+          });
+        }
+      }
+
       // ========================================
       // 1. PROCESAR FOTO DEL ESTUDIANTE
       // ========================================
-      let foto_url = null;
-      if (req.file) {
-        if (!UploadImage.isValidImage(req.file) || !UploadImage.isValidSize(req.file, 5)) {
+      if (req.files && req.files.foto && req.files.foto[0]) {
+        const fotoFile = req.files.foto[0];
+        
+        if (!UploadImage.isValidImage(fotoFile) || !UploadImage.isValidSize(fotoFile, 5)) {
           await client.query('ROLLBACK');
           return res.status(400).json({
             success: false,
@@ -64,7 +91,7 @@ class RegistroCompletoController {
 
         try {
           const uploadResult = await UploadImage.uploadFromBuffer(
-            req.file.buffer,
+            fotoFile.buffer,
             'estudiantes',
             `estudiante_${Date.now()}`
           );
@@ -79,25 +106,78 @@ class RegistroCompletoController {
       }
 
       // ========================================
-      // 2. CREAR USUARIO PARA ESTUDIANTE (OPCIONAL)
+      // 2. CREAR ESTUDIANTE (SIN usuario_id)
+      // ========================================
+      let codigo_estudiante = estudiante.codigo;
+        if (!codigo_estudiante) {
+          // IMPORTANTE: Usar generateCodeWithLock dentro de la transacción
+          codigo_estudiante = await Estudiante.generateCodeWithLock(client);
+        }
+
+        // Verificar CI si viene (AHORA USANDO CLIENT)
+        if (estudiante.ci) {
+          const ciExiste = await Estudiante.findByCI(estudiante.ci, client);
+          if (ciExiste) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({
+              success: false,
+              message: 'El CI del estudiante ya está registrado'
+            });
+          }
+        }
+
+        // Verificar código (por si se proporciona uno manualmente)
+        const codigoExiste = await Estudiante.findByCode(codigo_estudiante, client);
+        if (codigoExiste) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({
+            success: false,
+            message: `El código "${codigo_estudiante}" ya existe`
+          });
+        }
+
+        // Crear estudiante SIN usuario_id (AHORA PASANDO CLIENT)
+        const nuevoEstudiante = await Estudiante.create({
+          usuario_id: null,
+          codigo: codigo_estudiante,
+          nombres: estudiante.nombres,
+          apellido_paterno: estudiante.apellido_paterno,
+          apellido_materno: estudiante.apellido_materno,
+          fecha_nacimiento: estudiante.fecha_nacimiento,
+          ci: estudiante.ci,
+          lugar_nacimiento: estudiante.lugar_nacimiento,
+          genero: estudiante.genero,
+          direccion: estudiante.direccion,
+          zona: estudiante.zona,
+          ciudad: estudiante.ciudad,
+          telefono: estudiante.telefono,
+          email: estudiante.email,
+          foto_url: foto_url,
+          contacto_emergencia: estudiante.contacto_emergencia,
+          telefono_emergencia: estudiante.telefono_emergencia,
+          tiene_discapacidad: estudiante.tiene_discapacidad,
+          tipo_discapacidad: estudiante.tipo_discapacidad,
+          observaciones: estudiante.observaciones,
+          activo: true
+        }, client);
+
+      // ========================================
+      // 3. CREAR USUARIO DEL ESTUDIANTE (OPCIONAL)
       // ========================================
       let estudiante_usuario_id = null;
       let estudiante_username = null;
       let estudiante_password_temporal = null;
 
       if (crear_usuario_estudiante) {
-        // Generar credenciales si no se proporcionaron
         if (!credenciales_estudiante || !credenciales_estudiante.username || !credenciales_estudiante.password) {
-          // Generar username automático
-          estudiante_username = this.generarUsername(estudiante.nombres, estudiante.apellido_paterno);
-          estudiante_password_temporal = this.generarPassword();
+          estudiante_username = RegistroCompletoController.generarUsername(estudiante.nombres, estudiante.apellido_paterno);
+          estudiante_password_temporal = RegistroCompletoController.generarPassword();
         } else {
           estudiante_username = credenciales_estudiante.username;
           estudiante_password_temporal = credenciales_estudiante.password;
         }
 
-        // Verificar que el username no exista
-        const usuarioExiste = await Usuario.findByCredential(estudiante_username);
+        const usuarioExiste = await Usuario.findByUsername(estudiante_username, client);
         if (usuarioExiste) {
           await client.query('ROLLBACK');
           return res.status(409).json({
@@ -106,8 +186,8 @@ class RegistroCompletoController {
           });
         }
 
-        // Crear usuario
         const email_estudiante = credenciales_estudiante?.email || 
+          estudiante.email ||
           `${estudiante_username}@estudiante.edu.bo`;
 
         const usuarioEstudiante = await Usuario.create({
@@ -117,177 +197,259 @@ class RegistroCompletoController {
           activo: true,
           verificado: false,
           debe_cambiar_password: true
-        });
+        }, client);
 
         estudiante_usuario_id = usuarioEstudiante.id;
 
-        // Asignar rol de estudiante
-        const rolEstudiante = await this.obtenerRolPorNombre('estudiante', client);
+        const rolEstudiante = await RegistroCompletoController.obtenerRolPorNombre('estudiante', client);
         if (rolEstudiante) {
           await client.query(
             'INSERT INTO usuario_roles (usuario_id, rol_id) VALUES ($1, $2)',
             [estudiante_usuario_id, rolEstudiante.id]
           );
         }
+
+        // Actualizar estudiante con usuario_id
+        await client.query(
+          'UPDATE estudiante SET usuario_id = $1, updated_at = NOW() WHERE id = $2',
+          [estudiante_usuario_id, nuevoEstudiante.id]
+        );
+
+        nuevoEstudiante.usuario_id = estudiante_usuario_id;
       }
 
       // ========================================
-      // 3. CREAR ESTUDIANTE
+      // 4. CREAR TUTORES Y SUS USUARIOS
       // ========================================
-      // ========================================
-// 3. CREAR ESTUDIANTE
-// ========================================
-let codigo_estudiante = estudiante.codigo;
-if (!codigo_estudiante) {
-  codigo_estudiante = await Estudiante.generateCode();
-}
+      const tutoresCreados = [];
+      const credencialesTutores = [];
 
-// Verificar CI si viene
-if (estudiante.ci) {
-  const ciExiste = await Estudiante.findByCI(estudiante.ci);
-  if (ciExiste) {
-    await client.query('ROLLBACK');
-    return res.status(409).json({
-      success: false,
-      message: 'El CI del estudiante ya está registrado'
-    });
-  }
-}
+      for (const [index, tutor] of tutores.entries()) {
+        if (!tutor.nombres || !tutor.apellido_paterno || !tutor.ci) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: `Datos incompletos para el tutor #${index + 1}`
+          });
+        }
 
-// Crear estudiante, aunque no haya usuario
-const nuevoEstudiante = await Estudiante.create({
-  usuario_id: estudiante_usuario_id || null,
-  codigo: codigo_estudiante,
-  nombres: estudiante.nombres,
-  apellido_paterno: estudiante.apellido_paterno,
-  apellido_materno: estudiante.apellido_materno,
-  fecha_nacimiento: estudiante.fecha_nacimiento,
-  ci: estudiante.ci,
-  lugar_nacimiento: estudiante.lugar_nacimiento,
-  genero: estudiante.genero,
-  direccion: estudiante.direccion,
-  zona: estudiante.zona,
-  ciudad: estudiante.ciudad,
-  telefono: estudiante.telefono,
-  email: estudiante.email,
-  foto_url: foto_url,
-  contacto_emergencia: estudiante.contacto_emergencia,
-  telefono_emergencia: estudiante.telefono_emergencia,
-  tiene_discapacidad: estudiante.tiene_discapacidad,
-  tipo_discapacidad: estudiante.tipo_discapacidad,
-  observaciones: estudiante.observaciones,
-  activo: true
-});
+        let tutorExistente = await PadreFamilia.findByCI(tutor.ci);
+        let tutor_id;
+        let tutor_usuario_id = null;
 
-// ========================================
-// 4. CREAR TUTORES Y SUS USUARIOS
-// ========================================
-const tutoresCreados = [];
-const credencialesTutores = [];
+        if (tutorExistente) {
+          tutor_id = tutorExistente.id;
+          tutor_usuario_id = tutorExistente.usuario_id; // Guardar el usuario_id existente
+          tutoresCreados.push(tutorExistente);
+        } else {
+          const nuevoTutor = await PadreFamilia.create({
+            usuario_id: null,
+            nombres: tutor.nombres,
+            apellido_paterno: tutor.apellido_paterno,
+            apellido_materno: tutor.apellido_materno,
+            ci: tutor.ci,
+            fecha_nacimiento: tutor.fecha_nacimiento,
+            telefono: tutor.telefono,
+            celular: tutor.celular,
+            email: tutor.email,
+            direccion: tutor.direccion,
+            ocupacion: tutor.ocupacion,
+            lugar_trabajo: tutor.lugar_trabajo,
+            telefono_trabajo: tutor.telefono_trabajo,
+            parentesco: tutor.parentesco,
+            estado_civil: tutor.estado_civil,
+            nivel_educacion: tutor.nivel_educacion
+          }, client);
 
-for (const [index, tutor] of tutores.entries()) {
-  // Validar datos del tutor
-  if (!tutor.nombres || !tutor.apellido_paterno || !tutor.ci || !tutor.telefono) {
-    await client.query('ROLLBACK');
-    return res.status(400).json({
-      success: false,
-      message: `Datos incompletos para el tutor #${index + 1}`
-    });
-  }
+          tutor_id = nuevoTutor.id;
+          tutoresCreados.push(nuevoTutor);
+        }
 
-  // Verificar si el CI ya existe
-  let tutorExistente = await PadreFamilia.findByCI(tutor.ci);
-  let tutor_id;
-  let tutor_usuario_id = null;
+        // CREAR USUARIO PARA EL TUTOR SI SE SOLICITA Y NO TIENE UNO
+        if (crear_usuarios_tutores && !tutor_usuario_id) {
+          const credencial_tutor = credenciales_tutores?.[index] || {};
+          const tutor_username = credencial_tutor.username || 
+            RegistroCompletoController.generarUsername(tutor.nombres, tutor.apellido_paterno);
+          const tutor_password_temporal = credencial_tutor.password || 
+            RegistroCompletoController.generarPassword();
 
-  if (tutorExistente) {
-    tutor_id = tutorExistente.id;
-    tutoresCreados.push(tutorExistente);
-  } else {
-    // Crear usuario solo si se solicita
-    if (crear_usuarios_tutores) {
-      const credencial_tutor = credenciales_tutores?.[index] || {};
-      const tutor_username = credencial_tutor.username || this.generarUsername(tutor.nombres, tutor.apellido_paterno);
-      const tutor_password_temporal = credencial_tutor.password || this.generarPassword();
+          const usuarioTutorExiste = await Usuario.findByUsername(tutor_username, client);
+          if (usuarioTutorExiste) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({
+              success: false,
+              message: `El username "${tutor_username}" ya existe para el tutor #${index + 1}`
+            });
+          }
 
-      // Verificar username
-      const usuarioTutorExiste = await Usuario.findByCredential(tutor_username);
-      if (usuarioTutorExiste) {
-        await client.query('ROLLBACK');
-        return res.status(409).json({
-          success: false,
-          message: `El username "${tutor_username}" ya existe para el tutor #${index + 1}`
-        });
+          const email_tutor = credencial_tutor.email || tutor.email || 
+            `${tutor_username}@padre.edu.bo`;
+            
+          const usuarioTutor = await Usuario.create({
+            username: tutor_username,
+            email: email_tutor,
+            password: tutor_password_temporal,
+            activo: true,
+            verificado: false,
+            debe_cambiar_password: true
+          }, client);
+
+          tutor_usuario_id = usuarioTutor.id;
+
+          // ASIGNAR ROL DE PADRE
+          const rolPadre = await RegistroCompletoController.obtenerRolPorNombre('padre', client);
+          if (rolPadre) {
+            await client.query(
+              'INSERT INTO usuario_roles (usuario_id, rol_id) VALUES ($1, $2)', 
+              [tutor_usuario_id, rolPadre.id]
+            );
+          }
+
+          // ACTUALIZAR TUTOR CON USUARIO_ID
+          await client.query(
+            'UPDATE padre_familia SET usuario_id = $1, updated_at = NOW() WHERE id = $2',
+            [tutor_usuario_id, tutor_id]
+          );
+
+          // Actualizar el objeto en tutoresCreados
+          const tutorIndex = tutoresCreados.findIndex(t => t.id === tutor_id);
+          if (tutorIndex !== -1) {
+            tutoresCreados[tutorIndex].usuario_id = tutor_usuario_id;
+          }
+
+          credencialesTutores.push({
+            nombre_completo: `${tutor.nombres} ${tutor.apellido_paterno}`,
+            username: tutor_username,
+            password: tutor_password_temporal,
+            email: email_tutor
+          });
+        }
+
+        // Relacionar tutor con estudiante
+        await EstudianteTutor.assign({
+          estudiante_id: nuevoEstudiante.id,
+          padre_familia_id: tutor_id,
+          es_tutor_principal: tutor.es_tutor_principal || index === 0,
+          vive_con_estudiante: tutor.vive_con_estudiante ?? true,
+          autorizado_recoger: tutor.autorizado_recoger ?? true,
+          puede_autorizar_salidas: tutor.puede_autorizar_salidas ?? true,
+          recibe_notificaciones: tutor.recibe_notificaciones ?? true,
+          prioridad_contacto: tutor.prioridad_contacto || (index + 1),
+          observaciones: tutor.observaciones
+        }, client);
       }
 
-      const email_tutor = credencial_tutor.email || tutor.email || `${tutor_username}@padre.edu.bo`;
-      const usuarioTutor = await Usuario.create({
-        username: tutor_username,
-        email: email_tutor,
-        password: tutor_password_temporal,
-        activo: true,
-        verificado: false,
-        debe_cambiar_password: true
-      });
+      // ========================================
+      // 5. CREAR MATRÍCULA (OPCIONAL)
+      // ========================================
+      let nuevaMatricula = null;
+      let numero_matricula = null;
 
-      tutor_usuario_id = usuarioTutor.id;
+      if (matricula) {
+        numero_matricula = matricula.numero_matricula || 
+        await Matricula.generateNumeroMatricula(matricula.periodo_academico_id, client);
 
-      // Asignar rol padre_familia
-      const rolPadre = await this.obtenerRolPorNombre('padre_familia', client);
-      if (rolPadre) {
-        await client.query('INSERT INTO usuario_roles (usuario_id, rol_id) VALUES ($1, $2)', [tutor_usuario_id, rolPadre.id]);
+        const matriculaQuery = `
+          INSERT INTO matricula (
+            estudiante_id, paralelo_id, periodo_academico_id, numero_matricula,
+            fecha_matricula, estado, es_repitente, es_becado, porcentaje_beca,
+            tipo_beca, observaciones
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          RETURNING *
+        `;
+
+        const matriculaResult = await client.query(matriculaQuery, [
+          nuevoEstudiante.id,
+          matricula.paralelo_id,
+          matricula.periodo_academico_id,
+          numero_matricula,
+          matricula.fecha_matricula || new Date(),
+          'activo',
+          matricula.es_repitente ?? false,
+          matricula.es_becado ?? false,
+          matricula.porcentaje_beca,
+          matricula.tipo_beca,
+          matricula.observaciones
+        ]);
+
+        nuevaMatricula = matriculaResult.rows[0];
       }
 
-      // Guardar credenciales para respuesta
-      credencialesTutores.push({
-        nombre_completo: `${tutor.nombres} ${tutor.apellido_paterno}`,
-        username: tutor_username,
-        password: tutor_password_temporal,
-        email: email_tutor
-      });
-    }
+      // ========================================
+      // 6. SUBIR DOCUMENTOS
+      // ========================================
+      const documentosCreados = [];
 
-    // Crear tutor, aunque no tenga usuario
-    const nuevoTutor = await PadreFamilia.create({
-      usuario_id: tutor_usuario_id || null,
-      nombres: tutor.nombres,
-      apellido_paterno: tutor.apellido_paterno,
-      apellido_materno: tutor.apellido_materno,
-      ci: tutor.ci,
-      fecha_nacimiento: tutor.fecha_nacimiento,
-      telefono: tutor.telefono,
-      celular: tutor.celular,
-      email: tutor.email,
-      direccion: tutor.direccion,
-      ocupacion: tutor.ocupacion,
-      lugar_trabajo: tutor.lugar_trabajo,
-      telefono_trabajo: tutor.telefono_trabajo,
-      parentesco: tutor.parentesco,
-      estado_civil: tutor.estado_civil,
-      nivel_educacion: tutor.nivel_educacion
-    });
+      if (matricula && nuevaMatricula && req.files && req.files.documentos) {
+        const archivosDocumentos = req.files.documentos;
+        
+        for (let i = 0; i < archivosDocumentos.length; i++) {
+          const file = archivosDocumentos[i];
+          
+          try {
+            // Buscar metadata del documento en el body
+            const docMetadata = documentos && documentos[i] ? documentos[i] : null;
+            
+            if (!docMetadata || !docMetadata.tipo_documento) {
+              throw new Error(`Tipo de documento no especificado para ${file.originalname}`);
+            }
 
-    tutor_id = nuevoTutor.id;
-    tutoresCreados.push(nuevoTutor);
-  }
+            // Subir archivo a Cloudinary
+            const uploadResult = await UploadImage.uploadFromBuffer(
+              file.buffer,
+              'documentos_matricula',
+              `matricula_${nuevaMatricula.id}_${docMetadata.tipo_documento}_${Date.now()}`
+            );
 
-  // Relacionar tutor con estudiante
-  await EstudianteTutor.assign({
-    estudiante_id: nuevoEstudiante.id,
-    padre_familia_id: tutor_id,
-    es_tutor_principal: tutor.es_tutor_principal || index === 0,
-    vive_con_estudiante: tutor.vive_con_estudiante ?? true,
-    autorizado_recoger: tutor.autorizado_recoger ?? true,
-    puede_autorizar_salidas: tutor.puede_autorizar_salidas ?? true,
-    recibe_notificaciones: tutor.recibe_notificaciones ?? true,
-    prioridad_contacto: tutor.prioridad_contacto || (index + 1),
-    observaciones: tutor.observaciones
-  });
-}
+            documentos_urls.push(uploadResult.url);
 
+            // Guardar en BD
+            const documentoQuery = `
+              INSERT INTO matricula_documento (
+                matricula_id, tipo_documento, nombre_archivo, url_archivo,
+                verificado, observaciones
+              )
+              VALUES ($1, $2, $3, $4, $5, $6)
+              RETURNING *
+            `;
+
+            const docResult = await client.query(documentoQuery, [
+              nuevaMatricula.id,
+              docMetadata.tipo_documento,
+              file.originalname,
+              uploadResult.url,
+              false,
+              docMetadata.observaciones || null
+            ]);
+
+            documentosCreados.push(docResult.rows[0]);
+
+          } catch (uploadError) {
+            await client.query('ROLLBACK');
+            
+            // Limpiar documentos ya subidos
+            for (const url of documentos_urls) {
+              const publicId = UploadImage.extractPublicIdFromUrl(url);
+              if (publicId) {
+                try {
+                  await UploadImage.deleteImage(publicId);
+                } catch (err) {
+                  console.error('Error al eliminar documento:', err);
+                }
+              }
+            }
+
+            return res.status(500).json({
+              success: false,
+              message: 'Error al subir documentos: ' + uploadError.message
+            });
+          }
+        }
+      }
 
       // ========================================
-      // COMMIT - TODO EXITOSO
+      // 7. COMMIT - TODO EXITOSO
       // ========================================
       await client.query('COMMIT');
 
@@ -302,12 +464,14 @@ for (const [index, tutor] of tutores.entries()) {
         datos_nuevos: {
           estudiante: nuevoEstudiante,
           tutores_count: tutoresCreados.length,
-          usuarios_creados: crear_usuario_estudiante || crear_usuarios_tutores
+          usuarios_creados: crear_usuario_estudiante || crear_usuarios_tutores,
+          matricula_creada: !!nuevaMatricula,
+          documentos_subidos: documentosCreados.length
         },
         ip_address: reqInfo.ip,
         user_agent: reqInfo.userAgent,
         resultado: 'exitoso',
-        mensaje: `Registro completo: ${nuevoEstudiante.nombres} ${nuevoEstudiante.apellido_paterno}`
+        mensaje: `Registro completo: ${nuevoEstudiante.nombres} ${nuevoEstudiante.apellido_paterno}${nuevaMatricula ? ' (con matrícula)' : ''}${documentosCreados.length > 0 ? ` y ${documentosCreados.length} documento(s)` : ''}`
       });
 
       // ========================================
@@ -315,26 +479,49 @@ for (const [index, tutor] of tutores.entries()) {
       // ========================================
       const respuesta = {
         success: true,
-        message: 'Registro completado exitosamente',
+        message: 'Registro completado exitosamente' + 
+          (nuevaMatricula ? ' con matrícula' : '') +
+          (documentosCreados.length > 0 ? ` y ${documentosCreados.length} documento(s)` : ''),
         data: {
           estudiante: {
             id: nuevoEstudiante.id,
             codigo: nuevoEstudiante.codigo,
             nombres: nuevoEstudiante.nombres,
             apellidos: `${nuevoEstudiante.apellido_paterno} ${nuevoEstudiante.apellido_materno || ''}`,
-            foto_url: nuevoEstudiante.foto_url
+            foto_url: nuevoEstudiante.foto_url,
+            usuario_id: nuevoEstudiante.usuario_id
           },
           tutores: tutoresCreados.map(t => ({
             id: t.id,
             nombres: t.nombres,
             apellidos: `${t.apellido_paterno} ${t.apellido_materno || ''}`,
             parentesco: t.parentesco,
-            telefono: t.telefono
+            telefono: t.telefono,
+            usuario_id: t.usuario_id
           }))
         }
       };
 
-      // Agregar credenciales si se crearon usuarios
+      if (nuevaMatricula) {
+        respuesta.data.matricula = {
+          id: nuevaMatricula.id,
+          numero_matricula: nuevaMatricula.numero_matricula,
+          fecha_matricula: nuevaMatricula.fecha_matricula,
+          estado: nuevaMatricula.estado,
+          es_becado: nuevaMatricula.es_becado
+        };
+      }
+
+      if (documentosCreados.length > 0) {
+        respuesta.data.documentos = documentosCreados.map(d => ({
+          id: d.id,
+          tipo_documento: d.tipo_documento,
+          nombre_archivo: d.nombre_archivo,
+          url_archivo: d.url_archivo,
+          verificado: d.verificado
+        }));
+      }
+
       if (crear_usuario_estudiante) {
         respuesta.data.credenciales_estudiante = {
           username: estudiante_username,
@@ -354,13 +541,25 @@ for (const [index, tutor] of tutores.entries()) {
       console.error('Error en registro completo:', error);
 
       // Eliminar foto de Cloudinary si se subió
-      if (req.file && foto_url) {
+      if (foto_url) {
         const publicId = UploadImage.extractPublicIdFromUrl(foto_url);
         if (publicId) {
           try {
             await UploadImage.deleteImage(publicId);
           } catch (err) {
             console.error('Error al eliminar imagen tras fallo:', err);
+          }
+        }
+      }
+
+      // Eliminar documentos de Cloudinary si se subieron
+      for (const url of documentos_urls) {
+        const publicId = UploadImage.extractPublicIdFromUrl(url);
+        if (publicId) {
+          try {
+            await UploadImage.deleteImage(publicId);
+          } catch (err) {
+            console.error('Error al eliminar documento tras fallo:', err);
           }
         }
       }
@@ -382,7 +581,6 @@ for (const [index, tutor] of tutores.entries()) {
       const { id } = req.params;
       const { username, password, email } = req.body;
 
-      // Verificar que el estudiante exista
       const estudiante = await Estudiante.findById(id);
       if (!estudiante) {
         return res.status(404).json({
@@ -391,7 +589,6 @@ for (const [index, tutor] of tutores.entries()) {
         });
       }
 
-      // Verificar que no tenga usuario
       if (estudiante.usuario_id) {
         return res.status(409).json({
           success: false,
@@ -399,12 +596,10 @@ for (const [index, tutor] of tutores.entries()) {
         });
       }
 
-      // Generar credenciales si no vienen
-      const finalUsername = username || this.generarUsername(estudiante.nombres, estudiante.apellido_paterno);
-      const finalPassword = password || this.generarPassword();
+      const finalUsername = username || RegistroCompletoController.generarUsername(estudiante.nombres, estudiante.apellido_paterno);
+      const finalPassword = password || RegistroCompletoController.generarPassword();
       const finalEmail = email || `${finalUsername}@estudiante.edu.bo`;
 
-      // Verificar username
       const usuarioExiste = await Usuario.findByCredential(finalUsername);
       if (usuarioExiste) {
         return res.status(409).json({
@@ -413,7 +608,6 @@ for (const [index, tutor] of tutores.entries()) {
         });
       }
 
-      // Crear usuario
       const usuario = await Usuario.create({
         username: finalUsername,
         email: finalEmail,
@@ -423,10 +617,9 @@ for (const [index, tutor] of tutores.entries()) {
         debe_cambiar_password: true
       });
 
-      // Asignar rol
       const client = await pool.connect();
       try {
-        const rolEstudiante = await this.obtenerRolPorNombre('estudiante', client);
+        const rolEstudiante = await RegistroCompletoController.obtenerRolPorNombre('estudiante', client);
         if (rolEstudiante) {
           await client.query(
             'INSERT INTO usuario_roles (usuario_id, rol_id) VALUES ($1, $2)',
@@ -437,9 +630,7 @@ for (const [index, tutor] of tutores.entries()) {
         client.release();
       }
 
-      // Actualizar estudiante con usuario_id
       await Estudiante.update(id, {
-        ...estudiante,
         usuario_id: usuario.id
       });
 
@@ -502,8 +693,8 @@ for (const [index, tutor] of tutores.entries()) {
         });
       }
 
-      const finalUsername = username || this.generarUsername(tutor.nombres, tutor.apellido_paterno);
-      const finalPassword = password || this.generarPassword();
+      const finalUsername = username || RegistroCompletoController.generarUsername(tutor.nombres, tutor.apellido_paterno);
+      const finalPassword = password || RegistroCompletoController.generarPassword();
       const finalEmail = email || tutor.email || `${finalUsername}@padre.edu.bo`;
 
       const usuarioExiste = await Usuario.findByCredential(finalUsername);
@@ -525,7 +716,7 @@ for (const [index, tutor] of tutores.entries()) {
 
       const client = await pool.connect();
       try {
-        const rolPadre = await this.obtenerRolPorNombre('padre_familia', client);
+        const rolPadre = await RegistroCompletoController.obtenerRolPorNombre('padre_familia', client);
         if (rolPadre) {
           await client.query(
             'INSERT INTO usuario_roles (usuario_id, rol_id) VALUES ($1, $2)',
@@ -537,7 +728,6 @@ for (const [index, tutor] of tutores.entries()) {
       }
 
       await PadreFamilia.update(id, {
-        ...tutor,
         usuario_id: usuario.id
       });
 
@@ -581,9 +771,6 @@ for (const [index, tutor] of tutores.entries()) {
   // MÉTODOS AUXILIARES
   // ========================================
   
-  /**
-   * Generar username automático
-   */
   static generarUsername(nombres, apellido) {
     const nombreLimpio = nombres.split(' ')[0].toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
     const apellidoLimpio = apellido.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -591,9 +778,6 @@ for (const [index, tutor] of tutores.entries()) {
     return `${nombreLimpio}.${apellidoLimpio}${random}`;
   }
 
-  /**
-   * Generar password temporal
-   */
   static generarPassword() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
     let password = '';
@@ -603,9 +787,6 @@ for (const [index, tutor] of tutores.entries()) {
     return password;
   }
 
-  /**
-   * Obtener rol por nombre
-   */
   static async obtenerRolPorNombre(nombre, client) {
     const query = 'SELECT * FROM roles WHERE nombre = $1 LIMIT 1';
     const result = await client.query(query, [nombre]);
