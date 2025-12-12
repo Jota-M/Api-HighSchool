@@ -2,7 +2,7 @@
 import express from 'express';
 import multer from 'multer';
 import PreInscripcionController from '../controllers/preinscripcionController.js';
-import { authenticate } from '../middlewares/auth.js';
+import { authenticate } from '../Middlewares/auth.js';
 import { formDataConfigs } from '../middlewares/parsFormDataJSON.js';
 
 const router = express.Router();

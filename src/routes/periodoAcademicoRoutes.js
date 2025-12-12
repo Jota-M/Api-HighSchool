@@ -1,6 +1,6 @@
 import express from 'express';
 import { PeriodoAcademicoController } from '../controllers/academicControllers.js';
-import { authenticate, authorize, logActivity } from '../middlewares/auth.js';
+import { authenticate, authorize, logActivity } from '../Middlewares/auth.js';
 
 const router = express.Router();
 

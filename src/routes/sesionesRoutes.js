@@ -1,6 +1,6 @@
 import express from 'express';
 import { SesionesController } from '../controllers/actividadController.js';
-import { authenticate, requireRole, logActivity } from '../middlewares/auth.js';
+import { authenticate, requireRole, logActivity } from '../Middlewares/auth.js';
 
 const router = express.Router();
 

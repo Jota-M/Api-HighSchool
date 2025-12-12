@@ -1,6 +1,6 @@
 import express from 'express';
 import { RolesController, PermisosController } from '../controllers/rolesController.js';
-import { authenticate, requireRole, logActivity } from '../middlewares/auth.js';
+import { authenticate, requireRole, logActivity } from '../Middlewares/auth.js';
 
 const router = express.Router();
 

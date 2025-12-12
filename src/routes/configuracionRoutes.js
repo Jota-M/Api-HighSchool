@@ -1,7 +1,7 @@
 // routes/configuracionRoutes.js
 import express from 'express';
 import ConfiguracionController from '../controllers/configuracionController.js';
-import { authenticate } from '../middlewares/auth.js';
+import { authenticate } from '../Middlewares/auth.js';
 
 const router = express.Router();
 

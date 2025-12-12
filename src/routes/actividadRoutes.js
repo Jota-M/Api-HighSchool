@@ -1,6 +1,6 @@
 import express from 'express';
 import { ActividadController } from '../controllers/actividadController.js';
-import { authenticate, requireRole } from '../middlewares/auth.js';
+import { authenticate, requireRole } from '../Middlewares/auth.js';
 
 const router = express.Router();
 

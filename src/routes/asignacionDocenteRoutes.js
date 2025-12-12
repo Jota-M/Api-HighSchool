@@ -1,7 +1,7 @@
 // routes/asignacionDocenteRoutes.js
 import express from 'express';
 import AsignacionDocenteController from '../controllers/asignacionDocenteController.js';
-import { authenticate, authorize, logActivity } from '../middlewares/auth.js';
+import { authenticate, authorize, logActivity } from '../Middlewares/auth.js';
 
 const router = express.Router();
 

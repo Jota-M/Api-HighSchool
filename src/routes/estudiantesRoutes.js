@@ -1,6 +1,6 @@
 import express from 'express';
 import EstudianteController from '../controllers/estudianteController.js';
-import { authenticate, authorize, logActivity } from '../middlewares/auth.js';
+import { authenticate, authorize, logActivity } from '../Middlewares/auth.js';
 import { upload, handleMulterError } from '../middlewares/uploadMiddleware.js';
 
 const router = express.Router();
