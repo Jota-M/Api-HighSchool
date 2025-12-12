@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: 'dev.env' });
 } else {
-  dotenv.config(); // carga .env
+  dotenv.config();
 }
 
 const config = {
@@ -20,8 +20,8 @@ const config = {
 
   jwtSecret: process.env.JWT_SECRET || 'tu-secreto-super-seguro-cambiar-en-produccion',
   jwtRefreshSecret: process.env.JWT_REFRESH_SECRET || 'refresh-secret-cambiar',
-  jwtExpiration: '15m',
-  jwtRefreshExpiration: '7d',
+  jwtExpiration: '1h', // Cambiado de 15m a 1h
+  jwtRefreshExpiration: '30d', // Cambiado de 7d a 30d
 
   bcryptRounds: 12,
   maxLoginAttempts: 5,
@@ -30,8 +30,8 @@ const config = {
   cookieOptions: {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
-    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 días
+    sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax', // lax en desarrollo
+    maxAge: 30 * 24 * 60 * 60 * 1000, // 30 días (cambiado de 7)
     path: '/',
   },
 

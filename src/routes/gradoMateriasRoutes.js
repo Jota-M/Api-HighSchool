@@ -14,6 +14,12 @@ router.post(
   GradoMateriaController.asignar
 );
 
+router.get(
+  '/todas',
+  authorize('grado_materia.leer'),
+  GradoMateriaController.listarTodas
+);
+
 // GET /api/grado-materia/grado/:grado_id - Listar materias de un grado
 router.get(
   '/grado/:grado_id',

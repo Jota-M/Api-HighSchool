@@ -11,9 +11,9 @@ import usuariosRoutes from './routes/usuariosRoutes.js';
 import rolesRoutes from './routes/rolesRoutes.js';
 import actividadRoutes from './routes/actividadRoutes.js';
 import sesionesRoutes from './routes/sesionesRoutes.js';
-// import estudiantesRoutes from './routes/estudiantesRoutes.js';
+import configuracionRoutes from './routes/configuracionRoutes.js';
 
-// Rutas académicas NUEVAS (las que quieres mantener)
+// Rutas académicas NUEVAS
 import periodoAcademicoRoutes from './routes/periodoAcademicoRoutes.js';
 import turnoRoutes from './routes/turnoRoutes.js';
 import nivelAcademicoRoutes from './routes/nivelAcademicoRoutes.js';
@@ -22,17 +22,19 @@ import paraleloRoutes from './routes/paraleloRoutes.js';
 
 // Rutas de módulos antiguos / API
 import preinscripcionRoutes from './routes/preinscripcionRoutes.js';
-import teacherRoutes from './routes/teacherRoutes.js';
-import periodoRoutes from './routes/periodoRoutes.js';
-import nivelRoutes from './routes/nivelAcademicoRoutes.js';
-import materiasRoutes from './routes/materiaRoutes.js';
+import materiasRoutes from './routes/materiasRoutes.js';
 import gradoMateriasRoutes from './routes/gradoMateriasRoutes.js';
 import areaConocimientoRoutes from './routes/areaConocimientoRoutes.js'
+import docenteRoutes from './routes/docenteRoutes.js';
+import asignacionDocenteRoutes from './routes/asignacionDocenteRoutes.js';
 
 import estudianteRoutes from './routes/estudiantesRoutes.js';
 import padreFamiliaRoutes from './routes/padreFamiliaRoutes.js';
 import registroCompletoRoutes from './routes/registroCompletoRoutes.js';
 import matriculaRoutes from './routes/matriculaRoutes.js';
+import matriculacionRoutes from './routes/matriculacionRoutes.js';
+import autoMatriculacionRoutes from './routes/autoMatriculacionRoutes.js';
+
 // Modelo para limpieza de sesiones
 import Sesion from './models/Sesion.js';
 
@@ -41,23 +43,17 @@ const app = express();
 // Seguridad básica
 app.use(helmet());
 
-// Limites de rate-limit
+// Rate limit GLOBAL (permisivo para desarrollo)
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  max: 200,
   message: { success: false, message: 'Demasiadas solicitudes desde esta IP' },
   standardHeaders: true,
   legacyHeaders: false,
 });
 
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10,
-  skipSuccessfulRequests: true,
-  message: { success: false, message: 'Demasiados intentos de login' },
-});
-
 // Middlewares
+app.use(express.json());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
@@ -74,10 +70,10 @@ app.use(morgan('dev'));
 //          RUTAS
 // ------------------------------
 
-// Auth con limitador
-app.use('/auth', authLimiter, authRoutes);
+// Auth SIN limitador global (cada ruta tiene el suyo)
+app.use('/auth', authRoutes);
 
-// Global limiter
+// Global limiter para el resto
 app.use(limiter);
 
 // Admin / Sistema
@@ -85,8 +81,9 @@ app.use('/usuarios', usuariosRoutes);
 app.use('/roles', rolesRoutes);
 app.use('/actividad', actividadRoutes);
 app.use('/sesiones', sesionesRoutes);
+app.use('/configuracion', configuracionRoutes);
 
-// Académico NUEVO (LOS QUE QUIERES MANTENER)
+// Académico NUEVO
 app.use('/periodo-academico', periodoAcademicoRoutes);
 app.use('/turno', turnoRoutes);
 app.use('/nivel-academico', nivelAcademicoRoutes);
@@ -101,17 +98,13 @@ app.use('/estudiante', estudianteRoutes);
 app.use('/padre-familia', padreFamiliaRoutes);
 app.use('/registro-completo', registroCompletoRoutes);
 app.use('/matricula', matriculaRoutes);
-// app.use('/estudiantes', estudiantesRoutes);
+app.use('/matriculacion', matriculacionRoutes);
+app.use('/auto-matriculacion', autoMatriculacionRoutes);
+app.use('/docente', docenteRoutes);
+app.use('/asignacion-docente', asignacionDocenteRoutes);
 
-// ------------------------------
-//        Rutas API antiguas
-// ------------------------------
-app.use('/api/preinscripcion', preinscripcionRoutes);
-// app.use('/api/teachers', teacherRoutes);
-// app.use('/api/periodos', periodoRoutes);
-// app.use('/api/niveles-academicos', nivelRoutes);
-// app.use('/api/materias', materiaRoutes);
-// app.use('/api/grado-materias', gradoMateriaRoutes);
+// Rutas API antiguas
+app.use('/preinscripcion', preinscripcionRoutes);
 
 // ------------------------------
 //        Errores / fallback

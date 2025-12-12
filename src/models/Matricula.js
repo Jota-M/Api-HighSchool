@@ -384,6 +384,87 @@ class Matricula {
       client.release();
     }
   }
+  static async findByIdCompleto(id) {
+  const query = `
+    SELECT 
+      m.*,
+      -- Datos del estudiante
+      e.id as estudiante_id,
+      e.codigo as estudiante_codigo,
+      e.nombres as estudiante_nombres,
+      e.apellido_paterno as estudiante_apellido_paterno,
+      e.apellido_materno as estudiante_apellido_materno,
+      e.fecha_nacimiento as estudiante_fecha_nacimiento,
+      e.ci as estudiante_ci,
+      e.foto_url as estudiante_foto,
+      e.telefono as estudiante_telefono,
+      e.direccion as estudiante_direccion,
+      e.zona as estudiante_zona,
+      e.ciudad as estudiante_ciudad,
+      
+      -- 🔥 Usuario del estudiante
+      u_estudiante.username as estudiante_username,
+      u_estudiante.email as estudiante_email,
+      
+      -- Datos del periodo académico
+      pa.id as periodo_id,
+      pa.nombre as periodo_nombre,
+      pa.codigo as periodo_codigo,
+      pa.fecha_inicio as periodo_fecha_inicio,
+      pa.fecha_fin as periodo_fecha_fin,
+      
+      -- Datos del paralelo
+      p.id as paralelo_id,
+      p.nombre as paralelo_nombre,
+      p.aula,
+      p.capacidad_maxima,
+      
+      -- Datos del grado
+      g.id as grado_id,
+      g.nombre as grado_nombre,
+      
+      -- Datos del nivel académico
+      n.id as nivel_id,
+      n.nombre as nivel_nombre,
+      
+      -- Datos del turno
+      t.nombre as turno_nombre,
+      t.hora_inicio as turno_hora_inicio,
+      t.hora_fin as turno_hora_fin,
+      
+      -- 🔥 DATO DEL USUARIO QUE CREÓ LA MATRÍCULA
+      u.username as usuario_registrador,
+      u.email as usuario_email
+      
+    FROM matricula m
+    INNER JOIN estudiante e ON m.estudiante_id = e.id
+    INNER JOIN periodo_academico pa ON m.periodo_academico_id = pa.id
+    INNER JOIN paralelo p ON m.paralelo_id = p.id
+    INNER JOIN grado g ON p.grado_id = g.id
+    INNER JOIN nivel_academico n ON g.nivel_academico_id = n.id
+    INNER JOIN turno t ON p.turno_id = t.id
+    
+    -- 🔥 JOIN para obtener el usuario del estudiante
+    LEFT JOIN usuarios u_estudiante ON e.usuario_id = u_estudiante.id
+    
+    -- 🔥 JOIN con la tabla actividad_log para obtener el usuario que creó
+    LEFT JOIN LATERAL (
+      SELECT usuario_id
+      FROM actividad_log
+      WHERE tabla_afectada = 'matricula' 
+        AND registro_id = m.id 
+        AND accion = 'crear'
+      ORDER BY created_at ASC
+      LIMIT 1
+    ) log ON true
+    LEFT JOIN usuarios u ON log.usuario_id = u.id
+    
+    WHERE m.id = $1 AND m.deleted_at IS NULL
+  `;
+
+  const result = await pool.query(query, [id]);
+  return result.rows[0];
+}
 }
 
 // =============================================

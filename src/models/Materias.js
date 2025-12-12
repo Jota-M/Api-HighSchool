@@ -384,6 +384,98 @@ class GradoMateria {
     const result = await pool.query(query, queryParams);
     return result.rows;
   }
+ static async findAllGroupedByGrado(activo = true) {
+    const query = `
+      SELECT 
+        gm.id,
+        gm.grado_id,
+        gm.materia_id,
+        gm.orden,
+        gm.activo,
+        gm.nota_minima_aprobacion,
+        gm.peso_porcentual,
+        m.codigo as materia_codigo,
+        m.nombre as materia_nombre,
+        m.color as materia_color,
+        m.descripcion as materia_descripcion,
+        m.horas_semanales,
+        m.creditos,
+        m.es_obligatoria,
+        m.tiene_laboratorio,
+        g.nombre as grado_nombre,
+        g.codigo as grado_codigo,
+        g.orden as grado_orden,
+        na.id as nivel_id,
+        na.nombre as nivel_nombre,
+        na.codigo as nivel_codigo,
+        na.orden as nivel_orden,
+        ac.id as area_id,
+        ac.nombre as area_nombre,
+        ac.color as area_color
+      FROM grado_materia gm
+      INNER JOIN materia m ON gm.materia_id = m.id
+      INNER JOIN grado g ON gm.grado_id = g.id
+      INNER JOIN nivel_academico na ON g.nivel_academico_id = na.id
+      LEFT JOIN area_conocimiento ac ON m.area_conocimiento_id = ac.id
+      WHERE m.deleted_at IS NULL
+        AND g.deleted_at IS NULL
+        ${activo ? 'AND gm.activo = true AND m.activo = true' : ''}
+      ORDER BY 
+        na.orden ASC,
+        g.orden ASC,
+        gm.orden ASC,
+        m.nombre ASC
+    `;
+
+    const result = await pool.query(query);
+
+    // Agrupar por grado
+    const materiasAgrupadas = {};
+
+    result.rows.forEach(row => {
+      if (!materiasAgrupadas[row.grado_id]) {
+        materiasAgrupadas[row.grado_id] = {
+          grado_id: row.grado_id,
+          grado_codigo: row.grado_codigo,
+          grado_nombre: row.grado_nombre,
+          grado_orden: row.grado_orden,
+          nivel_id: row.nivel_id,
+          nivel_codigo: row.nivel_codigo,
+          nivel_nombre: row.nivel_nombre,
+          nivel_orden: row.nivel_orden,
+          materias: []
+        };
+      }
+
+      materiasAgrupadas[row.grado_id].materias.push({
+        id: row.id,
+        materia_id: row.materia_id,
+        materia_codigo: row.materia_codigo,
+        materia_nombre: row.materia_nombre,
+        materia_color: row.materia_color,
+        materia_descripcion: row.materia_descripcion,
+        area_id: row.area_id,
+        area_nombre: row.area_nombre,
+        area_color: row.area_color,
+        horas_semanales: row.horas_semanales,
+        creditos: row.creditos,
+        es_obligatoria: row.es_obligatoria,
+        tiene_laboratorio: row.tiene_laboratorio,
+        orden: row.orden,
+        nota_minima_aprobacion: parseFloat(row.nota_minima_aprobacion),
+        peso_porcentual: row.peso_porcentual ? parseFloat(row.peso_porcentual) : null,
+        activo: row.activo
+      });
+    });
+
+    // Convertir objeto a array y ordenar
+    return Object.values(materiasAgrupadas).sort((a, b) => {
+      if (a.nivel_orden !== b.nivel_orden) {
+        return a.nivel_orden - b.nivel_orden;
+      }
+      return a.grado_orden - b.grado_orden;
+    });
+  }
 
   // Obtener por ID
   static async findById(id) {

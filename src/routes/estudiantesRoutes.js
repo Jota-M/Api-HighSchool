@@ -13,14 +13,6 @@ router.get(
   authorize('estudiante.leer'),
   EstudianteController.listar
 );
-
-// GET /api/estudiante/:id
-router.get(
-  '/:id',
-  authorize('estudiante.leer'),
-  EstudianteController.obtenerPorId
-);
-
 // POST /api/estudiante (con foto opcional)
 router.post(
   '/',
@@ -88,6 +80,17 @@ router.delete(
   authorize('estudiante.actualizar'),
   logActivity('remover_tutor', 'estudiante'),
   EstudianteController.removerTutor
+);
+router.get(
+  '/estadisticas',
+  authorize('estudiante.leer'),
+  EstudianteController.obtenerEstadisticas
+);
+// GET /api/estudiante/:id
+router.get(
+  '/:id',
+  authorize('estudiante.leer'),
+  EstudianteController.obtenerPorId
 );
 
 export default router;

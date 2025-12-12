@@ -20,36 +20,74 @@ class RegistroCompletoController {
     try {
       await client.query('BEGIN');
       
-      const {
-        estudiante,
-        tutores,
-        crear_usuario_estudiante,
-        crear_usuarios_tutores,
-        credenciales_estudiante,
-        credenciales_tutores,
-        matricula,
-        documentos // Array de metadata de documentos
-      } = req.body;
-
-      // ========================================
-      // VALIDACIONES INICIALES
-      // ========================================
-      if (!estudiante || !estudiante.nombres || !estudiante.apellido_paterno || !estudiante.fecha_nacimiento) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({
-          success: false,
-          message: 'Los datos del estudiante son incompletos'
-        });
+      let estudiante = req.body.estudiante;
+    let tutores = req.body.tutores;
+    let matricula = req.body.matricula;
+    let documentos = req.body.documentos;
+    let credenciales_estudiante = req.body.credenciales_estudiante;
+    let credenciales_tutores = req.body.credenciales_tutores;
+    
+    // Función helper para parsear JSON de forma segura
+    const parseJSON = (data, defaultValue = null) => {
+      if (!data) return defaultValue;
+      if (typeof data === 'object') return data;
+      try {
+        return JSON.parse(data);
+      } catch (e) {
+        console.error('Error parseando JSON:', e.message);
+        return defaultValue;
       }
+    };
+    
+    // Parsear todos los campos
+    estudiante = parseJSON(estudiante, null);
+    tutores = parseJSON(tutores, []);
+    matricula = parseJSON(matricula, null);
+    documentos = parseJSON(documentos, []);
+    credenciales_estudiante = parseJSON(credenciales_estudiante, null);
+    credenciales_tutores = parseJSON(credenciales_tutores, []);
+    
+    // Los booleanos vienen como string cuando se usa FormData
+    const crear_usuario_estudiante = 
+      req.body.crear_usuario_estudiante === 'true' || 
+      req.body.crear_usuario_estudiante === true;
+    const crear_usuarios_tutores = 
+      req.body.crear_usuarios_tutores === 'true' || 
+      req.body.crear_usuarios_tutores === true;
 
-      if (!tutores || tutores.length === 0) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({
-          success: false,
-          message: 'Debe proporcionar al menos un tutor'
-        });
-      }
+    // Log para debugging (quitar en producción)
+    console.log('📥 Datos recibidos (parseados):', {
+      estudiante: estudiante ? 'OK' : 'NULL',
+      tutores: tutores?.length || 0,
+      matricula: matricula ? 'OK' : 'NULL',
+      crear_usuario_estudiante,
+      crear_usuarios_tutores
+    });
 
+    // ========================================
+    // VALIDACIONES INICIALES
+    // ========================================
+    if (!estudiante || !estudiante.nombres || !estudiante.apellido_paterno || !estudiante.fecha_nacimiento) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Los datos del estudiante son incompletos',
+        debug: {
+          recibido: {
+            estudiante: typeof req.body.estudiante,
+            parseado: estudiante
+          }
+        }
+      });
+    }
+
+    if (!tutores || !Array.isArray(tutores) || tutores.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Debe proporcionar al menos un tutor'
+      });
+    }
       // Validar datos de matrícula si se proporcionan
       if (matricula) {
         if (!matricula.paralelo_id || !matricula.periodo_academico_id) {
@@ -169,54 +207,63 @@ class RegistroCompletoController {
       let estudiante_password_temporal = null;
 
       if (crear_usuario_estudiante) {
-        if (!credenciales_estudiante || !credenciales_estudiante.username || !credenciales_estudiante.password) {
-          estudiante_username = RegistroCompletoController.generarUsername(estudiante.nombres, estudiante.apellido_paterno);
-          estudiante_password_temporal = RegistroCompletoController.generarPassword();
-        } else {
-          estudiante_username = credenciales_estudiante.username;
-          estudiante_password_temporal = credenciales_estudiante.password;
-        }
+  // Si no vienen credenciales o están incompletas, generar automáticamente
+  if (!credenciales_estudiante || !credenciales_estudiante.username || !credenciales_estudiante.password) {
+    estudiante_username = RegistroCompletoController.generarUsername(
+      estudiante.nombres, 
+      estudiante.apellido_paterno
+    );
+    estudiante_password_temporal = RegistroCompletoController.generarPassword(estudiante.ci);
+  } else {
+    // Usar las credenciales proporcionadas
+    estudiante_username = credenciales_estudiante.username;
+    estudiante_password_temporal = credenciales_estudiante.password;
+  }
 
-        const usuarioExiste = await Usuario.findByUsername(estudiante_username, client);
-        if (usuarioExiste) {
-          await client.query('ROLLBACK');
-          return res.status(409).json({
-            success: false,
-            message: `El nombre de usuario "${estudiante_username}" ya existe`
-          });
-        }
+  // Verificar si el username ya existe
+  const usuarioExiste = await Usuario.findByUsername(estudiante_username, client);
+  if (usuarioExiste) {
+    await client.query('ROLLBACK');
+    return res.status(409).json({
+      success: false,
+      message: `El nombre de usuario "${estudiante_username}" ya existe`
+    });
+  }
 
-        const email_estudiante = credenciales_estudiante?.email || 
-          estudiante.email ||
-          `${estudiante_username}@estudiante.edu.bo`;
+  // Determinar el email
+  const email_estudiante = credenciales_estudiante?.email || 
+    estudiante.email ||
+    `${estudiante_username}@estudiante.edu.bo`;
 
-        const usuarioEstudiante = await Usuario.create({
-          username: estudiante_username,
-          email: email_estudiante,
-          password: estudiante_password_temporal,
-          activo: true,
-          verificado: false,
-          debe_cambiar_password: true
-        }, client);
+  // Crear el usuario
+  const usuarioEstudiante = await Usuario.create({
+    username: estudiante_username,
+    email: email_estudiante,
+    password: estudiante_password_temporal,
+    activo: true,
+    verificado: false,
+    debe_cambiar_password: true
+  }, client);
 
-        estudiante_usuario_id = usuarioEstudiante.id;
+  estudiante_usuario_id = usuarioEstudiante.id;
 
-        const rolEstudiante = await RegistroCompletoController.obtenerRolPorNombre('estudiante', client);
-        if (rolEstudiante) {
-          await client.query(
-            'INSERT INTO usuario_roles (usuario_id, rol_id) VALUES ($1, $2)',
-            [estudiante_usuario_id, rolEstudiante.id]
-          );
-        }
+  // Asignar rol de estudiante
+  const rolEstudiante = await RegistroCompletoController.obtenerRolPorNombre('estudiante', client);
+  if (rolEstudiante) {
+    await client.query(
+      'INSERT INTO usuario_roles (usuario_id, rol_id) VALUES ($1, $2)',
+      [estudiante_usuario_id, rolEstudiante.id]
+    );
+  }
 
-        // Actualizar estudiante con usuario_id
-        await client.query(
-          'UPDATE estudiante SET usuario_id = $1, updated_at = NOW() WHERE id = $2',
-          [estudiante_usuario_id, nuevoEstudiante.id]
-        );
+  // Actualizar estudiante con usuario_id
+  await client.query(
+    'UPDATE estudiante SET usuario_id = $1, updated_at = NOW() WHERE id = $2',
+    [estudiante_usuario_id, nuevoEstudiante.id]
+  );
 
-        nuevoEstudiante.usuario_id = estudiante_usuario_id;
-      }
+  nuevoEstudiante.usuario_id = estudiante_usuario_id;
+}
 
       // ========================================
       // 4. CREAR TUTORES Y SUS USUARIOS
@@ -271,7 +318,7 @@ class RegistroCompletoController {
           const tutor_username = credencial_tutor.username || 
             RegistroCompletoController.generarUsername(tutor.nombres, tutor.apellido_paterno);
           const tutor_password_temporal = credencial_tutor.password || 
-            RegistroCompletoController.generarPassword();
+            RegistroCompletoController.generarPassword(tutor.ci);
 
           const usuarioTutorExiste = await Usuario.findByUsername(tutor_username, client);
           if (usuarioTutorExiste) {
@@ -597,7 +644,7 @@ class RegistroCompletoController {
       }
 
       const finalUsername = username || RegistroCompletoController.generarUsername(estudiante.nombres, estudiante.apellido_paterno);
-      const finalPassword = password || RegistroCompletoController.generarPassword();
+      const finalPassword = password || RegistroCompletoController.generarPassword(estudiante.ci);
       const finalEmail = email || `${finalUsername}@estudiante.edu.bo`;
 
       const usuarioExiste = await Usuario.findByCredential(finalUsername);
@@ -694,7 +741,7 @@ class RegistroCompletoController {
       }
 
       const finalUsername = username || RegistroCompletoController.generarUsername(tutor.nombres, tutor.apellido_paterno);
-      const finalPassword = password || RegistroCompletoController.generarPassword();
+      const finalPassword = password || RegistroCompletoController.generarPassword(tutor.ci); 
       const finalEmail = email || tutor.email || `${finalUsername}@padre.edu.bo`;
 
       const usuarioExiste = await Usuario.findByCredential(finalUsername);
@@ -771,21 +818,40 @@ class RegistroCompletoController {
   // MÉTODOS AUXILIARES
   // ========================================
   
-  static generarUsername(nombres, apellido) {
-    const nombreLimpio = nombres.split(' ')[0].toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    const apellidoLimpio = apellido.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    const random = Math.floor(Math.random() * 9999);
-    return `${nombreLimpio}.${apellidoLimpio}${random}`;
-  }
+  // ========================================
+// MÉTODOS AUXILIARES - MODIFICADOS
+// ========================================
 
-  static generarPassword() {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
-    let password = '';
-    for (let i = 0; i < 10; i++) {
-      password += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return password;
+static generarUsername(nombres, apellido) {
+  // Tomar primer nombre y primer apellido, sin espacios ni caracteres especiales
+  const nombreLimpio = nombres.split(' ')[0]
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z]/g, '');
+  
+  const apellidoLimpio = apellido
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z]/g, '');
+  
+  // Capitalizar primera letra de cada parte
+  const nombreCapital = nombreLimpio.charAt(0).toUpperCase() + nombreLimpio.slice(1);
+  const apellidoCapital = apellidoLimpio.charAt(0).toUpperCase() + apellidoLimpio.slice(1);
+  
+  return `${nombreCapital}${apellidoCapital}`;
+}
+
+static generarPassword(ci = null) {
+  // Si viene CI, usarlo como contraseña
+  if (ci) {
+    return ci.toString();
   }
+  
+  // Si no hay CI, generar contraseña aleatoria de 8 dígitos
+  return Math.floor(10000000 + Math.random() * 90000000).toString();
+}
 
   static async obtenerRolPorNombre(nombre, client) {
     const query = 'SELECT * FROM roles WHERE nombre = $1 LIMIT 1';

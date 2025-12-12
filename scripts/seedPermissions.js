@@ -13,10 +13,8 @@ async function seedPermissions() {
     console.log('📝 Creando roles...');
     const roles = [
       { nombre: 'super_admin', descripcion: 'Administrador del sistema con todos los permisos', es_sistema: true },
-      { nombre: 'admin', descripcion: 'Administrador general del sistema', es_sistema: true },
       { nombre: 'secretaria', descripcion: 'Gestión administrativa del colegio', es_sistema: true },
       { nombre: 'docente', descripcion: 'Profesor con acceso a estudiantes, cursos y calificaciones', es_sistema: true },
-      { nombre: 'profesor', descripcion: 'Docente con acceso a su portal de clases', es_sistema: true },
       { nombre: 'estudiante', descripcion: 'Usuario con acceso limitado a sus cursos y calificaciones', es_sistema: true },
       { nombre: 'padre', descripcion: 'Padre o tutor con acceso al seguimiento académico', es_sistema: true },
     ];
@@ -40,8 +38,9 @@ async function seedPermissions() {
     console.log('📝 Creando permisos CRUD generales...');
     const modulosGenerales = [
       'usuarios', 'estudiantes', 'docentes', 'padres', 'periodos', 'niveles', 'paralelos',
-      'materias', 'asignaciones', 'horarios', 'calificaciones', 'reportes', 'configuracion',
-      'alertas', 'asistencia', 'roles', 'permisos', 'sesiones', 'actividad'
+      'materias', 'horarios', 'calificaciones', 'reportes', 'configuracion',
+      'alertas', 'asistencia', 'roles', 'permisos', 'sesiones', 'actividad',
+      'preinscripciones', 'matriculacion', 'plan_estudio'
     ];
     const acciones = ['crear', 'leer', 'actualizar', 'eliminar'];
     const permisosGenerales = [];
@@ -64,6 +63,7 @@ async function seedPermissions() {
     // ============================================
     // 2.1️⃣ PERMISOS ACADÉMICOS ADICIONALES
     // ============================================
+    console.log('📝 Creando permisos académicos adicionales...');
     const modulosAcademicos = [
       'periodo_academico',
       'turno',
@@ -130,71 +130,129 @@ async function seedPermissions() {
     // ============================================
     // 3️⃣ ASIGNACIÓN DE PERMISOS A ROLES
     // ============================================
+    console.log('📝 Asignando permisos a roles...');
 
     const superAdmin = rolesCreados.find((r) => r.nombre === 'super_admin');
-    const admin = rolesCreados.find((r) => r.nombre === 'admin');
     const secretaria = rolesCreados.find((r) => r.nombre === 'secretaria');
     const docente = rolesCreados.find((r) => r.nombre === 'docente');
-    const profesor = rolesCreados.find((r) => r.nombre === 'profesor');
     const estudiante = rolesCreados.find((r) => r.nombre === 'estudiante');
     const padre = rolesCreados.find((r) => r.nombre === 'padre');
 
     const ALL = [...permisosGenerales, ...permisosAcademicos, ...permisosMaterias];
 
-    // SUPER ADMIN = todo
+    // ============================================
+    // SUPER ADMIN = TODOS LOS PERMISOS
+    // ============================================
+    console.log('  → Asignando permisos a super_admin...');
     for (const p of ALL) {
-      await client.query(`INSERT INTO rol_permisos (rol_id, permiso_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [superAdmin.id, p.id]);
+      await client.query(
+        `INSERT INTO rol_permisos (rol_id, permiso_id) 
+         VALUES ($1, $2) 
+         ON CONFLICT DO NOTHING`,
+        [superAdmin.id, p.id]
+      );
     }
 
-    // ADMIN = todo excepto eliminar usuarios
-    for (const p of ALL.filter(p => !(p.modulo === 'usuarios' && p.accion === 'eliminar'))) {
-      await client.query(`INSERT INTO rol_permisos (rol_id, permiso_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [admin.id, p.id]);
-    }
-
+    // ============================================
     // SECRETARIA
+    // ============================================
+    console.log('  → Asignando permisos a secretaria...');
     const PERM_SECRETARIA = ALL.filter(p =>
-      ['estudiantes', 'docentes', 'padres', 'periodos', 'niveles', 'paralelos', 'materias', 'asignaciones', 'horarios']
-        .includes(p.modulo) && ['crear', 'leer', 'actualizar'].includes(p.accion)
+      [
+        'estudiantes', 'docentes', 'padres', 'periodos', 'niveles', 'paralelos', 
+        'materias', 'horarios', 'preinscripciones', 'matriculacion', 'plan_estudio',
+        'periodo_academico', 'turno', 'nivel_academico', 'grado', 'paralelo',
+        'area_conocimiento', 'materia', 'grado_materia', 'usuarios'
+      ].includes(p.modulo) && ['crear', 'leer', 'actualizar'].includes(p.accion)
     );
-    for (const p of PERM_SECRETARIA) await client.query(`INSERT INTO rol_permisos VALUES ($1,$2) ON CONFLICT DO NOTHING`, [secretaria.id, p.id]);
+    for (const p of PERM_SECRETARIA) {
+      await client.query(
+        `INSERT INTO rol_permisos (rol_id, permiso_id) 
+         VALUES ($1, $2) 
+         ON CONFLICT DO NOTHING`,
+        [secretaria.id, p.id]
+      );
+    }
 
+    // ============================================
     // DOCENTE
+    // ============================================
+    console.log('  → Asignando permisos a docente...');
     const PERM_DOCENTE = ALL.filter(p =>
-      ['estudiantes', 'calificaciones', 'materias', 'horarios', 'asistencia']
-        .includes(p.modulo) && ['crear', 'leer', 'actualizar'].includes(p.accion)
+      [
+        'estudiantes', 'calificaciones', 'materias', 'horarios', 'asistencia',
+        'plan_estudio', 'materia', 'grado_materia'
+      ].includes(p.modulo) && ['crear', 'leer', 'actualizar'].includes(p.accion)
     );
-    for (const p of PERM_DOCENTE) await client.query(`INSERT INTO rol_permisos VALUES ($1,$2) ON CONFLICT DO NOTHING`, [docente.id, p.id]);
+    for (const p of PERM_DOCENTE) {
+      await client.query(
+        `INSERT INTO rol_permisos (rol_id, permiso_id) 
+         VALUES ($1, $2) 
+         ON CONFLICT DO NOTHING`,
+        [docente.id, p.id]
+      );
+    }
 
-    // PROFESOR
-    const PERM_PROFESOR = ALL.filter(p =>
-      ['materias', 'calificaciones', 'horarios'].includes(p.modulo) &&
-      ['leer', 'actualizar'].includes(p.accion)
-    );
-    for (const p of PERM_PROFESOR) await client.query(`INSERT INTO rol_permisos VALUES ($1,$2) ON CONFLICT DO NOTHING`, [profesor.id, p.id]);
-
+    // ============================================
     // ESTUDIANTE
+    // ============================================
+    console.log('  → Asignando permisos a estudiante...');
     const PERM_ESTUD = ALL.filter(p =>
       ['materias', 'calificaciones', 'horarios', 'asistencia'].includes(p.modulo) &&
       ['leer'].includes(p.accion)
     );
-    for (const p of PERM_ESTUD) await client.query(`INSERT INTO rol_permisos VALUES ($1,$2) ON CONFLICT DO NOTHING`, [estudiante.id, p.id]);
+    for (const p of PERM_ESTUD) {
+      await client.query(
+        `INSERT INTO rol_permisos (rol_id, permiso_id) 
+         VALUES ($1, $2) 
+         ON CONFLICT DO NOTHING`,
+        [estudiante.id, p.id]
+      );
+    }
 
+    // ============================================
     // PADRE
+    // ============================================
+    console.log('  → Asignando permisos a padre...');
     const PERM_PADRE = ALL.filter(p =>
       ['calificaciones', 'asistencia', 'alertas', 'horarios'].includes(p.modulo) &&
       ['leer'].includes(p.accion)
     );
-    for (const p of PERM_PADRE) await client.query(`INSERT INTO rol_permisos VALUES ($1,$2) ON CONFLICT DO NOTHING`, [padre.id, p.id]);
+    for (const p of PERM_PADRE) {
+      await client.query(
+        `INSERT INTO rol_permisos (rol_id, permiso_id) 
+         VALUES ($1, $2) 
+         ON CONFLICT DO NOTHING`,
+        [padre.id, p.id]
+      );
+    }
 
     await client.query('COMMIT');
     console.log(`\n✅ Seed completado con éxito`);
+    console.log(`\n📊 Resumen:`);
+    console.log(`   - Roles creados: ${rolesCreados.length}`);
+    console.log(`   - Permisos totales: ${ALL.length}`);
+    console.log(`   - Super Admin: ${ALL.length} permisos`);
+    console.log(`   - Secretaria: ${PERM_SECRETARIA.length} permisos`);
+    console.log(`   - Docente: ${PERM_DOCENTE.length} permisos`);
+    console.log(`   - Estudiante: ${PERM_ESTUD.length} permisos`);
+    console.log(`   - Padre: ${PERM_PADRE.length} permisos`);
 
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('❌ Error en seed:', err);
+    throw err;
   } finally {
     client.release();
   }
 }
 
-seedPermissions();
+seedPermissions()
+  .then(() => {
+    console.log('✅ Proceso finalizado');
+    process.exit(0);
+  })
+  .catch((err) => {
+    console.error('❌ Error fatal:', err);
+    process.exit(1);
+  });

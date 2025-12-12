@@ -561,6 +561,40 @@ class GradoMateriaController {
     }
   }
 
+  // Método NUEVO en GradoMateriaController
+static async listarTodas(req, res) {
+    try {
+      const { activo } = req.query;
+
+      console.log('📊 Obteniendo todas las materias agrupadas por grado...');
+
+      const materiasAgrupadas = await GradoMateria.findAllGroupedByGrado(
+        activo !== undefined ? activo === 'true' : true
+      );
+
+      const totalMaterias = materiasAgrupadas.reduce(
+        (sum, grado) => sum + grado.materias.length, 
+        0
+      );
+
+      console.log(`✅ ${totalMaterias} materias de ${materiasAgrupadas.length} grados cargadas`);
+
+      res.json({
+        success: true,
+        data: { 
+          grados: materiasAgrupadas,
+          total_grados: materiasAgrupadas.length,
+          total_materias: totalMaterias
+        }
+      });
+    } catch (error) {
+      console.error('❌ Error al listar todas las materias:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al listar materias: ' + error.message
+      });
+    }
+  }
   // Listar materias de un grado
   static async listarPorGrado(req, res) {
     try {

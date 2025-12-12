@@ -4,9 +4,9 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "dev": "node --watch --env-file .env.dev index.js",
+    "dev": "node --watch --env-file .env index.js",
     "start": "node --env-file .env index.js",
-    "seed": "node --env-file .env.dev ./scripts/seedTruncate"
+    "seed": "node --env-file .env ./scripts/seedtest"
   },
   "keywords": [],
   "author": "",
@@ -27,6 +27,8 @@
     "morgan": "1.10.1",
     "multer": "^2.0.2",
     "multer-storage-cloudinary": "^4.0.0",
+    "nodemailer": "^7.0.11",
+    "pdfkit": "^0.17.2",
     "pg": "8.16.3",
     "zod": "^4.1.11"
   },

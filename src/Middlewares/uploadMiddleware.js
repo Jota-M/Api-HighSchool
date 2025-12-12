@@ -9,7 +9,7 @@ const fileFilter = (req, file, cb) => {
     "image/png",
     "image/gif",
     "image/webp",
-    "application/pdf"     // ⬅️ permitimos PDF
+    "application/pdf"     
   ];
 
   if (validMimeTypes.includes(file.mimetype)) {

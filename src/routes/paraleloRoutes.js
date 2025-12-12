@@ -6,19 +6,31 @@ const router = express.Router();
 
 router.use(authenticate);
 
-// GET /api/paralelo?grado_id=1&anio=2024
+// ✅ CRÍTICO: Las rutas ESPECÍFICAS deben ir ANTES que las DINÁMICAS
+// La ruta '/todos' debe estar ANTES de '/:id'
+
+// 1. Ruta específica '/todos' (debe ir PRIMERO)
+router.get(
+  '/todos',
+  authorize('paralelo.leer'),
+  ParaleloController.listarTodos
+);
+
+// 2. Ruta raíz '/' con query params
 router.get(
   '/',
   authorize('paralelo.leer'),
   ParaleloController.listar
 );
 
+// 3. Ruta dinámica '/:id' (debe ir AL FINAL)
 router.get(
   '/:id',
   authorize('paralelo.leer'),
   ParaleloController.obtenerPorId
 );
 
+// 4. Otras operaciones
 router.post(
   '/',
   authorize('paralelo.crear'),

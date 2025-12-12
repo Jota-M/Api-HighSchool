@@ -2,6 +2,7 @@
 import { Turno ,PeriodoAcademico, NivelAcademico, Grado, Paralelo } from '../models/Academic.js';
 import ActividadLog from '../models/actividadLog.js';
 import RequestInfo from '../utils/requestInfo.js';
+import { pool } from '../db/pool.js';
 
 class PeriodoAcademicoController {
   // Listar periodos académicos
@@ -891,6 +892,70 @@ class GradoController {
 // ============== PARALELO CONTROLLER ==============
 class ParaleloController {
   // Listar paralelos
+  static async listarTodos(req, res) {
+    try {
+      const { anio, activo, turno_id } = req.query;
+      
+      // Construir condiciones WHERE
+      let whereConditions = ['p.deleted_at IS NULL'];
+      let queryParams = [];
+      let paramCounter = 1;
+
+      if (anio) {
+        whereConditions.push(`p.anio = $${paramCounter}`);
+        queryParams.push(parseInt(anio));
+        paramCounter++;
+      }
+
+      if (activo !== undefined) {
+        whereConditions.push(`p.activo = $${paramCounter}`);
+        queryParams.push(activo === 'true');
+        paramCounter++;
+      }
+
+      if (turno_id) {
+        whereConditions.push(`p.turno_id = $${paramCounter}`);
+        queryParams.push(parseInt(turno_id));
+        paramCounter++;
+      }
+
+      const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
+
+      // Query optimizada con todos los paralelos de todos los grados
+      const query = `
+        SELECT p.*, 
+          g.nombre as grado_nombre,
+          g.codigo as grado_codigo,
+          g.id as grado_id,
+          n.nombre as nivel_nombre,
+          t.nombre as turno_nombre,
+          t.codigo as turno_codigo,
+          (SELECT COUNT(*) FROM matricula m WHERE m.paralelo_id = p.id AND m.deleted_at IS NULL) as total_estudiantes
+        FROM paralelo p
+        INNER JOIN grado g ON p.grado_id = g.id
+        INNER JOIN nivel_academico n ON g.nivel_academico_id = n.id
+        INNER JOIN turno t ON p.turno_id = t.id
+        ${whereClause}
+        ORDER BY n.orden, g.orden, p.nombre
+      `;
+      
+      const result = await pool.query(query, queryParams);
+
+      res.json({
+        success: true,
+        data: { 
+          paralelos: result.rows,
+          total: result.rows.length
+        }
+      });
+    } catch (error) {
+      console.error('Error al listar todos los paralelos:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al listar paralelos: ' + error.message
+      });
+    }
+  }
   static async listar(req, res) {
     try {
       const { grado_id, turno_id, anio, activo } = req.query;

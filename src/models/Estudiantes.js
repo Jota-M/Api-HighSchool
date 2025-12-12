@@ -302,20 +302,34 @@ class Estudiante {
   // OBTENER TUTORES DEL ESTUDIANTE
   // =============================================
   static async getTutores(estudiante_id) {
-    const query = `
-      SELECT et.*, pf.*,
-        et.es_tutor_principal, et.vive_con_estudiante,
-        et.autorizado_recoger, et.puede_autorizar_salidas,
-        et.recibe_notificaciones, et.prioridad_contacto
-      FROM estudiante_tutor et
-      INNER JOIN padre_familia pf ON et.padre_familia_id = pf.id
-      WHERE et.estudiante_id = $1 AND pf.deleted_at IS NULL
-      ORDER BY et.prioridad_contacto, pf.apellido_paterno
-    `;
+  const query = `
+    SELECT 
+      et.*,
+      pf.*,
+      et.es_tutor_principal, 
+      et.vive_con_estudiante,
+      et.autorizado_recoger, 
+      et.puede_autorizar_salidas,
+      et.recibe_notificaciones, 
+      et.prioridad_contacto,
+      
+      -- 🔥 Usuario del tutor
+      u.username,
+      u.email as user_email
+      
+    FROM estudiante_tutor et
+    INNER JOIN padre_familia pf ON et.padre_familia_id = pf.id
+    
+    -- 🔥 JOIN para obtener el usuario del tutor
+    LEFT JOIN usuarios u ON pf.usuario_id = u.id
+    
+    WHERE et.estudiante_id = $1 AND pf.deleted_at IS NULL
+    ORDER BY et.prioridad_contacto, pf.apellido_paterno
+  `;
 
-    const result = await pool.query(query, [estudiante_id]);
-    return result.rows;
-  }
+  const result = await pool.query(query, [estudiante_id]);
+  return result.rows;
+}
 }
 
 // =============================================
@@ -493,5 +507,6 @@ class EstudianteTutor {
     return result.rows[0];
   }
 }
+
 
 export { Estudiante, PadreFamilia, EstudianteTutor };

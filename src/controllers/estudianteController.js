@@ -2,6 +2,7 @@ import { Estudiante, EstudianteTutor } from '../models/Estudiantes.js';
 import ActividadLog from '../models/actividadLog.js';
 import RequestInfo from '../utils/requestInfo.js';
 import UploadImage from '../utils/uploadImage.js';
+import { pool } from '../db/pool.js'; 
 
 class EstudianteController {
   // Listar estudiantes
@@ -564,6 +565,66 @@ class EstudianteController {
       res.status(500).json({
         success: false,
         message: 'Error al remover tutor: ' + error.message
+      });
+    }
+  }
+  // Obtener estadísticas generales
+  static async obtenerEstadisticas(req, res) {
+    try {
+      const query = `
+        SELECT 
+          COUNT(*) as total,
+          COUNT(*) FILTER (WHERE activo = true) as activos,
+          COUNT(*) FILTER (WHERE activo = false) as inactivos,
+          COUNT(*) FILTER (WHERE genero = 'masculino') as masculino,
+          COUNT(*) FILTER (WHERE genero = 'femenino') as femenino,
+          COUNT(*) FILTER (WHERE tiene_discapacidad = true) as con_discapacidad,
+          COUNT(*) FILTER (WHERE usuario_id IS NOT NULL) as con_usuario,
+          COUNT(*) FILTER (WHERE usuario_id IS NULL) as sin_usuario,
+          AVG(EXTRACT(YEAR FROM AGE(fecha_nacimiento))) as promedio_edad
+        FROM estudiante
+        WHERE deleted_at IS NULL
+      `;
+
+      const result = await pool.query(query);
+      const stats = result.rows[0];
+
+      // Obtener distribución por grado
+      const distribucionQuery = `
+        SELECT 
+          g.nombre as grado,
+          COUNT(DISTINCT m.estudiante_id) as cantidad
+        FROM matricula m
+        INNER JOIN paralelo p ON m.paralelo_id = p.id
+        INNER JOIN grado g ON p.grado_id = g.id
+        WHERE m.deleted_at IS NULL 
+          AND m.estado = 'activo'
+        GROUP BY g.id, g.nombre, g.orden
+        ORDER BY g.orden
+      `;
+
+      const distribucion = await pool.query(distribucionQuery);
+
+      res.json({
+        success: true,
+        data: {
+          total: parseInt(stats.total),
+          activos: parseInt(stats.activos),
+          inactivos: parseInt(stats.inactivos),
+          masculino: parseInt(stats.masculino),
+          femenino: parseInt(stats.femenino),
+          con_discapacidad: parseInt(stats.con_discapacidad),
+          con_usuario: parseInt(stats.con_usuario),
+          sin_usuario: parseInt(stats.sin_usuario),
+          promedio_edad: parseFloat(stats.promedio_edad) || 0,
+          distribucion_por_grado: distribucion.rows
+        }
+      });
+    } catch (error) {
+      console.error('Error al obtener estadísticas:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al obtener estadísticas: ' + error.message
       });
     }
   }

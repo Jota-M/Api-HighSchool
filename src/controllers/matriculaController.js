@@ -433,6 +433,46 @@ class MatriculaController {
       });
     }
   }
+  static async verificarCapacidad(req, res) {
+    try {
+      const { paralelo_id, periodo_id } = req.query;
+
+      // Validar parámetros
+      if (!paralelo_id || !periodo_id) {
+        return res.status(400).json({
+          success: false,
+          message: 'Los parámetros paralelo_id y periodo_id son requeridos'
+        });
+      }
+
+      // Usar el método existente del modelo
+      const capacidad = await Matricula.checkCapacidad(
+        parseInt(paralelo_id),
+        parseInt(periodo_id)
+      );
+
+      if (!capacidad) {
+        return res.status(404).json({
+          success: false,
+          message: 'Paralelo no encontrado'
+        });
+      }
+
+      res.json({
+        success: true,
+        data: capacidad
+      });
+
+    } catch (error) {
+      console.error('Error al verificar capacidad:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al verificar capacidad del paralelo',
+        error: error.message
+      });
+    }
+  }
+
 
   // === DOCUMENTOS ===
 
@@ -635,6 +675,7 @@ class MatriculaController {
       });
     }
   }
+  
 }
 
 export default MatriculaController;
