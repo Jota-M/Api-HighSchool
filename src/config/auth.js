@@ -20,8 +20,8 @@ const config = {
 
   jwtSecret: process.env.JWT_SECRET || 'tu-secreto-super-seguro-cambiar-en-produccion',
   jwtRefreshSecret: process.env.JWT_REFRESH_SECRET || 'refresh-secret-cambiar',
-  jwtExpiration: '1h', // Cambiado de 15m a 1h
-  jwtRefreshExpiration: '30d', // Cambiado de 7d a 30d
+  jwtExpiration: '1h',
+  jwtRefreshExpiration: '30d',
 
   bcryptRounds: 12,
   maxLoginAttempts: 5,
@@ -30,8 +30,8 @@ const config = {
   cookieOptions: {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax', // lax en desarrollo
-    maxAge: 30 * 24 * 60 * 60 * 1000, // 30 días (cambiado de 7)
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // ← CAMBIAR 'strict' a 'none'
+    maxAge: 30 * 24 * 60 * 60 * 1000, // 30 días
     path: '/',
   },
 
