@@ -15,4 +15,5 @@ export const pool = new pg.Pool({
   ssl: {
     rejectUnauthorized: false, 
   },
+  family: 4 
 });
