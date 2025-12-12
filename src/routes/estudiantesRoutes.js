@@ -1,7 +1,7 @@
 import express from 'express';
 import EstudianteController from '../controllers/estudianteController.js';
 import { authenticate, authorize, logActivity } from '../Middlewares/auth.js';
-import { upload, handleMulterError } from '../middlewares/uploadMiddleware.js';
+import { upload, handleMulterError } from '../Middlewares/uploadMiddleware.js';
 
 const router = express.Router();
 

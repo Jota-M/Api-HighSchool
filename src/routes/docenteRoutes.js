@@ -3,7 +3,7 @@ import express from 'express';
 import DocenteController from '../controllers/docenteController.js';
 import { authenticate, authorize, logActivity } from '../Middlewares/auth.js';
 import multer from 'multer';
-import { formDataConfigs } from '../middlewares/parsFormDataJSON.js';
+import { formDataConfigs } from '../Middlewares/parsFormDataJSON.js';
 
 const router = express.Router();
 
