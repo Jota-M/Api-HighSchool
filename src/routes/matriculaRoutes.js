@@ -3,7 +3,7 @@ import express from 'express';
 import MatriculaController from '../controllers/matriculaController.js';
 import MatriculaPDFController from '../controllers/matriculaPDFController.js';
 import { authenticate, authorize, logActivity } from '../Middlewares/auth.js';
-import { upload, handleMulterError } from '../middlewares/uploadMiddleware.js';
+import { upload, handleMulterError } from '../Middlewares/uploadMiddleware.js';
 
 const router = express.Router();
 
