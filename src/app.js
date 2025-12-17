@@ -34,6 +34,7 @@ import registroCompletoRoutes from './routes/registroCompletoRoutes.js';
 import matriculaRoutes from './routes/matriculaRoutes.js';
 import matriculacionRoutes from './routes/matriculacionRoutes.js';
 import autoMatriculacionRoutes from './routes/autoMatriculacionRoutes.js';
+import reportesRoutes from './routes/reportesRoutes.js'
 
 // Modelo para limpieza de sesiones
 import Sesion from './models/Sesion.js';
@@ -92,6 +93,7 @@ app.use('/paralelo', paraleloRoutes);
 app.use('/area-conocimiento', areaConocimientoRoutes);
 app.use('/materias', materiasRoutes);
 app.use('/grado-materia', gradoMateriasRoutes);
+app.use('/reportes',reportesRoutes);
 
 // Módulo de Estudiantes y Tutores
 app.use('/estudiante', estudianteRoutes);

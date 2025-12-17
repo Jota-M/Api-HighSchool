@@ -8,26 +8,45 @@ const router = express.Router();
 
 router.use(authenticate);
 
-// POST /api/registro-completo - Registro completo con documentos
+// 🆕 GET /api/registro-completo/buscar-padre/:ci - Buscar padre por CI
+router.get(
+  '/buscar-padre/:ci',
+  authorize('estudiante.crear'),
+  RegistroCompletoController.buscarPadrePorCI
+);
+
+// POST /api/registro-completo - Registro completo mejorado
+// Soporta 3 modos: nuevo, padre_existente, multiple
 router.post(
   '/',
   authorize('estudiante.crear'),
   upload.fields([
-    { name: 'foto', maxCount: 1 }, // Foto del estudiante
-    { name: 'documentos', maxCount: 10 } // Hasta 10 documentos
+    // Modo nuevo/padre_existente: 1 foto
+    { name: 'foto', maxCount: 1 },
+    
+    // 🆕 Modo múltiple: hasta 5 fotos (foto_0, foto_1, foto_2, foto_3, foto_4)
+    { name: 'foto_0', maxCount: 1 },
+    { name: 'foto_1', maxCount: 1 },
+    { name: 'foto_2', maxCount: 1 },
+    { name: 'foto_3', maxCount: 1 },
+    { name: 'foto_4', maxCount: 1 },
+    
+    // Documentos (aplica a todos los modos)
+    { name: 'documentos', maxCount: 10 }
   ]),
   handleMulterError,
   logActivity('registro_completo', 'estudiante'),
   RegistroCompletoController.registroCompleto
 );
 
-// Otros endpoints...
+// Crear usuario para estudiante existente
 router.post(
   '/usuario-estudiante/:id',
   authorize('estudiante.actualizar'),
   RegistroCompletoController.crearUsuarioEstudiante
 );
 
+// Crear usuario para tutor existente
 router.post(
   '/usuario-tutor/:id',
   authorize('padre_familia.actualizar'),
