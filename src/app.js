@@ -34,6 +34,7 @@ import registroCompletoRoutes from './routes/registroCompletoRoutes.js';
 import matriculaRoutes from './routes/matriculaRoutes.js';
 import matriculacionRoutes from './routes/matriculacionRoutes.js';
 import autoMatriculacionRoutes from './routes/autoMatriculacionRoutes.js';
+import cursosVacacionalesRoutes from './routes/cursoVacacionalRoutes.js';
 import reportesRoutes from './routes/reportesRoutes.js'
 
 // Modelo para limpieza de sesiones
@@ -104,6 +105,7 @@ app.use('/matriculacion', matriculacionRoutes);
 app.use('/auto-matriculacion', autoMatriculacionRoutes);
 app.use('/docente', docenteRoutes);
 app.use('/asignacion-docente', asignacionDocenteRoutes);
+app.use('/cursos-vacacionales', cursosVacacionalesRoutes);
 
 // Rutas API antiguas
 app.use('/preinscripcion', preinscripcionRoutes);
