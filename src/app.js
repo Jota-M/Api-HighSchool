@@ -22,6 +22,8 @@ import paraleloRoutes from './routes/paraleloRoutes.js';
 
 // Rutas de módulos antiguos / API
 import preinscripcionRoutes from './routes/preinscripcionRoutes.js';
+import cupoPreinscripcionRoutes from './routes/cupoPreinscripcionRoutes.js'; // 🆕
+import publicAcademicosRoutes from './routes/publicAcademicosRoutes.js'; // 🆕 Públicas
 import materiasRoutes from './routes/materiasRoutes.js';
 import gradoMateriasRoutes from './routes/gradoMateriasRoutes.js';
 import areaConocimientoRoutes from './routes/areaConocimientoRoutes.js'
@@ -72,6 +74,9 @@ app.use(morgan('dev'));
 //          RUTAS
 // ------------------------------
 
+// 🆕 RUTAS PÚBLICAS (sin autenticación, sin rate limit agresivo)
+app.use('/public/academicos', publicAcademicosRoutes);
+
 // Auth SIN limitador global (cada ruta tiene el suyo)
 app.use('/auth', authRoutes);
 
@@ -109,6 +114,7 @@ app.use('/cursos-vacacionales', cursosVacacionalesRoutes);
 
 // Rutas API antiguas
 app.use('/preinscripcion', preinscripcionRoutes);
+app.use('/cupos', cupoPreinscripcionRoutes); // 🆕 Cupos de preinscripción
 
 // ------------------------------
 //        Errores / fallback

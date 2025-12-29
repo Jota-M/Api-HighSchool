@@ -10,9 +10,6 @@ class CursoVacacionalController {
   // PERIODOS VACACIONALES
   // ==========================================
 
-  /**
-   * Crear periodo vacacional
-   */
   static async crearPeriodo(req, res) {
     try {
       const {
@@ -21,7 +18,6 @@ class CursoVacacionalController {
         activo, permite_inscripciones, descripcion
       } = req.body;
 
-      // Validaciones
       if (!nombre || !tipo || !anio || !fecha_inicio || !fecha_fin) {
         return res.status(400).json({
           success: false,
@@ -70,9 +66,6 @@ class CursoVacacionalController {
     }
   }
 
-  /**
-   * Listar periodos vacacionales
-   */
   static async listarPeriodos(req, res) {
     try {
       const { page, limit, search, tipo, anio, activo } = req.query;
@@ -100,9 +93,6 @@ class CursoVacacionalController {
     }
   }
 
-  /**
-   * Obtener periodo por ID
-   */
   static async obtenerPeriodo(req, res) {
     try {
       const { id } = req.params;
@@ -128,9 +118,6 @@ class CursoVacacionalController {
     }
   }
 
-  /**
-   * Actualizar periodo vacacional
-   */
   static async actualizarPeriodo(req, res) {
     try {
       const { id } = req.params;
@@ -183,9 +170,6 @@ class CursoVacacionalController {
     }
   }
 
-  /**
-   * Eliminar periodo vacacional
-   */
   static async eliminarPeriodo(req, res) {
     try {
       const { id } = req.params;
@@ -227,9 +211,6 @@ class CursoVacacionalController {
     }
   }
 
-  /**
-   * Obtener periodo activo
-   */
   static async obtenerPeriodoActivo(req, res) {
     try {
       const periodo = await PeriodoVacacional.getActivo();
@@ -255,13 +236,13 @@ class CursoVacacionalController {
   }
 
   // ==========================================
-  // CURSOS VACACIONALES
+  // CURSOS VACACIONALES (CON FOTO)
   // ==========================================
 
-  /**
-   * Crear curso vacacional
-   */
   static async crearCurso(req, res) {
+    let foto_url = null;
+    let foto_public_id = null;
+
     try {
       const {
         periodo_vacacional_id, materia_id, grado_id, nombre, codigo,
@@ -284,10 +265,37 @@ class CursoVacacionalController {
         });
       }
 
+      // Subir foto si existe
+      if (req.file) {
+        if (!UploadImage.isValidImage(req.file)) {
+          return res.status(400).json({
+            success: false,
+            message: 'Solo se permiten archivos de imagen (jpg, png, gif, webp)'
+          });
+        }
+
+        if (!UploadImage.isValidSize(req.file, 5)) {
+          return res.status(400).json({
+            success: false,
+            message: 'La imagen es muy grande (máximo 5MB)'
+          });
+        }
+
+        const uploadResult = await UploadImage.uploadFromBuffer(
+          req.file.buffer,
+          'cursos_vacacionales',
+          `curso_${Date.now()}`
+        );
+
+        foto_url = uploadResult.url;
+        foto_public_id = uploadResult.public_id;
+      }
+
       const curso = await CursoVacacional.create({
         periodo_vacacional_id, materia_id, grado_id, nombre, codigo,
         descripcion, fecha_inicio, fecha_fin, dias_semana, hora_inicio,
-        hora_fin, cupos_totales, costo, aula, requisitos, activo
+        hora_fin, cupos_totales, costo, aula, requisitos, activo,
+        foto_url, foto_public_id
       });
 
       const reqInfo = RequestInfo.extract(req);
@@ -311,6 +319,16 @@ class CursoVacacionalController {
       });
     } catch (error) {
       console.error('Error al crear curso:', error);
+
+      // Eliminar foto si fue subida
+      if (foto_public_id) {
+        try {
+          await UploadImage.deleteImage(foto_public_id);
+        } catch (err) {
+          console.error('Error al eliminar foto:', err);
+        }
+      }
+
       res.status(500).json({
         success: false,
         message: 'Error al crear curso: ' + error.message
@@ -318,9 +336,6 @@ class CursoVacacionalController {
     }
   }
 
-  /**
-   * Listar cursos vacacionales
-   */
   static async listarCursos(req, res) {
     try {
       const { page, limit, search, periodo_vacacional_id, grado_id, activo, con_cupos } = req.query;
@@ -349,9 +364,6 @@ class CursoVacacionalController {
     }
   }
 
-  /**
-   * Obtener curso por ID
-   */
   static async obtenerCurso(req, res) {
     try {
       const { id } = req.params;
@@ -377,10 +389,10 @@ class CursoVacacionalController {
     }
   }
 
-  /**
-   * Actualizar curso vacacional
-   */
   static async actualizarCurso(req, res) {
+    let nueva_foto_url = null;
+    let nueva_foto_public_id = null;
+
     try {
       const { id } = req.params;
       const {
@@ -396,9 +408,46 @@ class CursoVacacionalController {
         });
       }
 
+      // Si hay nueva foto, subirla y eliminar la anterior
+      if (req.file) {
+        if (!UploadImage.isValidImage(req.file)) {
+          return res.status(400).json({
+            success: false,
+            message: 'Solo se permiten archivos de imagen (jpg, png, gif, webp)'
+          });
+        }
+
+        if (!UploadImage.isValidSize(req.file, 5)) {
+          return res.status(400).json({
+            success: false,
+            message: 'La imagen es muy grande (máximo 5MB)'
+          });
+        }
+
+        const uploadResult = await UploadImage.uploadFromBuffer(
+          req.file.buffer,
+          'cursos_vacacionales',
+          `curso_${Date.now()}`
+        );
+
+        nueva_foto_url = uploadResult.url;
+        nueva_foto_public_id = uploadResult.public_id;
+
+        // Eliminar foto anterior si existe
+        if (cursoExistente.foto_public_id) {
+          try {
+            await UploadImage.deleteImage(cursoExistente.foto_public_id);
+          } catch (err) {
+            console.error('Error al eliminar foto anterior:', err);
+          }
+        }
+      }
+
       const cursoActualizado = await CursoVacacional.update(id, {
         nombre, descripcion, fecha_inicio, fecha_fin, dias_semana,
-        hora_inicio, hora_fin, cupos_totales, costo, aula, requisitos, activo
+        hora_inicio, hora_fin, cupos_totales, costo, aula, requisitos, activo,
+        foto_url: nueva_foto_url,
+        foto_public_id: nueva_foto_public_id
       });
 
       const reqInfo = RequestInfo.extract(req);
@@ -423,6 +472,16 @@ class CursoVacacionalController {
       });
     } catch (error) {
       console.error('Error al actualizar curso:', error);
+
+      // Eliminar nueva foto si fue subida pero hubo error
+      if (nueva_foto_public_id) {
+        try {
+          await UploadImage.deleteImage(nueva_foto_public_id);
+        } catch (err) {
+          console.error('Error al eliminar nueva foto:', err);
+        }
+      }
+
       res.status(500).json({
         success: false,
         message: 'Error al actualizar curso: ' + error.message
@@ -430,9 +489,6 @@ class CursoVacacionalController {
     }
   }
 
-  /**
-   * Eliminar curso vacacional
-   */
   static async eliminarCurso(req, res) {
     try {
       const { id } = req.params;
@@ -445,7 +501,16 @@ class CursoVacacionalController {
         });
       }
 
-      await CursoVacacional.softDelete(id);
+      const resultDelete = await CursoVacacional.softDelete(id);
+
+      // Eliminar foto si existe
+      if (resultDelete.foto_public_id) {
+        try {
+          await UploadImage.deleteImage(resultDelete.foto_public_id);
+        } catch (err) {
+          console.error('Error al eliminar foto:', err);
+        }
+      }
 
       const reqInfo = RequestInfo.extract(req);
       await ActividadLog.create({
@@ -474,13 +539,67 @@ class CursoVacacionalController {
     }
   }
 
+  /**
+   * Eliminar solo la foto del curso (sin eliminar el curso)
+   */
+  static async eliminarFotoCurso(req, res) {
+    try {
+      const { id } = req.params;
+
+      const curso = await CursoVacacional.findById(id);
+      if (!curso) {
+        return res.status(404).json({
+          success: false,
+          message: 'Curso no encontrado'
+        });
+      }
+
+      if (!curso.foto_public_id) {
+        return res.status(404).json({
+          success: false,
+          message: 'El curso no tiene foto'
+        });
+      }
+
+      // Eliminar de Cloudinary
+      await UploadImage.deleteImage(curso.foto_public_id);
+
+      // Actualizar BD
+      const cursoActualizado = await CursoVacacional.deleteFoto(id);
+
+      const reqInfo = RequestInfo.extract(req);
+      await ActividadLog.create({
+        usuario_id: req.user.id,
+        accion: 'eliminar_foto_curso_vacacional',
+        modulo: 'curso_vacacional',
+        tabla_afectada: 'curso_vacacional',
+        registro_id: id,
+        datos_anteriores: { foto_url: curso.foto_url, foto_public_id: curso.foto_public_id },
+        datos_nuevos: { foto_url: null, foto_public_id: null },
+        ip_address: reqInfo.ip,
+        user_agent: reqInfo.userAgent,
+        resultado: 'exitoso',
+        mensaje: `Foto eliminada del curso: ${curso.nombre}`
+      });
+
+      res.json({
+        success: true,
+        message: 'Foto eliminada exitosamente',
+        data: cursoActualizado
+      });
+    } catch (error) {
+      console.error('Error al eliminar foto:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al eliminar foto: ' + error.message
+      });
+    }
+  }
+
   // ==========================================
   // INSCRIPCIONES
   // ==========================================
 
-  /**
-   * Inscribir a un estudiante (formulario público/privado)
-   */
   static async inscribir(req, res) {
     const client = await pool.connect();
     let comprobante_url = null;
@@ -495,7 +614,6 @@ class CursoVacacionalController {
         numero_comprobante, fecha_pago, observaciones
       } = req.body;
 
-      // Validaciones
       if (!curso_vacacional_id || !nombres || !apellido_paterno || !fecha_nacimiento ||
           !nombre_tutor || !telefono_tutor || !monto_pagado) {
         await client.query('ROLLBACK');
@@ -505,7 +623,6 @@ class CursoVacacionalController {
         });
       }
 
-      // Verificar que el curso existe y tiene cupos
       const curso = await CursoVacacional.findById(curso_vacacional_id);
       if (!curso) {
         await client.query('ROLLBACK');
@@ -524,7 +641,6 @@ class CursoVacacionalController {
         });
       }
 
-      // Subir comprobante de pago si existe
       if (req.file) {
         if (!UploadImage.isValidSize(req.file, 5)) {
           await client.query('ROLLBACK');
@@ -542,13 +658,11 @@ class CursoVacacionalController {
         comprobante_url = uploadResult.url;
       }
 
-      // Generar código de inscripción
       const codigo_inscripcion = await InscripcionVacacional.generateCodigoInscripcion(
         curso_vacacional_id, 
         client
       );
 
-      // Crear inscripción
       const inscripcion = await InscripcionVacacional.create({
         codigo_inscripcion,
         curso_vacacional_id,
@@ -572,12 +686,10 @@ class CursoVacacionalController {
         observaciones
       }, client);
 
-      // Incrementar cupo ocupado
       await CursoVacacional.incrementarCupo(curso_vacacional_id, client);
 
       await client.query('COMMIT');
 
-      // Log de actividad (si hay usuario autenticado)
       if (req.user) {
         const reqInfo = RequestInfo.extract(req);
         await ActividadLog.create({
@@ -603,7 +715,6 @@ class CursoVacacionalController {
       await client.query('ROLLBACK');
       console.error('Error al inscribir:', error);
 
-      // Eliminar comprobante si fue subido
       if (comprobante_url) {
         const publicId = UploadImage.extractPublicIdFromUrl(comprobante_url);
         if (publicId) {
@@ -624,9 +735,6 @@ class CursoVacacionalController {
     }
   }
 
-  /**
-   * Listar inscripciones
-   */
   static async listarInscripciones(req, res) {
     try {
       const { page, limit, search, curso_vacacional_id, periodo_vacacional_id, estado, pago_verificado } = req.query;
@@ -655,9 +763,6 @@ class CursoVacacionalController {
     }
   }
 
-  /**
-   * Obtener inscripción por ID
-   */
   static async obtenerInscripcion(req, res) {
     try {
       const { id } = req.params;
@@ -683,9 +788,6 @@ class CursoVacacionalController {
     }
   }
 
-  /**
-   * Verificar pago de inscripción
-   */
   static async verificarPago(req, res) {
     try {
       const { id } = req.params;
@@ -736,9 +838,6 @@ class CursoVacacionalController {
     }
   }
 
-  /**
-   * Cambiar estado de inscripción
-   */
   static async cambiarEstado(req, res) {
     try {
       const { id } = req.params;
@@ -798,9 +897,6 @@ class CursoVacacionalController {
     }
   }
 
-  /**
-   * Actualizar datos de inscripción
-   */
   static async actualizarInscripcion(req, res) {
     try {
       const { id } = req.params;
@@ -853,9 +949,6 @@ class CursoVacacionalController {
     }
   }
 
-  /**
-   * Eliminar inscripción
-   */
   static async eliminarInscripcion(req, res) {
     const client = await pool.connect();
 
@@ -873,10 +966,7 @@ class CursoVacacionalController {
         });
       }
 
-      // Decrementar cupo del curso
       await CursoVacacional.decrementarCupo(inscripcion.curso_vacacional_id, client);
-
-      // Eliminar inscripción
       await InscripcionVacacional.softDelete(id);
 
       await client.query('COMMIT');
@@ -911,9 +1001,6 @@ class CursoVacacionalController {
     }
   }
 
-  /**
-   * Obtener estadísticas de un periodo
-   */
   static async obtenerEstadisticas(req, res) {
     try {
       const { periodo_id } = req.params;
@@ -933,9 +1020,6 @@ class CursoVacacionalController {
     }
   }
 
-  /**
-   * Listar estudiantes inscritos en un curso
-   */
   static async listarEstudiantesCurso(req, res) {
     try {
       const { curso_id } = req.params;
@@ -959,13 +1043,10 @@ class CursoVacacionalController {
     }
   }
 
-  /**
-   * Generar reporte de inscritos (Excel/PDF)
-   */
   static async generarReporte(req, res) {
     try {
       const { curso_id } = req.params;
-      const { formato } = req.query; // 'excel' o 'pdf'
+      const { formato } = req.query;
 
       const curso = await CursoVacacional.findById(curso_id);
       if (!curso) {
@@ -976,9 +1057,6 @@ class CursoVacacionalController {
       }
 
       const inscritos = await InscripcionVacacional.findByCurso(parseInt(curso_id));
-
-      // Aquí podrías implementar la generación del reporte
-      // usando librerías como exceljs o pdfkit
 
       res.json({
         success: true,

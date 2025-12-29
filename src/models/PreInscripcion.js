@@ -5,12 +5,65 @@ import { Matricula } from './Matricula.js';
 import EmailService from '../utils/emailService.js';
 import Usuario from './Usuario.js';
 
-
 class PreInscripcion {
   // =============================================
-  // CREAR PREINSCRIPCIÓN COMPLETA
+  // 🆕 VERIFICAR Y ASIGNAR CUPO
   // =============================================
-  static async crear(datosEstudiante, datosTutor, documentosUrls, fotoUrl = null) {
+  static async verificarYAsignarCupo(gradoId, turnoId, periodoAcademicoId, client) {
+    // Buscar cupo disponible
+    const cupoResult = await client.query(`
+      SELECT * FROM cupo_preinscripcion
+      WHERE grado_id = $1 
+        AND turno_id = $2 
+        AND periodo_academico_id = $3
+        AND activo = true
+        AND cupos_disponibles > 0
+      LIMIT 1
+    `, [gradoId, turnoId, periodoAcademicoId]);
+
+    if (cupoResult.rows.length === 0) {
+      return { 
+        tiene_cupo: false, 
+        cupo_id: null,
+        mensaje: 'No hay cupos disponibles para este grado y turno' 
+      };
+    }
+
+    const cupo = cupoResult.rows[0];
+
+    // Incrementar cupos ocupados
+    await client.query(`
+      UPDATE cupo_preinscripcion
+      SET cupos_ocupados = cupos_ocupados + 1,
+          updated_at = NOW()
+      WHERE id = $1
+    `, [cupo.id]);
+
+    return {
+      tiene_cupo: true,
+      cupo_id: cupo.id,
+      mensaje: 'Cupo asignado exitosamente'
+    };
+  }
+
+  // =============================================
+  // 🆕 LIBERAR CUPO (si se cancela o elimina)
+  // =============================================
+  static async liberarCupo(cupoId, client) {
+    if (!cupoId) return;
+
+    await client.query(`
+      UPDATE cupo_preinscripcion
+      SET cupos_ocupados = GREATEST(cupos_ocupados - 1, 0),
+          updated_at = NOW()
+      WHERE id = $1
+    `, [cupoId]);
+  }
+
+  // =============================================
+  // CREAR PREINSCRIPCIÓN COMPLETA (ACTUALIZADO)
+  // =============================================
+  static async crear(datosEstudiante, datosTutor, documentosUrls, fotoUrl = null, options = {}) {
     const client = await pool.connect();
     
     try {
@@ -26,23 +79,51 @@ class PreInscripcion {
       `);
       const codigoInscripcion = codigoResult.rows[0].codigo;
       
-      // 2. Crear pre_inscripcion
+      // 🆕 2. Asignar cupo (si se proporcionan los datos)
+      let cupoAsignado = { tiene_cupo: false, cupo_id: null };
+      
+      if (options.grado_id && options.turno_id && options.periodo_academico_id) {
+        cupoAsignado = await this.verificarYAsignarCupo(
+          options.grado_id,
+          options.turno_id,
+          options.periodo_academico_id,
+          client
+        );
+      }
+      
+      // 3. Crear pre_inscripcion
       const inscripcionResult = await client.query(`
-        INSERT INTO pre_inscripcion (codigo_inscripcion, estado)
-        VALUES ($1, 'datos_completos')
+        INSERT INTO pre_inscripcion (
+          codigo_inscripcion, 
+          estado,
+          periodo_academico_id,
+          nivel_academico_id,
+          grado_id,
+          turno_preferido_id,
+          cupo_preinscripcion_id,
+          tiene_cupo_asignado
+        )
+        VALUES ($1, 'datos_completos', $2, $3, $4, $5, $6, $7)
         RETURNING *
-      `, [codigoInscripcion]);
+      `, [
+        codigoInscripcion,
+        options.periodo_academico_id || null,
+        options.nivel_academico_id || null,
+        options.grado_id || null,
+        options.turno_id || null,
+        cupoAsignado.cupo_id,
+        cupoAsignado.tiene_cupo
+      ]);
       
       const preInscripcionId = inscripcionResult.rows[0].id;
       
-      // 3. Crear pre_estudiante (✅ CORREGIDO)
+      // 4. Crear pre_estudiante (✅ CON RUDE)
       await client.query(`
         INSERT INTO pre_estudiante (
           pre_inscripcion_id, nombres, apellido_paterno, apellido_materno,
-          ci, fecha_nacimiento, lugar_nacimiento, genero, 
+          ci, rude, fecha_nacimiento, lugar_nacimiento, genero, 
           direccion, zona, ciudad, telefono, email, foto_url,
-          contacto_emergencia, telefono_emergencia,
-          tiene_discapacidad, tipo_discapacidad,
+          contacto_emergencia, tiene_discapacidad, tipo_discapacidad,
           institucion_procedencia, ultimo_grado_cursado, grado_solicitado,
           repite_grado, turno_solicitado
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
@@ -52,6 +133,7 @@ class PreInscripcion {
         datosEstudiante.apellido_paterno,
         datosEstudiante.apellido_materno || null,
         datosEstudiante.ci || null,
+        datosEstudiante.rude || null, // ✅ RUDE
         datosEstudiante.fecha_nacimiento,
         datosEstudiante.lugar_nacimiento || null,
         datosEstudiante.genero || null,
@@ -60,9 +142,8 @@ class PreInscripcion {
         datosEstudiante.ciudad || null,
         datosEstudiante.telefono || null,
         datosEstudiante.email || null,
-        fotoUrl, // ✅ FOTO
+        fotoUrl,
         datosEstudiante.contacto_emergencia || null,
-        datosEstudiante.telefono_emergencia || null,
         datosEstudiante.tiene_discapacidad || false,
         datosEstudiante.tipo_discapacidad || null,
         datosEstudiante.institucion_procedencia || null,
@@ -72,7 +153,7 @@ class PreInscripcion {
         datosEstudiante.turno_solicitado || null
       ]);
       
-      // 4. Crear pre_tutor (✅ CORREGIDO)
+      // 5. Crear pre_tutor
       await client.query(`
         INSERT INTO pre_tutor (
           pre_inscripcion_id, tipo_representante, nombres, apellido_paterno, 
@@ -101,11 +182,11 @@ class PreInscripcion {
         datosTutor.telefono_trabajo || null,
         datosTutor.estado_civil || null,
         datosTutor.nivel_educacion || null,
-        true, // es_tutor_principal
+        true,
         datosTutor.vive_con_estudiante || false
       ]);
       
-      // 5. Crear documentos (✅ CORREGIDO)
+      // 6. Crear documentos
       const tiposDocumento = [
         { tipo: 'cedula_estudiante', url: documentosUrls.cedula_estudiante, nombre: 'Cédula Estudiante' },
         { tipo: 'certificado_nacimiento', url: documentosUrls.certificado_nacimiento, nombre: 'Certificado de Nacimiento' },
@@ -126,7 +207,11 @@ class PreInscripcion {
       
       await client.query('COMMIT');
       
-      return inscripcionResult.rows[0];
+      return {
+        ...inscripcionResult.rows[0],
+        cupo_asignado: cupoAsignado.tiene_cupo,
+        mensaje_cupo: cupoAsignado.mensaje
+      };
       
     } catch (error) {
       await client.query('ROLLBACK');
@@ -169,10 +254,16 @@ class PreInscripcion {
         pe.foto_url as estudiante_foto,
         pe.grado_solicitado,
         pt.nombres || ' ' || pt.apellido_paterno as tutor_nombre,
-        pt.telefono as tutor_telefono
+        pt.telefono as tutor_telefono,
+        g.nombre as grado_nombre,
+        t.nombre as turno_nombre,
+        cp.cupos_disponibles
       FROM pre_inscripcion pi
       LEFT JOIN pre_estudiante pe ON pi.id = pe.pre_inscripcion_id
       LEFT JOIN pre_tutor pt ON pi.id = pt.pre_inscripcion_id AND pt.es_tutor_principal = true
+      LEFT JOIN grado g ON pi.grado_id = g.id
+      LEFT JOIN turno t ON pi.turno_preferido_id = t.id
+      LEFT JOIN cupo_preinscripcion cp ON pi.cupo_preinscripcion_id = cp.id
       WHERE ${whereClause}
       ORDER BY pi.created_at DESC
       LIMIT $${paramCount} OFFSET $${paramCount + 1}
@@ -200,27 +291,37 @@ class PreInscripcion {
         pi.*,
         row_to_json(pe.*) as estudiante,
         row_to_json(pt.*) as tutor,
-        json_agg(row_to_json(pd.*)) FILTER (WHERE pd.id IS NOT NULL) as documentos
+        json_agg(row_to_json(pd.*)) FILTER (WHERE pd.id IS NOT NULL) as documentos,
+        g.nombre as grado_nombre,
+        t.nombre as turno_nombre,
+        pa.nombre as periodo_nombre,
+        cp.cupos_totales,
+        cp.cupos_disponibles
       FROM pre_inscripcion pi
       LEFT JOIN pre_estudiante pe ON pi.id = pe.pre_inscripcion_id
       LEFT JOIN pre_tutor pt ON pi.id = pt.pre_inscripcion_id AND pt.es_tutor_principal = true
       LEFT JOIN pre_documento pd ON pi.id = pd.pre_inscripcion_id
+      LEFT JOIN grado g ON pi.grado_id = g.id
+      LEFT JOIN turno t ON pi.turno_preferido_id = t.id
+      LEFT JOIN periodo_academico pa ON pi.periodo_academico_id = pa.id
+      LEFT JOIN cupo_preinscripcion cp ON pi.cupo_preinscripcion_id = cp.id
       WHERE pi.id = $1 AND pi.deleted_at IS NULL
-      GROUP BY pi.id, pe.*, pt.*
+      GROUP BY pi.id, pe.*, pt.*, g.nombre, t.nombre, pa.nombre, cp.cupos_totales, cp.cupos_disponibles
     `, [id]);
     
     return result.rows[0];
   }
   
+  // =============================================
+  // CONVERTIR A ESTUDIANTE (ACTUALIZADO)
+  // =============================================
   static async convertirAEstudiante(preInscripcionId, usuarioId, paraleloId, periodoAcademicoId) {
     const client = await pool.connect();
     
     try {
       await client.query('BEGIN');
       
-      // ========================================
-      // 1. OBTENER DATOS DE PREINSCRIPCIÓN
-      // ========================================
+      // 1. Obtener datos de preinscripción
       const preInscripcion = await this.obtenerPorId(preInscripcionId);
       
       if (!preInscripcion) {
@@ -234,17 +335,14 @@ class PreInscripcion {
       const estudiante = preInscripcion.estudiante;
       const tutor = preInscripcion.tutor;
       
-      // ========================================
-      // 2. GENERAR CÓDIGO DE ESTUDIANTE
-      // ========================================
+      // 2. Generar código de estudiante
       const codigoEstudiante = await Estudiante.generateCodeWithLock(client);
       
-      // ========================================
-      // 3. CREAR ESTUDIANTE OFICIAL (SIN usuario_id)
-      // ========================================
+      // 3. ✅ Crear estudiante oficial (CON rude y contacto_emergencia)
       const nuevoEstudiante = await Estudiante.create({
         usuario_id: null,
         codigo: codigoEstudiante,
+        rude: estudiante.rude || null, // ✅ RUDE se mantiene
         nombres: estudiante.nombres,
         apellido_paterno: estudiante.apellido_paterno,
         apellido_materno: estudiante.apellido_materno,
@@ -259,28 +357,23 @@ class PreInscripcion {
         email: estudiante.email,
         foto_url: estudiante.foto_url,
         contacto_emergencia: estudiante.contacto_emergencia,
-        telefono_emergencia: estudiante.telefono_emergencia,
         tiene_discapacidad: estudiante.tiene_discapacidad,
         tipo_discapacidad: estudiante.tipo_discapacidad,
         observaciones: `Convertido desde preinscripción ${preInscripcion.codigo_inscripcion}`,
         activo: true
       }, client);
       
-      // ========================================
-      // 4. 🆕 CREAR USUARIO PARA ESTUDIANTE
-      // ========================================
+      // 4. Crear usuario para estudiante
       let estudianteUsuarioId = null;
       let estudianteUsername = null;
       let estudiantePassword = null;
       
       try {
-        // Generar credenciales
         estudianteUsername = this.generarUsername(estudiante.nombres, estudiante.apellido_paterno);
         estudiantePassword = this.generarPassword(estudiante.ci);
         
         const emailEstudiante = estudiante.email || `${estudianteUsername}@estudiante.edu.bo`;
         
-        // Verificar que el username no exista
         const usuarioExisteResult = await client.query(
           'SELECT id FROM usuarios WHERE username = $1',
           [estudianteUsername]
@@ -290,7 +383,6 @@ class PreInscripcion {
           estudianteUsername = `${estudianteUsername}${Math.floor(Math.random() * 999)}`;
         }
         
-        // Crear usuario
         const usuarioEstudiante = await Usuario.create({
           username: estudianteUsername,
           email: emailEstudiante,
@@ -302,7 +394,6 @@ class PreInscripcion {
         
         estudianteUsuarioId = usuarioEstudiante.id;
         
-        // Asignar rol 'estudiante'
         const rolEstudiante = await this.obtenerRolPorNombre('estudiante', client);
         if (rolEstudiante) {
           await client.query(
@@ -311,7 +402,6 @@ class PreInscripcion {
           );
         }
         
-        // Actualizar estudiante con usuario_id
         await client.query(
           'UPDATE estudiante SET usuario_id = $1, updated_at = NOW() WHERE id = $2',
           [estudianteUsuarioId, nuevoEstudiante.id]
@@ -319,31 +409,24 @@ class PreInscripcion {
         
         nuevoEstudiante.usuario_id = estudianteUsuarioId;
         
-        console.log(`✅ Usuario creado para estudiante: ${estudianteUsername}`);
-        
       } catch (errorUsuario) {
         console.error('⚠️ Error al crear usuario de estudiante:', errorUsuario.message);
-        // No detener el proceso, solo loguear
       }
       
-      // ========================================
-      // 5. CREAR O BUSCAR PADRE_FAMILIA
-      // ========================================
+      // 5. Crear o buscar padre_familia
       let padreFamiliaId;
       let padreExistente = await PadreFamilia.findByCI(tutor.ci, client);
       
       if (padreExistente) {
         padreFamiliaId = padreExistente.id;
-        console.log(`ℹ️ Padre ya existe con ID: ${padreFamiliaId}`);
       } else {
         const nuevoPadre = await PadreFamilia.create({
-          usuario_id: null, // Se creará después
+          usuario_id: null,
           nombres: tutor.nombres,
           apellido_paterno: tutor.apellido_paterno,
           apellido_materno: tutor.apellido_materno,
           ci: tutor.ci,
           fecha_nacimiento: tutor.fecha_nacimiento,
-          genero: tutor.genero,
           telefono: tutor.telefono,
           celular: tutor.celular,
           email: tutor.email,
@@ -358,14 +441,11 @@ class PreInscripcion {
         padreFamiliaId = nuevoPadre.id;
       }
       
-      // ========================================
-      // 6. 🆕 CREAR USUARIO PARA PADRE (SI NO TIENE)
-      // ========================================
+      // 6. Crear usuario para padre (si no tiene)
       let tutorUsuarioId = null;
       let tutorUsername = null;
       let tutorPassword = null;
       
-      // ✅ Consulta directa para obtener el padre
       const padreResult = await client.query(
         'SELECT * FROM padre_familia WHERE id = $1',
         [padreFamiliaId]
@@ -373,23 +453,13 @@ class PreInscripcion {
       
       const padreActualizado = padreResult.rows[0];
       
-      // ✅ Validación
-      if (!padreActualizado) {
-        console.error(`❌ Padre no encontrado con ID: ${padreFamiliaId}`);
-        throw new Error(`Padre no encontrado con ID: ${padreFamiliaId}`);
-      }
-      
-      console.log(`📋 Padre encontrado - usuario_id: ${padreActualizado.usuario_id || 'NULL'}`);
-      
       if (!padreActualizado.usuario_id) {
         try {
-          // Generar credenciales
           tutorUsername = this.generarUsername(tutor.nombres, tutor.apellido_paterno);
-          tutorPassword = this.generarPassword(tutor.ci); 
+          tutorPassword = this.generarPassword(tutor.ci);
           
           const emailTutor = tutor.email || `${tutorUsername}@padre.edu.bo`;
           
-          // Verificar que el username no exista
           const usuarioTutorExisteResult = await client.query(
             'SELECT id FROM usuarios WHERE username = $1',
             [tutorUsername]
@@ -399,7 +469,6 @@ class PreInscripcion {
             tutorUsername = `${tutorUsername}${Math.floor(Math.random() * 999)}`;
           }
           
-          // Crear usuario
           const usuarioTutor = await Usuario.create({
             username: tutorUsername,
             email: emailTutor,
@@ -411,7 +480,6 @@ class PreInscripcion {
           
           tutorUsuarioId = usuarioTutor.id;
           
-          // Asignar rol 'padre'
           const rolPadre = await this.obtenerRolPorNombre('padre', client);
           if (rolPadre) {
             await client.query(
@@ -420,25 +488,17 @@ class PreInscripcion {
             );
           }
           
-          // Actualizar padre con usuario_id
           await client.query(
             'UPDATE padre_familia SET usuario_id = $1, updated_at = NOW() WHERE id = $2',
             [tutorUsuarioId, padreFamiliaId]
           );
           
-          console.log(`✅ Usuario creado para padre: ${tutorUsername}`);
-          
         } catch (errorUsuarioTutor) {
           console.error('⚠️ Error al crear usuario de tutor:', errorUsuarioTutor.message);
-          // No detener el proceso, solo loguear
         }
-      } else {
-        console.log(`ℹ️ Padre ya tiene usuario asignado: ${padreActualizado.usuario_id}`);
       }
       
-      // ========================================
-      // 7. CREAR RELACIÓN ESTUDIANTE_TUTOR
-      // ========================================
+      // 7. Crear relación estudiante_tutor
       await EstudianteTutor.assign({
         estudiante_id: nuevoEstudiante.id,
         padre_familia_id: padreFamiliaId,
@@ -451,9 +511,7 @@ class PreInscripcion {
         observaciones: null
       }, client);
       
-      // ========================================
-      // 8. CREAR MATRÍCULA
-      // ========================================
+      // 8. Crear matrícula
       const numeroMatricula = await Matricula.generateNumeroMatricula(periodoAcademicoId, client);
       
       const matriculaResult = await client.query(`
@@ -472,13 +530,10 @@ class PreInscripcion {
       
       const matriculaId = matriculaResult.rows[0].id;
       
-      // ========================================
-      // 9. 🆕 MIGRAR DOCUMENTOS (pre_documento → matricula_documento)
-      // ========================================
+      // 9. Migrar documentos
       const documentosMigrados = [];
       
       try {
-        // Obtener documentos de la preinscripción
         const documentosResult = await client.query(`
           SELECT * FROM pre_documento 
           WHERE pre_inscripcion_id = $1 AND subido = true
@@ -486,9 +541,6 @@ class PreInscripcion {
         
         const documentos = documentosResult.rows;
         
-        console.log(`📄 Migrando ${documentos.length} documento(s)...`);
-        
-        // Migrar cada documento
         for (const doc of documentos) {
           const docMigradoResult = await client.query(`
             INSERT INTO matricula_documento (
@@ -516,16 +568,11 @@ class PreInscripcion {
           documentosMigrados.push(docMigradoResult.rows[0]);
         }
         
-        console.log(`✅ ${documentosMigrados.length} documento(s) migrado(s) correctamente`);
-        
       } catch (errorDocumentos) {
         console.error('⚠️ Error al migrar documentos:', errorDocumentos.message);
-        // No detener el proceso, solo loguear
       }
       
-      // ========================================
-      // 10. ACTUALIZAR PRE_INSCRIPCION
-      // ========================================
+      // 10. Actualizar pre_inscripcion
       await client.query(`
         UPDATE pre_inscripcion
         SET 
@@ -537,24 +584,17 @@ class PreInscripcion {
         WHERE id = $4
       `, [nuevoEstudiante.id, matriculaId, usuarioId, preInscripcionId]);
       
-      // ========================================
-      // COMMIT - TODO EXITOSO
-      // ========================================
-      await client.query('COMMIT');
+      // 🆕 11. Liberar cupo si estaba asignado
+      if (preInscripcion.cupo_preinscripcion_id) {
+        await this.liberarCupo(preInscripcion.cupo_preinscripcion_id, client);
+      }
       
-      console.log(`🎉 Conversión exitosa:
-        - Estudiante: ${codigoEstudiante}
-        - Matrícula: ${numeroMatricula}
-        - Usuario estudiante: ${estudianteUsername || 'NO CREADO'}
-        - Usuario padre: ${tutorUsername || (tutorUsuarioId ? 'YA EXISTÍA' : 'NO CREADO')}
-        - Documentos migrados: ${documentosMigrados.length}
-      `);
+      await client.query('COMMIT');
       
       return {
         estudiante: nuevoEstudiante,
         matricula: matriculaResult.rows[0],
         padre_familia_id: padreFamiliaId,
-        // 🆕 Credenciales generadas (si se crearon)
         credenciales: {
           estudiante: estudianteUsuarioId ? {
             username: estudianteUsername,
@@ -567,25 +607,22 @@ class PreInscripcion {
             email: tutor.email || `${tutorUsername}@padre.edu.bo`
           } : null
         },
-        // 🆕 Documentos migrados
         documentos_migrados: documentosMigrados.length
       };
       
     } catch (error) {
       await client.query('ROLLBACK');
-      console.error('❌ Error en conversión:', error);
       throw error;
     } finally {
       client.release();
     }
   }
   
-  // ========================================
-  // 🆕 MÉTODOS AUXILIARES
-  // ========================================
+  // =============================================
+  // MÉTODOS AUXILIARES
+  // =============================================
   
   static generarUsername(nombres, apellido) {
-    // Tomar primer nombre y primer apellido, sin espacios ni caracteres especiales
     const nombreLimpio = nombres.split(' ')[0]
       .toLowerCase()
       .normalize('NFD')
@@ -598,7 +635,6 @@ class PreInscripcion {
       .replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-z]/g, '');
     
-    // Capitalizar primera letra de cada parte
     const nombreCapital = nombreLimpio.charAt(0).toUpperCase() + nombreLimpio.slice(1);
     const apellidoCapital = apellidoLimpio.charAt(0).toUpperCase() + apellidoLimpio.slice(1);
     
@@ -606,12 +642,9 @@ class PreInscripcion {
   }
 
   static generarPassword(ci = null) {
-    // Si viene CI, usarlo como contraseña
     if (ci) {
       return ci.toString();
     }
-    
-    // Si no hay CI, generar contraseña aleatoria de 8 dígitos
     return Math.floor(10000000 + Math.random() * 90000000).toString();
   }
 
@@ -624,75 +657,152 @@ class PreInscripcion {
   // =============================================
   // CAMBIAR ESTADO
   // =============================================
-static async cambiarEstado(id, nuevoEstado, usuarioId, observaciones = null) {
-  const client = await pool.connect();
+  static async cambiarEstado(id, nuevoEstado, usuarioId, observaciones = null, externalClient = null) {
+  // Si hay un cliente externo, usarlo (ya tiene transacción abierta)
+  // Si no, crear uno nuevo con su propia transacción
+  const client = externalClient || await pool.connect();
+  const shouldManageTransaction = !externalClient;
   
   try {
-    await client.query('BEGIN');
+    console.log('🔍 [MODEL] Paso 1: Iniciando cambiarEstado en modelo');
     
-    // 1. Obtener estado anterior
+    if (shouldManageTransaction) {
+      await client.query('BEGIN');
+      console.log('🔍 [MODEL] Paso 1.1: BEGIN ejecutado (transacción propia)');
+    } else {
+      console.log('🔍 [MODEL] Paso 1.1: Usando transacción existente del controller');
+    }
+    
+    // Obtener estado anterior
+    console.log('🔍 [MODEL] Paso 2: Obteniendo estado anterior...');
     const estadoAnteriorResult = await client.query(
       'SELECT estado FROM pre_inscripcion WHERE id = $1',
       [id]
     );
     const estadoAnterior = estadoAnteriorResult.rows[0]?.estado;
+    console.log('🔍 [MODEL] Paso 2.1: Estado anterior:', estadoAnterior);
     
-    // 2. Actualizar estado
-    const result = await client.query(`
-      UPDATE pre_inscripcion
-      SET 
-        estado = $1::varchar,
-        observaciones = $2,
-        aprobada_por = CASE WHEN $1 = 'aprobada' THEN $3::integer ELSE aprobada_por END,
-        fecha_aprobacion = CASE WHEN $1 = 'aprobada' THEN NOW() ELSE fecha_aprobacion END,
-        updated_at = NOW()
-      WHERE id = $4 AND deleted_at IS NULL
-      RETURNING *
-    `, [nuevoEstado, observaciones, usuarioId, id]);
+    // Hacer la lógica en JavaScript
+    const esAprobada = nuevoEstado === 'aprobada';
+    console.log('🔍 [MODEL] Paso 3: Es aprobada?', esAprobada);
+    
+    let result;
+    if (esAprobada) {
+      console.log('🔍 [MODEL] Paso 4: Ejecutando UPDATE con aprobación...');
+      result = await client.query(`
+        UPDATE pre_inscripcion
+        SET 
+          estado = $1,
+          observaciones = $2,
+          aprobada_por = $3,
+          fecha_aprobacion = NOW(),
+          updated_at = NOW()
+        WHERE id = $4 AND deleted_at IS NULL
+        RETURNING *
+      `, [nuevoEstado, observaciones, usuarioId, id]);
+    } else {
+      console.log('🔍 [MODEL] Paso 4: Ejecutando UPDATE sin aprobación...');
+      result = await client.query(`
+        UPDATE pre_inscripcion
+        SET 
+          estado = $1,
+          observaciones = $2,
+          updated_at = NOW()
+        WHERE id = $3 AND deleted_at IS NULL
+        RETURNING *
+      `, [nuevoEstado, observaciones, id]);
+    }
+
+    console.log('🔍 [MODEL] Paso 4.1: UPDATE ejecutado. Rows:', result.rows.length);
 
     if (result.rows.length === 0) {
       throw new Error('Preinscripción no encontrada');
     }
 
-    await client.query('COMMIT');
+    if (shouldManageTransaction) {
+      console.log('🔍 [MODEL] Paso 5: Ejecutando COMMIT...');
+      await client.query('COMMIT');
+      console.log('✅ [MODEL] Paso 5.1: COMMIT exitoso');
+    } else {
+      console.log('🔍 [MODEL] Paso 5: Transacción será manejada por el controller');
+    }
     
-    // 3. 🆕 ENVIAR EMAIL DE NOTIFICACIÓN (de forma asíncrona)
-    const preinscripcionCompleta = await this.obtenerPorId(id);
-    
-    EmailService.notificarCambioEstado(preinscripcionCompleta, estadoAnterior)
-      .then(resultado => {
-        if (resultado.success) {
-          console.log(`✅ Email enviado para preinscripción ${id}`);
-        } else {
-          console.error(`⚠️ No se pudo enviar email para preinscripción ${id}:`, resultado.error);
-        }
-      })
-      .catch(error => {
-        console.error(`❌ Error al enviar email para preinscripción ${id}:`, error);
-      });
+    console.log('🔍 [MODEL] Paso 8: Retornando resultado...');
+    const resultadoFinal = result.rows[0];
+    console.log('✅ [MODEL] Paso 8.1: Resultado preparado:', {
+      id: resultadoFinal.id,
+      estado: resultadoFinal.estado
+    });
 
-    return result.rows[0];
+    // Enviar email de forma asíncrona (solo si no es transacción externa)
+    if (shouldManageTransaction) {
+      setImmediate(async () => {
+        try {
+          const preinscripcionCompleta = await this.obtenerPorId(id);
+          await EmailService.notificarCambioEstado(preinscripcionCompleta, estadoAnterior);
+          console.log('✅ [MODEL] Email enviado correctamente');
+        } catch (error) {
+          console.error(`❌ [MODEL] Error al enviar email:`, error);
+        }
+      });
+    }
+
+    return resultadoFinal;
     
   } catch (error) {
-    await client.query('ROLLBACK');
+    console.error('❌ [MODEL] Error capturado:', error.message);
+    if (shouldManageTransaction) {
+      await client.query('ROLLBACK');
+      console.log('🔍 [MODEL] ROLLBACK ejecutado');
+    }
     throw error;
   } finally {
-    client.release();
+    if (shouldManageTransaction) {
+      console.log('🔍 [MODEL] Liberando cliente...');
+      client.release();
+    }
   }
 }
-  
   // =============================================
-  // ELIMINAR (SOFT DELETE)
+  // ELIMINAR (SOFT DELETE + LIBERAR CUPO)
   // =============================================
   static async eliminar(id) {
-    const result = await pool.query(`
-      UPDATE pre_inscripcion
-      SET deleted_at = NOW()
-      WHERE id = $1 AND deleted_at IS NULL
-      RETURNING *
-    `, [id]);
+    const client = await pool.connect();
     
-    return result.rows[0];
+    try {
+      await client.query('BEGIN');
+      
+      // Obtener cupo antes de eliminar
+      const cupoResult = await client.query(
+        'SELECT cupo_preinscripcion_id FROM pre_inscripcion WHERE id = $1',
+        [id]
+      );
+      
+      const cupoId = cupoResult.rows[0]?.cupo_preinscripcion_id;
+      
+      // Eliminar (soft delete)
+      const result = await client.query(`
+        UPDATE pre_inscripcion
+        SET deleted_at = NOW()
+        WHERE id = $1 AND deleted_at IS NULL
+        RETURNING *
+      `, [id]);
+      
+      // Liberar cupo si existía
+      if (cupoId) {
+        await this.liberarCupo(cupoId, client);
+      }
+      
+      await client.query('COMMIT');
+      
+      return result.rows[0];
+      
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 }
 

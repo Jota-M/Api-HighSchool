@@ -172,7 +172,7 @@ class PeriodoVacacional {
 }
 
 // =============================================
-// CURSO VACACIONAL
+// CURSO VACACIONAL (CON FOTO)
 // =============================================
 class CursoVacacional {
   static async create(data, client = null) {
@@ -181,23 +181,26 @@ class CursoVacacional {
     const {
       periodo_vacacional_id, materia_id, grado_id, nombre, codigo,
       descripcion, fecha_inicio, fecha_fin, dias_semana, hora_inicio,
-      hora_fin, cupos_totales, costo, aula, requisitos, activo
+      hora_fin, cupos_totales, costo, aula, requisitos, activo,
+      foto_url, foto_public_id
     } = data;
 
     const query = `
       INSERT INTO curso_vacacional (
         periodo_vacacional_id, materia_id, grado_id, nombre, codigo,
         descripcion, fecha_inicio, fecha_fin, dias_semana, hora_inicio,
-        hora_fin, cupos_totales, cupos_ocupados, costo, aula, requisitos, activo
+        hora_fin, cupos_totales, cupos_ocupados, costo, aula, requisitos, 
+        activo, foto_url, foto_public_id
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
       RETURNING *
     `;
 
     const result = await conn.query(query, [
       periodo_vacacional_id, materia_id, grado_id, nombre, codigo,
       descripcion, fecha_inicio, fecha_fin, dias_semana, hora_inicio,
-      hora_fin, cupos_totales, 0, costo, aula, requisitos, activo ?? true
+      hora_fin, cupos_totales, 0, costo, aula, requisitos, activo ?? true,
+      foto_url || null, foto_public_id || null
     ]);
 
     return result.rows[0];
@@ -308,7 +311,8 @@ class CursoVacacional {
   static async update(id, data) {
     const {
       nombre, descripcion, fecha_inicio, fecha_fin, dias_semana,
-      hora_inicio, hora_fin, cupos_totales, costo, aula, requisitos, activo
+      hora_inicio, hora_fin, cupos_totales, costo, aula, requisitos, activo,
+      foto_url, foto_public_id
     } = data;
 
     const query = `
@@ -317,22 +321,45 @@ class CursoVacacional {
           fecha_fin = $4, dias_semana = $5, hora_inicio = $6,
           hora_fin = $7, cupos_totales = $8, costo = $9,
           aula = $10, requisitos = $11, activo = $12,
+          foto_url = COALESCE($13, foto_url),
+          foto_public_id = COALESCE($14, foto_public_id),
           updated_at = CURRENT_TIMESTAMP
-      WHERE id = $13 AND deleted_at IS NULL
+      WHERE id = $15 AND deleted_at IS NULL
       RETURNING *
     `;
 
     const result = await pool.query(query, [
       nombre, descripcion, fecha_inicio, fecha_fin, dias_semana,
       hora_inicio, hora_fin, cupos_totales, costo, aula, requisitos,
-      activo, id
+      activo, foto_url, foto_public_id, id
     ]);
 
     return result.rows[0];
   }
 
+  static async updateFoto(id, foto_url, foto_public_id) {
+    const query = `
+      UPDATE curso_vacacional
+      SET foto_url = $1, foto_public_id = $2, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $3 AND deleted_at IS NULL
+      RETURNING *
+    `;
+    const result = await pool.query(query, [foto_url, foto_public_id, id]);
+    return result.rows[0];
+  }
+
+  static async deleteFoto(id) {
+    const query = `
+      UPDATE curso_vacacional
+      SET foto_url = NULL, foto_public_id = NULL, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1 AND deleted_at IS NULL
+      RETURNING *
+    `;
+    const result = await pool.query(query, [id]);
+    return result.rows[0];
+  }
+
   static async softDelete(id) {
-    // Verificar si hay inscripciones activas
     const checkQuery = `
       SELECT COUNT(*) FROM inscripcion_vacacional 
       WHERE curso_vacacional_id = $1 
@@ -349,7 +376,7 @@ class CursoVacacional {
       UPDATE curso_vacacional
       SET deleted_at = CURRENT_TIMESTAMP
       WHERE id = $1 AND deleted_at IS NULL
-      RETURNING id
+      RETURNING id, foto_public_id
     `;
     const result = await pool.query(query, [id]);
     return result.rows[0];

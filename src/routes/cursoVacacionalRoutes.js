@@ -38,7 +38,7 @@ router.post(
 
 router.post(
   '/periodos',
-  authenticate,  // ← Middleware específico por ruta
+  authenticate,
   authorize('curso_vacacional.crear'),
   logActivity('crear_periodo_vacacional', 'periodo_vacacional'),
   CursoVacacionalController.crearPeriodo
@@ -46,7 +46,7 @@ router.post(
 
 router.get(
   '/periodos',
-  authenticate,  // ← Middleware específico por ruta
+  authenticate,
   authorize('curso_vacacional.ver'),
   CursoVacacionalController.listarPeriodos
 );
@@ -82,13 +82,15 @@ router.get(
 );
 
 // ==========================================
-// CURSOS VACACIONALES (protegidas)
+// CURSOS VACACIONALES (protegidas) - CON FOTO
 // ==========================================
 
 router.post(
   '/cursos',
   authenticate,
   authorize('curso_vacacional.crear'),
+  upload.single('foto'), // ⬅️ NUEVO: acepta foto del curso
+  handleMulterError,
   logActivity('crear_curso_vacacional', 'curso_vacacional'),
   CursoVacacionalController.crearCurso
 );
@@ -111,6 +113,8 @@ router.put(
   '/cursos/:id',
   authenticate,
   authorize('curso_vacacional.actualizar'),
+  upload.single('foto'), // ⬅️ NUEVO: acepta foto para actualizar
+  handleMulterError,
   logActivity('actualizar_curso_vacacional', 'curso_vacacional'),
   CursoVacacionalController.actualizarCurso
 );
@@ -121,6 +125,15 @@ router.delete(
   authorize('curso_vacacional.eliminar'),
   logActivity('eliminar_curso_vacacional', 'curso_vacacional'),
   CursoVacacionalController.eliminarCurso
+);
+
+// ⬇️ NUEVA RUTA: Eliminar solo la foto del curso (sin eliminar el curso)
+router.delete(
+  '/cursos/:id/foto',
+  authenticate,
+  authorize('curso_vacacional.actualizar'),
+  logActivity('eliminar_foto_curso_vacacional', 'curso_vacacional'),
+  CursoVacacionalController.eliminarFotoCurso
 );
 
 router.get(
