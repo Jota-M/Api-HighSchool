@@ -16,10 +16,7 @@ export const pool = new pg.Pool(
   env.connectionString 
     ? {
         connectionString: env.connectionString,
-        ssl: { rejectUnauthorized: false },
-        max: 5,
-        idleTimeoutMillis: 30000,
-        connectionTimeoutMillis: 5000,
+        ssl: { rejectUnauthorized: false }
       }
     : {
         user: env.user,
@@ -28,13 +25,6 @@ export const pool = new pg.Pool(
         database: env.database,
         password: env.password,
         ssl: { rejectUnauthorized: false },
-        family: 4,
-        max: 5,
-        idleTimeoutMillis: 30000,
-        connectionTimeoutMillis: 5000,
+        family: 4
       }
 );
-
-pool.on('error', (err) => {
-  console.error('Unexpected error on idle client', err);
-});
