@@ -26,7 +26,7 @@ import cupoPreinscripcionRoutes from './routes/cupoPreinscripcionRoutes.js'; // 
 import publicAcademicosRoutes from './routes/publicAcademicosRoutes.js'; // 🆕 Públicas
 import materiasRoutes from './routes/materiasRoutes.js';
 import gradoMateriasRoutes from './routes/gradoMateriasRoutes.js';
-import areaConocimientoRoutes from './routes/areaConocimientoRoutes.js'
+import areaConocimientoRoutes from './routes/areaConocimientoRoutes.js';
 import docenteRoutes from './routes/docenteRoutes.js';
 import asignacionDocenteRoutes from './routes/asignacionDocenteRoutes.js';
 
@@ -37,10 +37,13 @@ import matriculaRoutes from './routes/matriculaRoutes.js';
 import matriculacionRoutes from './routes/matriculacionRoutes.js';
 import autoMatriculacionRoutes from './routes/autoMatriculacionRoutes.js';
 import cursosVacacionalesRoutes from './routes/cursoVacacionalRoutes.js';
-import reportesRoutes from './routes/reportesRoutes.js'
+import reportesRoutes from './routes/reportesRoutes.js';
 
 // Modelo para limpieza de sesiones
 import Sesion from './models/Sesion.js';
+
+// Importar pool para DB
+import { pool } from './db/pool.js';
 
 const app = express();
 
@@ -71,7 +74,21 @@ app.use(cors({
 app.use(morgan('dev'));
 
 // ------------------------------
-//          RUTAS
+//        Health helpers
+// ------------------------------
+async function checkDatabaseHealth() {
+  try {
+    const client = await pool.connect();
+    await client.query('SELECT 1');
+    client.release();
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+// ------------------------------
+//        RUTAS
 // ------------------------------
 
 // Health check endpoint (ANTES de todas las rutas)
@@ -92,6 +109,7 @@ app.get('/health', async (req, res) => {
     });
   }
 });
+
 // 🆕 RUTAS PÚBLICAS (sin autenticación, sin rate limit agresivo)
 app.use('/public/academicos', publicAcademicosRoutes);
 
@@ -117,7 +135,7 @@ app.use('/paralelo', paraleloRoutes);
 app.use('/area-conocimiento', areaConocimientoRoutes);
 app.use('/materias', materiasRoutes);
 app.use('/grado-materia', gradoMateriasRoutes);
-app.use('/reportes',reportesRoutes);
+app.use('/reportes', reportesRoutes);
 
 // Módulo de Estudiantes y Tutores
 app.use('/estudiante', estudianteRoutes);
