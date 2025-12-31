@@ -1,6 +1,5 @@
 import express from 'express';
 import morgan from 'morgan';
-import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import cookieParser from 'cookie-parser';
@@ -53,8 +52,7 @@ const app = express();
 app.use(helmet());
 
 // ------------------------------
-// Rate limit GLOBAL
-// ------------------------------
+// Rate limit GLOBAL (permisivo para desarrollo)
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 200,
@@ -65,7 +63,6 @@ const limiter = rateLimit({
 
 // ------------------------------
 // Middlewares
-// ------------------------------
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
@@ -73,20 +70,21 @@ app.set('trust proxy', 1);
 app.use(morgan('dev'));
 
 // ------------------------------
-// CORS configurado para tu frontend
-// ------------------------------
-const corsOptions = {
-  origin: 'https://uepclavozdecristo.site', // tu frontend
-  credentials: true,
-  methods: ['GET','POST','PUT','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','Authorization','X-Requested-With'],
-};
-app.use(cors(corsOptions));
-app.options('*', cors(corsOptions)); // manejar preflight OPTIONS
+// CORS configurado para frontend
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', 'https://uepclavozdecristo.site');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  next();
+});
 
 // ------------------------------
 // Health check endpoint
-// ------------------------------
 async function checkDatabaseHealth() {
   try {
     const client = await pool.connect();
@@ -118,10 +116,9 @@ app.get('/health', async (req, res) => {
 
 // ------------------------------
 // Rutas públicas
-// ------------------------------
 app.use('/public/academicos', publicAcademicosRoutes);
 
-// Auth (sin limitador global)
+// Auth SIN limitador global (cada ruta tiene el suyo)
 app.use('/auth', authRoutes);
 
 // Global limiter para el resto
@@ -162,7 +159,6 @@ app.use('/cupos', cupoPreinscripcionRoutes);
 
 // ------------------------------
 // Manejo de errores / fallback 404
-// ------------------------------
 app.use((req, res) => {
   res.status(404).json({ success: false, message: 'Ruta no encontrada' });
 });
@@ -178,7 +174,6 @@ app.use((err, req, res, next) => {
 
 // ------------------------------
 // Limpieza de sesiones expiradas
-// ------------------------------
 setInterval(async () => {
   try {
     await Sesion.cleanExpired();
