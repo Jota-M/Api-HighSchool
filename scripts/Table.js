@@ -10,81 +10,140 @@ function ask(q) {
   return new Promise(resolve => rl.question(q, resolve));
 }
 
-async function insertMateria() {
+async function seedPaquetesVacacionales() {
   const client = await pool.connect();
   try {
-    console.log('\n📌 INSERTAR ÁREA Y MATERIA');
-    console.log('Se creará (si no existe) el área "Ciencias"');
-    console.log('Luego se insertará la materia "Química" asignada a esa área.\n');
+    console.log('\n📦 AGREGAR PAQUETES VACACIONALES');
+    console.log('Se realizarán los siguientes cambios:');
+    console.log('1. Crear tabla paquete_vacacional');
+    console.log('2. Insertar 3 paquetes (1, 2 y 3 cursos)');
+    console.log('3. Agregar campos paquete_id y codigo_grupo a inscripcion_vacacional');
+    console.log('4. Crear índice para codigo_grupo\n');
 
     const confirm = await ask('¿Deseas continuar? (SI para confirmar): ');
 
     if (confirm !== 'SI') {
-      console.log('\n❌ Cancelado — no se insertó nada.');
+      console.log('\n❌ Cancelado — no se realizaron cambios.');
       process.exit(0);
     }
 
     await client.query('BEGIN');
     console.log('\n⏳ Procesando...');
 
-    // 1️⃣ Crear área si no existe
-    const existingArea = await client.query(
-      `SELECT id FROM area_conocimiento WHERE nombre = 'Ciencias'`
-    );
+    // 1️⃣ Crear tabla paquete_vacacional si no existe
+    console.log('📋 Creando tabla paquete_vacacional...');
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS paquete_vacacional (
+        id SERIAL PRIMARY KEY,
+        nombre VARCHAR(100) NOT NULL,
+        cantidad_cursos INTEGER NOT NULL,
+        precio NUMERIC(10,2) NOT NULL,
+        activo BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('✅ Tabla paquete_vacacional creada/verificada');
 
-    let areaId;
+    // 2️⃣ Insertar paquetes si no existen
+    console.log('📦 Insertando paquetes...');
+    
+    const paquetes = [
+      { nombre: 'Paquete 3 Cursos', cantidad: 3, precio: 400.00 },
+      { nombre: 'Paquete 2 Cursos', cantidad: 2, precio: 350.00 },
+      { nombre: 'Paquete 1 Curso', cantidad: 1, precio: 250.00 }
+    ];
 
-    if (existingArea.rows.length > 0) {
-      areaId = existingArea.rows[0].id;
-      console.log(`🔎 Área ya existente — id = ${areaId}`);
-    } else {
-      const insertedArea = await client.query(
-        `INSERT INTO area_conocimiento (nombre, descripcion, color, orden, created_at)
-         VALUES ('Ciencias', 'Área relacionada a Química, Física y Biología', '#0088FF', 1, NOW())
-         RETURNING id`
+    for (const paquete of paquetes) {
+      const exists = await client.query(
+        `SELECT id FROM paquete_vacacional WHERE cantidad_cursos = $1`,
+        [paquete.cantidad]
       );
-      areaId = insertedArea.rows[0].id;
-      console.log(`🆕 Área creada — id = ${areaId}`);
+
+      if (exists.rows.length === 0) {
+        await client.query(
+          `INSERT INTO paquete_vacacional (nombre, cantidad_cursos, precio, activo, created_at, updated_at)
+           VALUES ($1, $2, $3, TRUE, NOW(), NOW())`,
+          [paquete.nombre, paquete.cantidad, paquete.precio]
+        );
+        console.log(`  ✓ ${paquete.nombre} - ${paquete.precio} Bs`);
+      } else {
+        console.log(`  ⚠️ ${paquete.nombre} ya existe`);
+      }
     }
 
-    // 2️⃣ Insertar materia (si no existe)
-    const existingMateria = await client.query(
-      `SELECT id FROM materia WHERE codigo = 'COQUI'`
-    );
+    // 3️⃣ Agregar columnas a inscripcion_vacacional si no existen
+    console.log('🔧 Modificando tabla inscripcion_vacacional...');
+    
+    // Verificar si la columna paquete_id existe
+    const columnCheck1 = await client.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'inscripcion_vacacional' 
+      AND column_name = 'paquete_id'
+    `);
 
-    if (existingMateria.rows.length > 0) {
-      console.log('⚠️ La materia con código "COQUI" ya existe — no se volverá a crear.');
+    if (columnCheck1.rows.length === 0) {
+      await client.query(`
+        ALTER TABLE inscripcion_vacacional 
+        ADD COLUMN paquete_id INTEGER REFERENCES paquete_vacacional(id)
+      `);
+      console.log('  ✓ Columna paquete_id agregada');
     } else {
-      await client.query(
-        `INSERT INTO materia (
-          area_conocimiento_id,
-          codigo,
-          nombre,
-          descripcion,
-          horas_semanales,
-          creditos,
-          es_obligatoria,
-          tiene_laboratorio,
-          color,
-          activo,
-          created_at,
-          updated_at
-        ) VALUES (
-          $1, 'CO0QUI', 'Quimica', '', 0, NULL, TRUE, FALSE, NULL, TRUE, NOW(), NOW()
-        )`,
-        [areaId]
-      );
-      console.log('🧪 Materia "Química" creada correctamente.');
+      console.log('  ⚠️ Columna paquete_id ya existe');
+    }
+
+    // Verificar si la columna codigo_grupo existe
+    const columnCheck2 = await client.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'inscripcion_vacacional' 
+      AND column_name = 'codigo_grupo'
+    `);
+
+    if (columnCheck2.rows.length === 0) {
+      await client.query(`
+        ALTER TABLE inscripcion_vacacional 
+        ADD COLUMN codigo_grupo VARCHAR(50)
+      `);
+      console.log('  ✓ Columna codigo_grupo agregada');
+    } else {
+      console.log('  ⚠️ Columna codigo_grupo ya existe');
+    }
+
+    // 4️⃣ Crear índice si no existe
+    console.log('📇 Creando índice...');
+    const indexCheck = await client.query(`
+      SELECT indexname 
+      FROM pg_indexes 
+      WHERE tablename = 'inscripcion_vacacional' 
+      AND indexname = 'idx_inscripcion_codigo_grupo'
+    `);
+
+    if (indexCheck.rows.length === 0) {
+      await client.query(`
+        CREATE INDEX idx_inscripcion_codigo_grupo 
+        ON inscripcion_vacacional(codigo_grupo)
+      `);
+      console.log('  ✓ Índice idx_inscripcion_codigo_grupo creado');
+    } else {
+      console.log('  ⚠️ Índice ya existe');
     }
 
     await client.query('COMMIT');
 
-    console.log('\n✅ Operación completada con éxito.');
-    console.log('🎯 Área vinculada a la materia correctamente.');
+    console.log('\n✅ ¡Operación completada con éxito!');
+    console.log('\n📊 Resumen:');
+    console.log('  • Tabla paquete_vacacional creada');
+    console.log('  • 3 paquetes insertados (400, 350, 250 Bs)');
+    console.log('  • Campos paquete_id y codigo_grupo agregados');
+    console.log('  • Índice de búsqueda creado');
+    console.log('\n🎯 Sistema de paquetes vacacionales listo para usar.');
 
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('\n💥 Error en la operación:', error.message);
+    console.error('Stack:', error.stack);
   } finally {
     client.release();
     rl.close();
@@ -92,7 +151,7 @@ async function insertMateria() {
   }
 }
 
-insertMateria().catch(err => {
+seedPaquetesVacacionales().catch(err => {
   console.error('💥 Error fatal:', err);
   process.exit(1);
 });

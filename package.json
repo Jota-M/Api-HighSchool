@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node --watch --env-file .env index.js",
     "start": "node --env-file .env index.js",
-    "seed": "node --env-file .env ./scripts/seedtest"
+    "seed": "node --env-file .env ./scripts/Table"
   },
   "keywords": [],
   "author": "",

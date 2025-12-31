@@ -2,6 +2,39 @@
 import { pool } from '../db/pool.js';
 
 // =============================================
+// PAQUETE VACACIONAL
+// =============================================
+class PaqueteVacacional {
+  static async findAll() {
+    const query = `
+      SELECT * FROM paquete_vacacional
+      WHERE activo = true
+      ORDER BY cantidad_cursos DESC
+    `;
+    const result = await pool.query(query);
+    return result.rows;
+  }
+
+  static async findById(id) {
+    const query = `
+      SELECT * FROM paquete_vacacional
+      WHERE id = $1 AND activo = true
+    `;
+    const result = await pool.query(query, [id]);
+    return result.rows[0];
+  }
+
+  static async findByCantidad(cantidad_cursos) {
+    const query = `
+      SELECT * FROM paquete_vacacional
+      WHERE cantidad_cursos = $1 AND activo = true
+    `;
+    const result = await pool.query(query, [cantidad_cursos]);
+    return result.rows[0];
+  }
+}
+
+// =============================================
 // PERIODO VACACIONAL
 // =============================================
 class PeriodoVacacional {
@@ -172,7 +205,7 @@ class PeriodoVacacional {
 }
 
 // =============================================
-// CURSO VACACIONAL (CON FOTO)
+// CURSO VACACIONAL
 // =============================================
 class CursoVacacional {
   static async create(data, client = null) {
@@ -427,38 +460,38 @@ class CursoVacacional {
 }
 
 // =============================================
-// INSCRIPCION VACACIONAL
+// INSCRIPCION VACACIONAL (CORREGIDO)
 // =============================================
 class InscripcionVacacional {
   static async create(data, client = null) {
     const conn = client || pool;
 
     const {
-      codigo_inscripcion, curso_vacacional_id, nombres, apellido_paterno,
-      apellido_materno, fecha_nacimiento, ci, genero, telefono, email,
-      nombre_tutor, telefono_tutor, email_tutor, parentesco_tutor,
-      monto_pagado, numero_comprobante, fecha_pago, comprobante_pago_url,
-      estado, observaciones
+      codigo_inscripcion, codigo_grupo, paquete_id, curso_vacacional_id,
+      nombres, apellido_paterno, apellido_materno, fecha_nacimiento, ci,
+      genero, telefono, email, nombre_tutor, telefono_tutor, email_tutor,
+      parentesco_tutor, monto_pagado, numero_comprobante, fecha_pago,
+      comprobante_pago_url, estado, observaciones
     } = data;
 
     const query = `
       INSERT INTO inscripcion_vacacional (
-        codigo_inscripcion, curso_vacacional_id, nombres, apellido_paterno,
-        apellido_materno, fecha_nacimiento, ci, genero, telefono, email,
-        nombre_tutor, telefono_tutor, email_tutor, parentesco_tutor,
-        monto_pagado, numero_comprobante, fecha_pago, comprobante_pago_url,
-        estado, observaciones
+        codigo_inscripcion, codigo_grupo, paquete_id, curso_vacacional_id,
+        nombres, apellido_paterno, apellido_materno, fecha_nacimiento, ci,
+        genero, telefono, email, nombre_tutor, telefono_tutor, email_tutor,
+        parentesco_tutor, monto_pagado, numero_comprobante, fecha_pago,
+        comprobante_pago_url, estado, observaciones
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
       RETURNING *
     `;
 
     const result = await conn.query(query, [
-      codigo_inscripcion, curso_vacacional_id, nombres, apellido_paterno,
-      apellido_materno, fecha_nacimiento, ci, genero, telefono, email,
-      nombre_tutor, telefono_tutor, email_tutor, parentesco_tutor,
-      monto_pagado, numero_comprobante, fecha_pago, comprobante_pago_url,
-      estado || 'pendiente', observaciones
+      codigo_inscripcion, codigo_grupo, paquete_id, curso_vacacional_id,
+      nombres, apellido_paterno, apellido_materno, fecha_nacimiento, ci,
+      genero, telefono, email, nombre_tutor, telefono_tutor, email_tutor,
+      parentesco_tutor, monto_pagado, numero_comprobante, fecha_pago,
+      comprobante_pago_url, estado || 'pendiente', observaciones
     ]);
 
     return result.rows[0];
@@ -494,10 +527,40 @@ class InscripcionVacacional {
     return `INS-VAC-${curso_id}-${newNum}`;
   }
 
+  static async generateCodigoGrupo(client = null) {
+    const conn = client || pool;
+
+    if (client) {
+      await client.query('LOCK TABLE inscripcion_vacacional IN SHARE ROW EXCLUSIVE MODE');
+    }
+
+    const query = `
+      SELECT codigo_grupo 
+      FROM inscripcion_vacacional 
+      WHERE codigo_grupo IS NOT NULL
+      ORDER BY codigo_grupo DESC 
+      LIMIT 1
+    `;
+
+    const result = await conn.query(query);
+
+    if (result.rows.length === 0) {
+      return 'GRP-2025-0001';
+    }
+
+    const lastCodigo = result.rows[0].codigo_grupo;
+    const parts = lastCodigo.split('-');
+    const lastNum = parseInt(parts[parts.length - 1]);
+    const newNum = (lastNum + 1).toString().padStart(4, '0');
+    const year = new Date().getFullYear();
+
+    return `GRP-${year}-${newNum}`;
+  }
+
   static async findAll(filters = {}) {
     const { 
       page = 1, limit = 10, search, curso_vacacional_id, 
-      periodo_vacacional_id, estado, pago_verificado 
+      periodo_vacacional_id, estado, pago_verificado, codigo_grupo
     } = filters;
     const offset = (page - 1) * limit;
 
@@ -512,6 +575,7 @@ class InscripcionVacacional {
         iv.apellido_materno ILIKE $${paramCounter} OR
         iv.ci ILIKE $${paramCounter} OR
         iv.codigo_inscripcion ILIKE $${paramCounter} OR
+        iv.codigo_grupo ILIKE $${paramCounter} OR
         iv.telefono_tutor ILIKE $${paramCounter}
       )`);
       queryParams.push(`%${search}%`);
@@ -542,8 +606,15 @@ class InscripcionVacacional {
       paramCounter++;
     }
 
+    if (codigo_grupo) {
+      whereConditions.push(`iv.codigo_grupo = $${paramCounter}`);
+      queryParams.push(codigo_grupo);
+      paramCounter++;
+    }
+
     const whereClause = whereConditions.join(' AND ');
 
+    // Query de conteo
     const countQuery = `
       SELECT COUNT(*)
       FROM inscripcion_vacacional iv
@@ -553,16 +624,20 @@ class InscripcionVacacional {
     const countResult = await pool.query(countQuery, queryParams);
     const total = parseInt(countResult.rows[0].count);
 
+    // Query de datos
     const dataQuery = `
       SELECT iv.*,
         cv.nombre as curso_nombre,
         cv.codigo as curso_codigo,
         cv.costo as curso_costo,
         pv.nombre as periodo_nombre,
-        pv.tipo as periodo_tipo
+        pv.tipo as periodo_tipo,
+        pk.nombre as paquete_nombre,
+        pk.cantidad_cursos as paquete_cantidad
       FROM inscripcion_vacacional iv
       INNER JOIN curso_vacacional cv ON iv.curso_vacacional_id = cv.id
       INNER JOIN periodo_vacacional pv ON cv.periodo_vacacional_id = pv.id
+      LEFT JOIN paquete_vacacional pk ON iv.paquete_id = pk.id
       WHERE ${whereClause}
       ORDER BY iv.created_at DESC
       LIMIT $${paramCounter} OFFSET $${paramCounter + 1}
@@ -594,16 +669,35 @@ class InscripcionVacacional {
         cv.hora_fin as curso_hora_fin,
         pv.nombre as periodo_nombre,
         pv.tipo as periodo_tipo,
+        pk.nombre as paquete_nombre,
+        pk.cantidad_cursos as paquete_cantidad,
+        pk.precio as paquete_precio,
         u.username as verificado_por_username
       FROM inscripcion_vacacional iv
       INNER JOIN curso_vacacional cv ON iv.curso_vacacional_id = cv.id
       INNER JOIN periodo_vacacional pv ON cv.periodo_vacacional_id = pv.id
+      LEFT JOIN paquete_vacacional pk ON iv.paquete_id = pk.id
       LEFT JOIN usuarios u ON iv.verificado_por = u.id
       WHERE iv.id = $1 AND iv.deleted_at IS NULL
     `;
 
     const result = await pool.query(query, [id]);
     return result.rows[0];
+  }
+
+  static async findByCodigoGrupo(codigo_grupo) {
+    const query = `
+      SELECT iv.*,
+        cv.nombre as curso_nombre,
+        cv.codigo as curso_codigo
+      FROM inscripcion_vacacional iv
+      INNER JOIN curso_vacacional cv ON iv.curso_vacacional_id = cv.id
+      WHERE iv.codigo_grupo = $1 AND iv.deleted_at IS NULL
+      ORDER BY iv.created_at ASC
+    `;
+
+    const result = await pool.query(query, [codigo_grupo]);
+    return result.rows;
   }
 
   static async update(id, data) {
@@ -681,7 +775,8 @@ class InscripcionVacacional {
         COUNT(CASE WHEN iv.estado = 'activo' THEN 1 END) as activas,
         COUNT(CASE WHEN iv.estado = 'completado' THEN 1 END) as completadas,
         COUNT(CASE WHEN iv.estado = 'retirado' THEN 1 END) as retiradas,
-        COALESCE(SUM(iv.monto_pagado), 0) as total_ingresos
+        COALESCE(SUM(iv.monto_pagado), 0) as total_ingresos,
+        COUNT(DISTINCT iv.codigo_grupo) as total_estudiantes
       FROM inscripcion_vacacional iv
       INNER JOIN curso_vacacional cv ON iv.curso_vacacional_id = cv.id
       WHERE cv.periodo_vacacional_id = $1 AND iv.deleted_at IS NULL
@@ -712,4 +807,4 @@ class InscripcionVacacional {
   }
 }
 
-export { PeriodoVacacional, CursoVacacional, InscripcionVacacional };
+export { PaqueteVacacional, PeriodoVacacional, CursoVacacional, InscripcionVacacional };

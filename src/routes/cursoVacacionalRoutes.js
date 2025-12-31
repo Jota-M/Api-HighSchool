@@ -10,11 +10,24 @@ const router = express.Router();
 // RUTAS PÚBLICAS (sin autenticación)
 // ==========================================
 
+// Paquetes
+router.get(
+  '/publico/paquetes',
+  CursoVacacionalController.listarPaquetes
+);
+
+router.get(
+  '/publico/paquetes/:id',
+  CursoVacacionalController.obtenerPaquete
+);
+
+// Periodos
 router.get(
   '/publico/periodo-activo',
   CursoVacacionalController.obtenerPeriodoActivo
 );
 
+// Cursos
 router.get(
   '/publico/cursos',
   CursoVacacionalController.listarCursos
@@ -25,11 +38,30 @@ router.get(
   CursoVacacionalController.obtenerCurso
 );
 
+// Inscripción
 router.post(
   '/publico/inscribir',
   upload.single('comprobante'),
   handleMulterError,
   CursoVacacionalController.inscribir
+);
+
+// ==========================================
+// PAQUETES VACACIONALES (protegidas)
+// ==========================================
+
+router.get(
+  '/paquetes',
+  authenticate,
+  authorize('curso_vacacional.ver'),
+  CursoVacacionalController.listarPaquetes
+);
+
+router.get(
+  '/paquetes/:id',
+  authenticate,
+  authorize('curso_vacacional.ver'),
+  CursoVacacionalController.obtenerPaquete
 );
 
 // ==========================================
@@ -82,14 +114,14 @@ router.get(
 );
 
 // ==========================================
-// CURSOS VACACIONALES (protegidas) - CON FOTO
+// CURSOS VACACIONALES (protegidas)
 // ==========================================
 
 router.post(
   '/cursos',
   authenticate,
   authorize('curso_vacacional.crear'),
-  upload.single('foto'), // ⬅️ NUEVO: acepta foto del curso
+  upload.single('foto'),
   handleMulterError,
   logActivity('crear_curso_vacacional', 'curso_vacacional'),
   CursoVacacionalController.crearCurso
@@ -113,7 +145,7 @@ router.put(
   '/cursos/:id',
   authenticate,
   authorize('curso_vacacional.actualizar'),
-  upload.single('foto'), // ⬅️ NUEVO: acepta foto para actualizar
+  upload.single('foto'),
   handleMulterError,
   logActivity('actualizar_curso_vacacional', 'curso_vacacional'),
   CursoVacacionalController.actualizarCurso
@@ -127,7 +159,6 @@ router.delete(
   CursoVacacionalController.eliminarCurso
 );
 
-// ⬇️ NUEVA RUTA: Eliminar solo la foto del curso (sin eliminar el curso)
 router.delete(
   '/cursos/:id/foto',
   authenticate,
@@ -176,6 +207,14 @@ router.get(
   authenticate,
   authorize('curso_vacacional.ver'),
   CursoVacacionalController.obtenerInscripcion
+);
+
+// Nueva ruta para obtener todas las inscripciones de un grupo
+router.get(
+  '/inscripciones/grupo/:codigo_grupo',
+  authenticate,
+  authorize('curso_vacacional.ver'),
+  CursoVacacionalController.obtenerInscripcionesPorGrupo
 );
 
 router.put(

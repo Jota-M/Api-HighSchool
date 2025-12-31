@@ -1,11 +1,57 @@
 // controllers/cursoVacacionalController.js
 import { pool } from '../db/pool.js';
-import { PeriodoVacacional, CursoVacacional, InscripcionVacacional } from '../models/CursoVacacional.js';
+import { PaqueteVacacional, PeriodoVacacional, CursoVacacional, InscripcionVacacional } from '../models/CursoVacacional.js';
 import ActividadLog from '../models/actividadLog.js';
 import RequestInfo from '../utils/requestInfo.js';
 import UploadImage from '../utils/uploadImage.js';
 
 class CursoVacacionalController {
+  // ==========================================
+  // PAQUETES VACACIONALES (NUEVO)
+  // ==========================================
+
+  static async listarPaquetes(req, res) {
+    try {
+      const paquetes = await PaqueteVacacional.findAll();
+
+      res.json({
+        success: true,
+        data: paquetes
+      });
+    } catch (error) {
+      console.error('Error al listar paquetes:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al listar paquetes: ' + error.message
+      });
+    }
+  }
+
+  static async obtenerPaquete(req, res) {
+    try {
+      const { id } = req.params;
+
+      const paquete = await PaqueteVacacional.findById(id);
+      if (!paquete) {
+        return res.status(404).json({
+          success: false,
+          message: 'Paquete no encontrado'
+        });
+      }
+
+      res.json({
+        success: true,
+        data: paquete
+      });
+    } catch (error) {
+      console.error('Error al obtener paquete:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al obtener paquete: ' + error.message
+      });
+    }
+  }
+
   // ==========================================
   // PERIODOS VACACIONALES
   // ==========================================
@@ -250,7 +296,6 @@ class CursoVacacionalController {
         hora_fin, cupos_totales, costo, aula, requisitos, activo
       } = req.body;
 
-      // Validaciones
       if (!periodo_vacacional_id || !nombre || !fecha_inicio || !fecha_fin || !cupos_totales || !costo) {
         return res.status(400).json({
           success: false,
@@ -265,7 +310,6 @@ class CursoVacacionalController {
         });
       }
 
-      // Subir foto si existe
       if (req.file) {
         if (!UploadImage.isValidImage(req.file)) {
           return res.status(400).json({
@@ -320,7 +364,6 @@ class CursoVacacionalController {
     } catch (error) {
       console.error('Error al crear curso:', error);
 
-      // Eliminar foto si fue subida
       if (foto_public_id) {
         try {
           await UploadImage.deleteImage(foto_public_id);
@@ -408,7 +451,6 @@ class CursoVacacionalController {
         });
       }
 
-      // Si hay nueva foto, subirla y eliminar la anterior
       if (req.file) {
         if (!UploadImage.isValidImage(req.file)) {
           return res.status(400).json({
@@ -433,7 +475,6 @@ class CursoVacacionalController {
         nueva_foto_url = uploadResult.url;
         nueva_foto_public_id = uploadResult.public_id;
 
-        // Eliminar foto anterior si existe
         if (cursoExistente.foto_public_id) {
           try {
             await UploadImage.deleteImage(cursoExistente.foto_public_id);
@@ -473,7 +514,6 @@ class CursoVacacionalController {
     } catch (error) {
       console.error('Error al actualizar curso:', error);
 
-      // Eliminar nueva foto si fue subida pero hubo error
       if (nueva_foto_public_id) {
         try {
           await UploadImage.deleteImage(nueva_foto_public_id);
@@ -503,7 +543,6 @@ class CursoVacacionalController {
 
       const resultDelete = await CursoVacacional.softDelete(id);
 
-      // Eliminar foto si existe
       if (resultDelete.foto_public_id) {
         try {
           await UploadImage.deleteImage(resultDelete.foto_public_id);
@@ -539,9 +578,6 @@ class CursoVacacionalController {
     }
   }
 
-  /**
-   * Eliminar solo la foto del curso (sin eliminar el curso)
-   */
   static async eliminarFotoCurso(req, res) {
     try {
       const { id } = req.params;
@@ -561,10 +597,7 @@ class CursoVacacionalController {
         });
       }
 
-      // Eliminar de Cloudinary
       await UploadImage.deleteImage(curso.foto_public_id);
-
-      // Actualizar BD
       const cursoActualizado = await CursoVacacional.deleteFoto(id);
 
       const reqInfo = RequestInfo.extract(req);
@@ -597,7 +630,7 @@ class CursoVacacionalController {
   }
 
   // ==========================================
-  // INSCRIPCIONES
+  // INSCRIPCIONES CON PAQUETES (ACTUALIZADO)
   // ==========================================
 
   static async inscribir(req, res) {
@@ -608,13 +641,24 @@ class CursoVacacionalController {
       await client.query('BEGIN');
 
       const {
-        curso_vacacional_id, nombres, apellido_paterno, apellido_materno,
+        cursos, // Array de IDs de cursos: [101, 102, 103]
+        paquete_id,
+        nombres, apellido_paterno, apellido_materno,
         fecha_nacimiento, ci, genero, telefono, email, nombre_tutor,
         telefono_tutor, email_tutor, parentesco_tutor, monto_pagado,
         numero_comprobante, fecha_pago, observaciones
       } = req.body;
 
-      if (!curso_vacacional_id || !nombres || !apellido_paterno || !fecha_nacimiento ||
+      // Validaciones
+      if (!cursos || !Array.isArray(cursos) || cursos.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Debe seleccionar al menos un curso'
+        });
+      }
+
+      if (!nombres || !apellido_paterno || !fecha_nacimiento ||
           !nombre_tutor || !telefono_tutor || !monto_pagado) {
         await client.query('ROLLBACK');
         return res.status(400).json({
@@ -623,24 +667,48 @@ class CursoVacacionalController {
         });
       }
 
-      const curso = await CursoVacacional.findById(curso_vacacional_id);
-      if (!curso) {
-        await client.query('ROLLBACK');
-        return res.status(404).json({
-          success: false,
-          message: 'Curso no encontrado'
-        });
+      // Validar paquete si se proporcionó
+      if (paquete_id) {
+        const paquete = await PaqueteVacacional.findById(paquete_id);
+        if (!paquete) {
+          await client.query('ROLLBACK');
+          return res.status(404).json({
+            success: false,
+            message: 'Paquete no encontrado'
+          });
+        }
+
+        if (cursos.length !== paquete.cantidad_cursos) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: `El paquete requiere exactamente ${paquete.cantidad_cursos} cursos`
+          });
+        }
       }
 
-      const disponibilidad = await CursoVacacional.checkDisponibilidad(curso_vacacional_id);
-      if (!disponibilidad.disponible) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({
-          success: false,
-          message: 'El curso no tiene cupos disponibles'
-        });
+      // Verificar disponibilidad de todos los cursos
+      for (const curso_id of cursos) {
+        const curso = await CursoVacacional.findById(curso_id);
+        if (!curso) {
+          await client.query('ROLLBACK');
+          return res.status(404).json({
+            success: false,
+            message: `Curso con ID ${curso_id} no encontrado`
+          });
+        }
+
+        const disponibilidad = await CursoVacacional.checkDisponibilidad(curso_id);
+        if (!disponibilidad.disponible) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: `El curso "${curso.nombre}" no tiene cupos disponibles`
+          });
+        }
       }
 
+      // Subir comprobante si existe
       if (req.file) {
         if (!UploadImage.isValidSize(req.file, 5)) {
           await client.query('ROLLBACK');
@@ -658,38 +726,52 @@ class CursoVacacionalController {
         comprobante_url = uploadResult.url;
       }
 
-      const codigo_inscripcion = await InscripcionVacacional.generateCodigoInscripcion(
-        curso_vacacional_id, 
-        client
-      );
+      // Generar código de grupo único
+      const codigo_grupo = await InscripcionVacacional.generateCodigoGrupo(client);
 
-      const inscripcion = await InscripcionVacacional.create({
-        codigo_inscripcion,
-        curso_vacacional_id,
-        nombres,
-        apellido_paterno,
-        apellido_materno,
-        fecha_nacimiento,
-        ci,
-        genero,
-        telefono,
-        email,
-        nombre_tutor,
-        telefono_tutor,
-        email_tutor,
-        parentesco_tutor,
-        monto_pagado,
-        numero_comprobante,
-        fecha_pago: fecha_pago || new Date(),
-        comprobante_pago_url: comprobante_url,
-        estado: 'pendiente',
-        observaciones
-      }, client);
+      // Crear inscripciones para cada curso
+      const inscripciones = [];
+      for (let i = 0; i < cursos.length; i++) {
+        const curso_id = cursos[i];
+        
+        const codigo_inscripcion = await InscripcionVacacional.generateCodigoInscripcion(
+          curso_id, 
+          client
+        );
 
-      await CursoVacacional.incrementarCupo(curso_vacacional_id, client);
+        // Solo la primera inscripción tiene el monto_pagado, las demás en 0
+        const inscripcion = await InscripcionVacacional.create({
+          codigo_inscripcion,
+          codigo_grupo,
+          paquete_id: paquete_id || null,
+          curso_vacacional_id: curso_id,
+          nombres,
+          apellido_paterno,
+          apellido_materno,
+          fecha_nacimiento,
+          ci,
+          genero,
+          telefono,
+          email,
+          nombre_tutor,
+          telefono_tutor,
+          email_tutor,
+          parentesco_tutor,
+          monto_pagado: i === 0 ? monto_pagado : 0, // Solo primera inscripción tiene el pago
+          numero_comprobante: i === 0 ? numero_comprobante : null,
+          fecha_pago: i === 0 ? (fecha_pago || new Date()) : null,
+          comprobante_pago_url: i === 0 ? comprobante_url : null,
+          estado: 'pendiente',
+          observaciones
+        }, client);
+
+        await CursoVacacional.incrementarCupo(curso_id, client);
+        inscripciones.push(inscripcion);
+      }
 
       await client.query('COMMIT');
 
+      // Log de actividad
       if (req.user) {
         const reqInfo = RequestInfo.extract(req);
         await ActividadLog.create({
@@ -697,19 +779,23 @@ class CursoVacacionalController {
           accion: 'crear_inscripcion_vacacional',
           modulo: 'curso_vacacional',
           tabla_afectada: 'inscripcion_vacacional',
-          registro_id: inscripcion.id,
-          datos_nuevos: inscripcion,
+          registro_id: inscripciones[0].id,
+          datos_nuevos: { codigo_grupo, total_cursos: cursos.length, paquete_id },
           ip_address: reqInfo.ip,
           user_agent: reqInfo.userAgent,
           resultado: 'exitoso',
-          mensaje: `Inscripción creada: ${codigo_inscripcion}`
+          mensaje: `Inscripción grupal creada: ${codigo_grupo} - ${cursos.length} cursos`
         });
       }
 
       res.status(201).json({
         success: true,
         message: 'Inscripción creada exitosamente',
-        data: inscripcion
+        data: {
+          codigo_grupo,
+          total_cursos: inscripciones.length,
+          inscripciones
+        }
       });
     } catch (error) {
       await client.query('ROLLBACK');
@@ -737,7 +823,7 @@ class CursoVacacionalController {
 
   static async listarInscripciones(req, res) {
     try {
-      const { page, limit, search, curso_vacacional_id, periodo_vacacional_id, estado, pago_verificado } = req.query;
+      const { page, limit, search, curso_vacacional_id, periodo_vacacional_id, estado, pago_verificado, codigo_grupo } = req.query;
 
       const result = await InscripcionVacacional.findAll({
         page: parseInt(page) || 1,
@@ -746,7 +832,8 @@ class CursoVacacionalController {
         curso_vacacional_id: curso_vacacional_id ? parseInt(curso_vacacional_id) : undefined,
         periodo_vacacional_id: periodo_vacacional_id ? parseInt(periodo_vacacional_id) : undefined,
         estado,
-        pago_verificado: pago_verificado === 'true' ? true : pago_verificado === 'false' ? false : undefined
+        pago_verificado: pago_verificado === 'true' ? true : pago_verificado === 'false' ? false : undefined,
+        codigo_grupo
       });
 
       res.json({
@@ -784,6 +871,32 @@ class CursoVacacionalController {
       res.status(500).json({
         success: false,
         message: 'Error al obtener inscripción: ' + error.message
+      });
+    }
+  }
+
+  static async obtenerInscripcionesPorGrupo(req, res) {
+    try {
+      const { codigo_grupo } = req.params;
+
+      const inscripciones = await InscripcionVacacional.findByCodigoGrupo(codigo_grupo);
+      
+      if (inscripciones.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'No se encontraron inscripciones con ese código de grupo'
+        });
+      }
+
+      res.json({
+        success: true,
+        data: inscripciones
+      });
+    } catch (error) {
+      console.error('Error al obtener inscripciones por grupo:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al obtener inscripciones: ' + error.message
       });
     }
   }
