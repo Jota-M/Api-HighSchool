@@ -52,17 +52,8 @@ const app = express();
 app.use(helmet());
 
 // ------------------------------
-// Rate limit GLOBAL (permisivo para desarrollo)
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 200,
-  message: { success: false, message: 'Demasiadas solicitudes desde esta IP' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
+// Middlewares básicos
 // ------------------------------
-// Middlewares
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
@@ -70,13 +61,15 @@ app.set('trust proxy', 1);
 app.use(morgan('dev'));
 
 // ------------------------------
-// CORS configurado para frontend
+// CORS configurado para frontend (DEBE IR ANTES DE TODO)
+// ------------------------------
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', 'https://uepclavozdecristo.site');
   res.header('Access-Control-Allow-Credentials', 'true');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
 
+  // Manejar preflight requests
   if (req.method === 'OPTIONS') {
     return res.sendStatus(204);
   }
@@ -84,7 +77,20 @@ app.use((req, res, next) => {
 });
 
 // ------------------------------
+// Rate limit GLOBAL (DESPUÉS DE CORS)
+// ------------------------------
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  message: { success: false, message: 'Demasiadas solicitudes desde esta IP' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.method === 'OPTIONS', // Excluir OPTIONS del rate limit
+});
+
+// ------------------------------
 // Health check endpoint
+// ------------------------------
 async function checkDatabaseHealth() {
   try {
     const client = await pool.connect();
@@ -115,23 +121,32 @@ app.get('/health', async (req, res) => {
 });
 
 // ------------------------------
-// Rutas públicas
+// Rutas públicas (SIN rate limit)
+// ------------------------------
 app.use('/public/academicos', publicAcademicosRoutes);
 
-// Auth SIN limitador global (cada ruta tiene el suyo)
+// ------------------------------
+// Auth (SIN rate limit global, cada ruta tiene el suyo)
+// ------------------------------
 app.use('/auth', authRoutes);
 
-// Global limiter para el resto
+// ------------------------------
+// Aplicar rate limit al resto de rutas
+// ------------------------------
 app.use(limiter);
 
+// ------------------------------
 // Admin / Sistema
+// ------------------------------
 app.use('/usuarios', usuariosRoutes);
 app.use('/roles', rolesRoutes);
 app.use('/actividad', actividadRoutes);
 app.use('/sesiones', sesionesRoutes);
 app.use('/configuracion', configuracionRoutes);
 
+// ------------------------------
 // Académico NUEVO
+// ------------------------------
 app.use('/periodo-academico', periodoAcademicoRoutes);
 app.use('/turno', turnoRoutes);
 app.use('/nivel-academico', nivelAcademicoRoutes);
@@ -142,7 +157,9 @@ app.use('/materias', materiasRoutes);
 app.use('/grado-materia', gradoMateriasRoutes);
 app.use('/reportes', reportesRoutes);
 
+// ------------------------------
 // Módulo de Estudiantes y Tutores
+// ------------------------------
 app.use('/estudiante', estudianteRoutes);
 app.use('/padre-familia', padreFamiliaRoutes);
 app.use('/registro-completo', registroCompletoRoutes);
@@ -153,12 +170,15 @@ app.use('/docente', docenteRoutes);
 app.use('/asignacion-docente', asignacionDocenteRoutes);
 app.use('/cursos-vacacionales', cursosVacacionalesRoutes);
 
+// ------------------------------
 // Rutas API antiguas
+// ------------------------------
 app.use('/preinscripcion', preinscripcionRoutes);
 app.use('/cupos', cupoPreinscripcionRoutes);
 
 // ------------------------------
 // Manejo de errores / fallback 404
+// ------------------------------
 app.use((req, res) => {
   res.status(404).json({ success: false, message: 'Ruta no encontrada' });
 });
@@ -174,6 +194,7 @@ app.use((err, req, res, next) => {
 
 // ------------------------------
 // Limpieza de sesiones expiradas
+// ------------------------------
 setInterval(async () => {
   try {
     await Sesion.cleanExpired();
