@@ -633,193 +633,207 @@ class CursoVacacionalController {
   // INSCRIPCIONES CON PAQUETES (ACTUALIZADO)
   // ==========================================
 
-  static async inscribir(req, res) {
-    const client = await pool.connect();
-    let comprobante_url = null;
 
+static async inscribir(req, res) {
+  const client = await pool.connect();
+  let comprobante_url = null;
+
+  try {
+    await client.query('BEGIN');
+
+    // ⚠️ IMPORTANTE: Parsear 'cursos' que viene como string JSON desde FormData
+    let cursos;
     try {
-      await client.query('BEGIN');
-
-      const {
-        cursos, // Array de IDs de cursos: [101, 102, 103]
-        paquete_id,
-        nombres, apellido_paterno, apellido_materno,
-        fecha_nacimiento, ci, genero, telefono, email, nombre_tutor,
-        telefono_tutor, email_tutor, parentesco_tutor, monto_pagado,
-        numero_comprobante, fecha_pago, observaciones
-      } = req.body;
-
-      // Validaciones
-      if (!cursos || !Array.isArray(cursos) || cursos.length === 0) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({
-          success: false,
-          message: 'Debe seleccionar al menos un curso'
-        });
-      }
-
-      if (!nombres || !apellido_paterno || !fecha_nacimiento ||
-          !nombre_tutor || !telefono_tutor || !monto_pagado) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({
-          success: false,
-          message: 'Faltan datos obligatorios'
-        });
-      }
-
-      // Validar paquete si se proporcionó
-      if (paquete_id) {
-        const paquete = await PaqueteVacacional.findById(paquete_id);
-        if (!paquete) {
-          await client.query('ROLLBACK');
-          return res.status(404).json({
-            success: false,
-            message: 'Paquete no encontrado'
-          });
-        }
-
-        if (cursos.length !== paquete.cantidad_cursos) {
-          await client.query('ROLLBACK');
-          return res.status(400).json({
-            success: false,
-            message: `El paquete requiere exactamente ${paquete.cantidad_cursos} cursos`
-          });
-        }
-      }
-
-      // Verificar disponibilidad de todos los cursos
-      for (const curso_id of cursos) {
-        const curso = await CursoVacacional.findById(curso_id);
-        if (!curso) {
-          await client.query('ROLLBACK');
-          return res.status(404).json({
-            success: false,
-            message: `Curso con ID ${curso_id} no encontrado`
-          });
-        }
-
-        const disponibilidad = await CursoVacacional.checkDisponibilidad(curso_id);
-        if (!disponibilidad.disponible) {
-          await client.query('ROLLBACK');
-          return res.status(400).json({
-            success: false,
-            message: `El curso "${curso.nombre}" no tiene cupos disponibles`
-          });
-        }
-      }
-
-      // Subir comprobante si existe
-      if (req.file) {
-        if (!UploadImage.isValidSize(req.file, 5)) {
-          await client.query('ROLLBACK');
-          return res.status(400).json({
-            success: false,
-            message: 'El archivo es muy grande (máximo 5MB)'
-          });
-        }
-
-        const uploadResult = await UploadImage.uploadFromBuffer(
-          req.file.buffer,
-          'comprobantes_vacacionales',
-          `comprobante_${Date.now()}`
-        );
-        comprobante_url = uploadResult.url;
-      }
-
-      // Generar código de grupo único
-      const codigo_grupo = await InscripcionVacacional.generateCodigoGrupo(client);
-
-      // Crear inscripciones para cada curso
-      const inscripciones = [];
-      for (let i = 0; i < cursos.length; i++) {
-        const curso_id = cursos[i];
-        
-        const codigo_inscripcion = await InscripcionVacacional.generateCodigoInscripcion(
-          curso_id, 
-          client
-        );
-
-        // Solo la primera inscripción tiene el monto_pagado, las demás en 0
-        const inscripcion = await InscripcionVacacional.create({
-          codigo_inscripcion,
-          codigo_grupo,
-          paquete_id: paquete_id || null,
-          curso_vacacional_id: curso_id,
-          nombres,
-          apellido_paterno,
-          apellido_materno,
-          fecha_nacimiento,
-          ci,
-          genero,
-          telefono,
-          email,
-          nombre_tutor,
-          telefono_tutor,
-          email_tutor,
-          parentesco_tutor,
-          monto_pagado: i === 0 ? monto_pagado : 0, // Solo primera inscripción tiene el pago
-          numero_comprobante: i === 0 ? numero_comprobante : null,
-          fecha_pago: i === 0 ? (fecha_pago || new Date()) : null,
-          comprobante_pago_url: i === 0 ? comprobante_url : null,
-          estado: 'pendiente',
-          observaciones
-        }, client);
-
-        await CursoVacacional.incrementarCupo(curso_id, client);
-        inscripciones.push(inscripcion);
-      }
-
-      await client.query('COMMIT');
-
-      // Log de actividad
-      if (req.user) {
-        const reqInfo = RequestInfo.extract(req);
-        await ActividadLog.create({
-          usuario_id: req.user.id,
-          accion: 'crear_inscripcion_vacacional',
-          modulo: 'curso_vacacional',
-          tabla_afectada: 'inscripcion_vacacional',
-          registro_id: inscripciones[0].id,
-          datos_nuevos: { codigo_grupo, total_cursos: cursos.length, paquete_id },
-          ip_address: reqInfo.ip,
-          user_agent: reqInfo.userAgent,
-          resultado: 'exitoso',
-          mensaje: `Inscripción grupal creada: ${codigo_grupo} - ${cursos.length} cursos`
-        });
-      }
-
-      res.status(201).json({
-        success: true,
-        message: 'Inscripción creada exitosamente',
-        data: {
-          codigo_grupo,
-          total_cursos: inscripciones.length,
-          inscripciones
-        }
-      });
+      cursos = typeof req.body.cursos === 'string' 
+        ? JSON.parse(req.body.cursos) 
+        : req.body.cursos;
     } catch (error) {
       await client.query('ROLLBACK');
-      console.error('Error al inscribir:', error);
+      return res.status(400).json({
+        success: false,
+        message: 'El formato del campo "cursos" es inválido'
+      });
+    }
 
-      if (comprobante_url) {
-        const publicId = UploadImage.extractPublicIdFromUrl(comprobante_url);
-        if (publicId) {
-          try {
-            await UploadImage.deleteImage(publicId);
-          } catch (err) {
-            console.error('Error al eliminar comprobante:', err);
-          }
-        }
+    const {
+      paquete_id,
+      nombres, apellido_paterno, apellido_materno,
+      fecha_nacimiento, ci, genero, telefono, email, nombre_tutor,
+      telefono_tutor, email_tutor, parentesco_tutor, monto_pagado,
+      numero_comprobante, fecha_pago, observaciones
+    } = req.body;
+
+    // Validaciones
+    if (!cursos || !Array.isArray(cursos) || cursos.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Debe seleccionar al menos un curso'
+      });
+    }
+
+    if (!nombres || !apellido_paterno || !fecha_nacimiento ||
+        !nombre_tutor || !telefono_tutor || !monto_pagado) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Faltan datos obligatorios'
+      });
+    }
+
+    // Validar paquete si se proporcionó
+    if (paquete_id) {
+      const paquete = await PaqueteVacacional.findById(paquete_id);
+      if (!paquete) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({
+          success: false,
+          message: 'Paquete no encontrado'
+        });
       }
 
-      res.status(500).json({
-        success: false,
-        message: 'Error al inscribir: ' + error.message
-      });
-    } finally {
-      client.release();
+      if (cursos.length !== paquete.cantidad_cursos) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `El paquete requiere exactamente ${paquete.cantidad_cursos} cursos`
+        });
+      }
     }
+
+    // Verificar disponibilidad de todos los cursos
+    for (const curso_id of cursos) {
+      const curso = await CursoVacacional.findById(curso_id);
+      if (!curso) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({
+          success: false,
+          message: `Curso con ID ${curso_id} no encontrado`
+        });
+      }
+
+      const disponibilidad = await CursoVacacional.checkDisponibilidad(curso_id);
+      if (!disponibilidad.disponible) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `El curso "${curso.nombre}" no tiene cupos disponibles`
+        });
+      }
+    }
+
+    // Subir comprobante si existe
+    if (req.file) {
+      if (!UploadImage.isValidSize(req.file, 5)) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'El archivo es muy grande (máximo 5MB)'
+        });
+      }
+
+      const uploadResult = await UploadImage.uploadFromBuffer(
+        req.file.buffer,
+        'comprobantes_vacacionales',
+        `comprobante_${Date.now()}`
+      );
+      comprobante_url = uploadResult.url;
+    }
+
+    // Generar código de grupo único
+    const codigo_grupo = await InscripcionVacacional.generateCodigoGrupo(client);
+
+    // Crear inscripciones para cada curso
+    const inscripciones = [];
+    for (let i = 0; i < cursos.length; i++) {
+      const curso_id = cursos[i];
+      
+      const codigo_inscripcion = await InscripcionVacacional.generateCodigoInscripcion(
+        curso_id, 
+        client
+      );
+
+      // Solo la primera inscripción tiene el monto_pagado, las demás en 0
+      const inscripcion = await InscripcionVacacional.create({
+        codigo_inscripcion,
+        codigo_grupo,
+        paquete_id: paquete_id || null,
+        curso_vacacional_id: curso_id,
+        nombres,
+        apellido_paterno,
+        apellido_materno,
+        fecha_nacimiento,
+        ci,
+        genero,
+        telefono,
+        email,
+        nombre_tutor,
+        telefono_tutor,
+        email_tutor,
+        parentesco_tutor,
+        monto_pagado: i === 0 ? monto_pagado : 0, // Solo primera inscripción tiene el pago
+        numero_comprobante: i === 0 ? numero_comprobante : null,
+        fecha_pago: i === 0 ? (fecha_pago || new Date()) : null,
+        comprobante_pago_url: i === 0 ? comprobante_url : null,
+        estado: 'pendiente',
+        observaciones
+      }, client);
+
+      await CursoVacacional.incrementarCupo(curso_id, client);
+      inscripciones.push(inscripcion);
+    }
+
+    await client.query('COMMIT');
+
+    // Log de actividad
+    if (req.user) {
+      const reqInfo = RequestInfo.extract(req);
+      await ActividadLog.create({
+        usuario_id: req.user.id,
+        accion: 'crear_inscripcion_vacacional',
+        modulo: 'curso_vacacional',
+        tabla_afectada: 'inscripcion_vacacional',
+        registro_id: inscripciones[0].id,
+        datos_nuevos: { codigo_grupo, total_cursos: cursos.length, paquete_id },
+        ip_address: reqInfo.ip,
+        user_agent: reqInfo.userAgent,
+        resultado: 'exitoso',
+        mensaje: `Inscripción grupal creada: ${codigo_grupo} - ${cursos.length} cursos`
+      });
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Inscripción creada exitosamente',
+      data: {
+        codigo_grupo,
+        total_cursos: inscripciones.length,
+        inscripciones
+      }
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error al inscribir:', error);
+
+    if (comprobante_url) {
+      const publicId = UploadImage.extractPublicIdFromUrl(comprobante_url);
+      if (publicId) {
+        try {
+          await UploadImage.deleteImage(publicId);
+        } catch (err) {
+          console.error('Error al eliminar comprobante:', err);
+        }
+      }
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Error al inscribir: ' + error.message
+    });
+  } finally {
+    client.release();
   }
+}
 
   static async listarInscripciones(req, res) {
     try {
