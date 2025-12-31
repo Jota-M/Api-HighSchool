@@ -22,8 +22,8 @@ import paraleloRoutes from './routes/paraleloRoutes.js';
 
 // Rutas de módulos antiguos / API
 import preinscripcionRoutes from './routes/preinscripcionRoutes.js';
-import cupoPreinscripcionRoutes from './routes/cupoPreinscripcionRoutes.js'; // 🆕
-import publicAcademicosRoutes from './routes/publicAcademicosRoutes.js'; // 🆕 Públicas
+import cupoPreinscripcionRoutes from './routes/cupoPreinscripcionRoutes.js';
+import publicAcademicosRoutes from './routes/publicAcademicosRoutes.js';
 import materiasRoutes from './routes/materiasRoutes.js';
 import gradoMateriasRoutes from './routes/gradoMateriasRoutes.js';
 import areaConocimientoRoutes from './routes/areaConocimientoRoutes.js';
@@ -47,10 +47,14 @@ import { pool } from './db/pool.js';
 
 const app = express();
 
+// ------------------------------
 // Seguridad básica
+// ------------------------------
 app.use(helmet());
 
-// Rate limit GLOBAL (permisivo para desarrollo)
+// ------------------------------
+// Rate limit GLOBAL
+// ------------------------------
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 200,
@@ -59,22 +63,29 @@ const limiter = rateLimit({
   legacyHeaders: false,
 });
 
+// ------------------------------
 // Middlewares
-app.use(express.json());
+// ------------------------------
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
 app.set('trust proxy', 1);
-
-app.use(cors({
-  origin: (origin, callback) => callback(null, true),
-  credentials: true,
-}));
-
 app.use(morgan('dev'));
 
 // ------------------------------
-//        Health helpers
+// CORS configurado para tu frontend
+// ------------------------------
+const corsOptions = {
+  origin: 'https://uepclavozdecristo.site', // tu frontend
+  credentials: true,
+  methods: ['GET','POST','PUT','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type','Authorization','X-Requested-With'],
+};
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // manejar preflight OPTIONS
+
+// ------------------------------
+// Health check endpoint
 // ------------------------------
 async function checkDatabaseHealth() {
   try {
@@ -87,11 +98,6 @@ async function checkDatabaseHealth() {
   }
 }
 
-// ------------------------------
-//        RUTAS
-// ------------------------------
-
-// Health check endpoint (ANTES de todas las rutas)
 app.get('/health', async (req, res) => {
   try {
     const dbHealth = await checkDatabaseHealth();
@@ -99,21 +105,23 @@ app.get('/health', async (req, res) => {
       success: true,
       status: dbHealth.success ? 'healthy' : 'unhealthy',
       timestamp: new Date().toISOString(),
-      database: dbHealth
+      database: dbHealth,
     });
   } catch (error) {
     res.status(503).json({
       success: false,
       status: 'unhealthy',
-      error: error.message
+      error: error.message,
     });
   }
 });
 
-// 🆕 RUTAS PÚBLICAS (sin autenticación, sin rate limit agresivo)
+// ------------------------------
+// Rutas públicas
+// ------------------------------
 app.use('/public/academicos', publicAcademicosRoutes);
 
-// Auth SIN limitador global (cada ruta tiene el suyo)
+// Auth (sin limitador global)
 app.use('/auth', authRoutes);
 
 // Global limiter para el resto
@@ -150,10 +158,10 @@ app.use('/cursos-vacacionales', cursosVacacionalesRoutes);
 
 // Rutas API antiguas
 app.use('/preinscripcion', preinscripcionRoutes);
-app.use('/cupos', cupoPreinscripcionRoutes); // 🆕 Cupos de preinscripción
+app.use('/cupos', cupoPreinscripcionRoutes);
 
 // ------------------------------
-//        Errores / fallback
+// Manejo de errores / fallback 404
 // ------------------------------
 app.use((req, res) => {
   res.status(404).json({ success: false, message: 'Ruta no encontrada' });
@@ -168,7 +176,9 @@ app.use((err, req, res, next) => {
   });
 });
 
+// ------------------------------
 // Limpieza de sesiones expiradas
+// ------------------------------
 setInterval(async () => {
   try {
     await Sesion.cleanExpired();
