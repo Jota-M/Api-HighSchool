@@ -74,6 +74,24 @@ app.use(morgan('dev'));
 //          RUTAS
 // ------------------------------
 
+// Health check endpoint (ANTES de todas las rutas)
+app.get('/health', async (req, res) => {
+  try {
+    const dbHealth = await checkDatabaseHealth();
+    res.status(dbHealth.success ? 200 : 503).json({
+      success: true,
+      status: dbHealth.success ? 'healthy' : 'unhealthy',
+      timestamp: new Date().toISOString(),
+      database: dbHealth
+    });
+  } catch (error) {
+    res.status(503).json({
+      success: false,
+      status: 'unhealthy',
+      error: error.message
+    });
+  }
+});
 // 🆕 RUTAS PÚBLICAS (sin autenticación, sin rate limit agresivo)
 app.use('/public/academicos', publicAcademicosRoutes);
 
