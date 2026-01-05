@@ -13,11 +13,11 @@ function ask(q) {
 async function seedPaquetesVacacionales() {
   const client = await pool.connect();
   try {
-    console.log('\n📦 AGREGAR PAQUETES VACACIONALES');
+    console.log('\n📦 AGREGAR PAQUETES VACACIONALES Y CAMPOS DE PAGO');
     console.log('Se realizarán los siguientes cambios:');
     console.log('1. Crear tabla paquete_vacacional');
     console.log('2. Insertar 3 paquetes (1, 2 y 3 cursos)');
-    console.log('3. Agregar campos paquete_id y codigo_grupo a inscripcion_vacacional');
+    console.log('3. Agregar campos a inscripcion_vacacional');
     console.log('4. Crear índice para codigo_grupo\n');
 
     const confirm = await ask('¿Deseas continuar? (SI para confirmar): ');
@@ -30,7 +30,7 @@ async function seedPaquetesVacacionales() {
     await client.query('BEGIN');
     console.log('\n⏳ Procesando...');
 
-    // 1️⃣ Crear tabla paquete_vacacional si no existe
+    // 1️⃣ Crear tabla paquete_vacacional
     console.log('📋 Creando tabla paquete_vacacional...');
     await client.query(`
       CREATE TABLE IF NOT EXISTS paquete_vacacional (
@@ -45,9 +45,8 @@ async function seedPaquetesVacacionales() {
     `);
     console.log('✅ Tabla paquete_vacacional creada/verificada');
 
-    // 2️⃣ Insertar paquetes si no existen
+    // 2️⃣ Insertar paquetes
     console.log('📦 Insertando paquetes...');
-    
     const paquetes = [
       { nombre: 'Paquete 3 Cursos', cantidad: 3, precio: 400.00 },
       { nombre: 'Paquete 2 Cursos', cantidad: 2, precio: 350.00 },
@@ -62,7 +61,8 @@ async function seedPaquetesVacacionales() {
 
       if (exists.rows.length === 0) {
         await client.query(
-          `INSERT INTO paquete_vacacional (nombre, cantidad_cursos, precio, activo, created_at, updated_at)
+          `INSERT INTO paquete_vacacional 
+           (nombre, cantidad_cursos, precio, activo, created_at, updated_at)
            VALUES ($1, $2, $3, TRUE, NOW(), NOW())`,
           [paquete.nombre, paquete.cantidad, paquete.precio]
         );
@@ -72,20 +72,19 @@ async function seedPaquetesVacacionales() {
       }
     }
 
-    // 3️⃣ Agregar columnas a inscripcion_vacacional si no existen
+    // 3️⃣ Modificar tabla inscripcion_vacacional
     console.log('🔧 Modificando tabla inscripcion_vacacional...');
-    
-    // Verificar si la columna paquete_id existe
-    const columnCheck1 = await client.query(`
-      SELECT column_name 
-      FROM information_schema.columns 
-      WHERE table_name = 'inscripcion_vacacional' 
+
+    // paquete_id
+    const paqueteIdCheck = await client.query(`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'inscripcion_vacacional'
       AND column_name = 'paquete_id'
     `);
 
-    if (columnCheck1.rows.length === 0) {
+    if (paqueteIdCheck.rows.length === 0) {
       await client.query(`
-        ALTER TABLE inscripcion_vacacional 
+        ALTER TABLE inscripcion_vacacional
         ADD COLUMN paquete_id INTEGER REFERENCES paquete_vacacional(id)
       `);
       console.log('  ✓ Columna paquete_id agregada');
@@ -93,17 +92,16 @@ async function seedPaquetesVacacionales() {
       console.log('  ⚠️ Columna paquete_id ya existe');
     }
 
-    // Verificar si la columna codigo_grupo existe
-    const columnCheck2 = await client.query(`
-      SELECT column_name 
-      FROM information_schema.columns 
-      WHERE table_name = 'inscripcion_vacacional' 
+    // codigo_grupo
+    const codigoGrupoCheck = await client.query(`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'inscripcion_vacacional'
       AND column_name = 'codigo_grupo'
     `);
 
-    if (columnCheck2.rows.length === 0) {
+    if (codigoGrupoCheck.rows.length === 0) {
       await client.query(`
-        ALTER TABLE inscripcion_vacacional 
+        ALTER TABLE inscripcion_vacacional
         ADD COLUMN codigo_grupo VARCHAR(50)
       `);
       console.log('  ✓ Columna codigo_grupo agregada');
@@ -111,18 +109,70 @@ async function seedPaquetesVacacionales() {
       console.log('  ⚠️ Columna codigo_grupo ya existe');
     }
 
-    // 4️⃣ Crear índice si no existe
+    // metodo_pago
+    const metodoPagoCheck = await client.query(`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'inscripcion_vacacional'
+      AND column_name = 'metodo_pago'
+    `);
+
+    if (metodoPagoCheck.rows.length === 0) {
+      await client.query(`
+        ALTER TABLE inscripcion_vacacional
+        ADD COLUMN metodo_pago VARCHAR(20) DEFAULT 'transferencia',
+        ADD CONSTRAINT chk_metodo_pago
+          CHECK (metodo_pago IN ('transferencia', 'efectivo', 'qr', 'tarjeta'))
+      `);
+      console.log('  ✓ Columna metodo_pago agregada');
+    } else {
+      console.log('  ⚠️ Columna metodo_pago ya existe');
+    }
+
+    // recibo_interno
+    const reciboCheck = await client.query(`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'inscripcion_vacacional'
+      AND column_name = 'recibo_interno'
+    `);
+
+    if (reciboCheck.rows.length === 0) {
+      await client.query(`
+        ALTER TABLE inscripcion_vacacional
+        ADD COLUMN recibo_interno VARCHAR(50)
+      `);
+      console.log('  ✓ Columna recibo_interno agregada');
+    } else {
+      console.log('  ⚠️ Columna recibo_interno ya existe');
+    }
+
+    // observaciones_pago
+    const observacionesCheck = await client.query(`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'inscripcion_vacacional'
+      AND column_name = 'observaciones_pago'
+    `);
+
+    if (observacionesCheck.rows.length === 0) {
+      await client.query(`
+        ALTER TABLE inscripcion_vacacional
+        ADD COLUMN observaciones_pago TEXT
+      `);
+      console.log('  ✓ Columna observaciones_pago agregada');
+    } else {
+      console.log('  ⚠️ Columna observaciones_pago ya existe');
+    }
+
+    // 4️⃣ Crear índice
     console.log('📇 Creando índice...');
     const indexCheck = await client.query(`
-      SELECT indexname 
-      FROM pg_indexes 
-      WHERE tablename = 'inscripcion_vacacional' 
+      SELECT indexname FROM pg_indexes
+      WHERE tablename = 'inscripcion_vacacional'
       AND indexname = 'idx_inscripcion_codigo_grupo'
     `);
 
     if (indexCheck.rows.length === 0) {
       await client.query(`
-        CREATE INDEX idx_inscripcion_codigo_grupo 
+        CREATE INDEX idx_inscripcion_codigo_grupo
         ON inscripcion_vacacional(codigo_grupo)
       `);
       console.log('  ✓ Índice idx_inscripcion_codigo_grupo creado');
@@ -132,18 +182,13 @@ async function seedPaquetesVacacionales() {
 
     await client.query('COMMIT');
 
-    console.log('\n✅ ¡Operación completada con éxito!');
-    console.log('\n📊 Resumen:');
-    console.log('  • Tabla paquete_vacacional creada');
-    console.log('  • 3 paquetes insertados (400, 350, 250 Bs)');
-    console.log('  • Campos paquete_id y codigo_grupo agregados');
-    console.log('  • Índice de búsqueda creado');
-    console.log('\n🎯 Sistema de paquetes vacacionales listo para usar.');
+    console.log('\n✅ ¡Seed ejecutado con éxito!');
+    console.log('🎯 Paquetes vacacionales y sistema de pagos listos.');
 
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('\n💥 Error en la operación:', error.message);
-    console.error('Stack:', error.stack);
+    console.error(error.stack);
   } finally {
     client.release();
     rl.close();

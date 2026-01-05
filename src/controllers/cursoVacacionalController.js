@@ -641,7 +641,6 @@ static async inscribir(req, res) {
   try {
     await client.query('BEGIN');
 
-    // ⚠️ IMPORTANTE: Parsear 'cursos' que viene como string JSON desde FormData
     let cursos;
     try {
       cursos = typeof req.body.cursos === 'string' 
@@ -660,10 +659,14 @@ static async inscribir(req, res) {
       nombres, apellido_paterno, apellido_materno,
       fecha_nacimiento, ci, genero, telefono, email, nombre_tutor,
       telefono_tutor, email_tutor, parentesco_tutor, monto_pagado,
-      numero_comprobante, fecha_pago, observaciones
+      metodo_pago, // NUEVO
+      numero_comprobante, 
+      observaciones_pago, // NUEVO
+      fecha_pago, 
+      observaciones
     } = req.body;
 
-    // Validaciones
+    // Validaciones básicas
     if (!cursos || !Array.isArray(cursos) || cursos.length === 0) {
       await client.query('ROLLBACK');
       return res.status(400).json({
@@ -678,6 +681,46 @@ static async inscribir(req, res) {
       return res.status(400).json({
         success: false,
         message: 'Faltan datos obligatorios'
+      });
+    }
+
+    // Validar método de pago
+    const metodosValidos = ['transferencia', 'efectivo', 'qr', 'tarjeta'];
+    const metodo = metodo_pago || 'transferencia';
+    
+    if (!metodosValidos.includes(metodo)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Método de pago inválido'
+      });
+    }
+
+    // Validaciones según método de pago
+    if (metodo === 'transferencia' || metodo === 'qr') {
+      if (!numero_comprobante) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'El número de comprobante es obligatorio para transferencias/QR'
+        });
+      }
+      
+      if (!req.file) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Debe adjuntar el comprobante de pago'
+        });
+      }
+    }
+
+    // Para pagos en efectivo, validar que sea usuario autenticado (admin)
+    if (metodo === 'efectivo' && !req.user) {
+      await client.query('ROLLBACK');
+      return res.status(401).json({
+        success: false,
+        message: 'Los pagos en efectivo solo pueden ser registrados por administradores'
       });
     }
 
@@ -722,7 +765,7 @@ static async inscribir(req, res) {
       }
     }
 
-    // Subir comprobante si existe
+    // Subir comprobante si existe (transferencia/QR)
     if (req.file) {
       if (!UploadImage.isValidSize(req.file, 5)) {
         await client.query('ROLLBACK');
@@ -740,8 +783,26 @@ static async inscribir(req, res) {
       comprobante_url = uploadResult.url;
     }
 
-    // Generar código de grupo único
+    // Generar códigos
     const codigo_grupo = await InscripcionVacacional.generateCodigoGrupo(client);
+    
+    // Generar recibo interno solo para pagos en efectivo
+    let recibo_interno = null;
+    if (metodo === 'efectivo') {
+      recibo_interno = await InscripcionVacacional.generateReciboInterno(client);
+    }
+
+    // Determinar estado inicial según método de pago
+    let estado_inicial = 'pendiente';
+    let pago_verificado = false;
+    let verificado_por = null;
+
+    if (metodo === 'efectivo' && req.user) {
+      // Pagos en efectivo registrados por admin se marcan como verificados automáticamente
+      estado_inicial = 'pago_verificado';
+      pago_verificado = true;
+      verificado_por = req.user.id;
+    }
 
     // Crear inscripciones para cada curso
     const inscripciones = [];
@@ -753,7 +814,6 @@ static async inscribir(req, res) {
         client
       );
 
-      // Solo la primera inscripción tiene el monto_pagado, las demás en 0
       const inscripcion = await InscripcionVacacional.create({
         codigo_inscripcion,
         codigo_grupo,
@@ -771,11 +831,17 @@ static async inscribir(req, res) {
         telefono_tutor,
         email_tutor,
         parentesco_tutor,
-        monto_pagado: i === 0 ? monto_pagado : 0, // Solo primera inscripción tiene el pago
+        monto_pagado: i === 0 ? monto_pagado : 0,
+        metodo_pago: metodo,
         numero_comprobante: i === 0 ? numero_comprobante : null,
+        recibo_interno: i === 0 ? recibo_interno : null,
         fecha_pago: i === 0 ? (fecha_pago || new Date()) : null,
         comprobante_pago_url: i === 0 ? comprobante_url : null,
-        estado: 'pendiente',
+        observaciones_pago: i === 0 ? observaciones_pago : null,
+        estado: estado_inicial,
+        pago_verificado,
+        verificado_por,
+        fecha_verificacion: pago_verificado ? new Date() : null,
         observaciones
       }, client);
 
@@ -794,21 +860,32 @@ static async inscribir(req, res) {
         modulo: 'curso_vacacional',
         tabla_afectada: 'inscripcion_vacacional',
         registro_id: inscripciones[0].id,
-        datos_nuevos: { codigo_grupo, total_cursos: cursos.length, paquete_id },
+        datos_nuevos: { 
+          codigo_grupo, 
+          total_cursos: cursos.length, 
+          paquete_id,
+          metodo_pago: metodo,
+          recibo_interno
+        },
         ip_address: reqInfo.ip,
         user_agent: reqInfo.userAgent,
         resultado: 'exitoso',
-        mensaje: `Inscripción grupal creada: ${codigo_grupo} - ${cursos.length} cursos`
+        mensaje: `Inscripción grupal creada: ${codigo_grupo} - ${cursos.length} cursos - ${metodo}`
       });
     }
 
     res.status(201).json({
       success: true,
-      message: 'Inscripción creada exitosamente',
+      message: metodo === 'efectivo' 
+        ? 'Inscripción creada y pago en efectivo registrado exitosamente'
+        : 'Inscripción creada exitosamente. El pago será verificado pronto.',
       data: {
         codigo_grupo,
+        recibo_interno,
+        metodo_pago: metodo,
         total_cursos: inscripciones.length,
-        inscripciones
+        inscripciones,
+        requiere_verificacion: metodo !== 'efectivo'
       }
     });
   } catch (error) {

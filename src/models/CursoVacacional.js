@@ -464,38 +464,110 @@ class CursoVacacional {
 // =============================================
 class InscripcionVacacional {
   static async create(data, client = null) {
-    const conn = client || pool;
+  const conn = client || pool;
 
-    const {
+  const {
+    codigo_inscripcion, codigo_grupo, paquete_id, curso_vacacional_id,
+    nombres, apellido_paterno, apellido_materno, fecha_nacimiento, ci,
+    genero, telefono, email, nombre_tutor, telefono_tutor, email_tutor,
+    parentesco_tutor, monto_pagado, 
+    metodo_pago, 
+    numero_comprobante, 
+    recibo_interno,
+    fecha_pago,
+    comprobante_pago_url, 
+    observaciones_pago,
+    estado, 
+    observaciones,
+    // ✅ NUEVOS CAMPOS PARA EFECTIVO
+    pago_verificado,
+    verificado_por,
+    fecha_verificacion,
+  } = data;
+
+  const query = `
+    INSERT INTO inscripcion_vacacional (
       codigo_inscripcion, codigo_grupo, paquete_id, curso_vacacional_id,
       nombres, apellido_paterno, apellido_materno, fecha_nacimiento, ci,
       genero, telefono, email, nombre_tutor, telefono_tutor, email_tutor,
-      parentesco_tutor, monto_pagado, numero_comprobante, fecha_pago,
-      comprobante_pago_url, estado, observaciones
-    } = data;
+      parentesco_tutor, monto_pagado, 
+      metodo_pago, numero_comprobante, recibo_interno,
+      fecha_pago, comprobante_pago_url, observaciones_pago,
+      estado, observaciones,
+      pago_verificado, verificado_por, fecha_verificacion
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 
+            $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)
+    RETURNING *
+  `;
 
-    const query = `
-      INSERT INTO inscripcion_vacacional (
-        codigo_inscripcion, codigo_grupo, paquete_id, curso_vacacional_id,
-        nombres, apellido_paterno, apellido_materno, fecha_nacimiento, ci,
-        genero, telefono, email, nombre_tutor, telefono_tutor, email_tutor,
-        parentesco_tutor, monto_pagado, numero_comprobante, fecha_pago,
-        comprobante_pago_url, estado, observaciones
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
-      RETURNING *
-    `;
+  const result = await conn.query(query, [
+    codigo_inscripcion, 
+    codigo_grupo, 
+    paquete_id, 
+    curso_vacacional_id,
+    nombres, 
+    apellido_paterno, 
+    apellido_materno, 
+    fecha_nacimiento, 
+    ci,
+    genero, 
+    telefono, 
+    email, 
+    nombre_tutor, 
+    telefono_tutor, 
+    email_tutor,
+    parentesco_tutor, 
+    monto_pagado,
+    metodo_pago || 'transferencia',
+    numero_comprobante,
+    recibo_interno,
+    fecha_pago,
+    comprobante_pago_url,
+    observaciones_pago,
+    estado || 'pendiente', 
+    observaciones,
+    // ✅ VALORES PARA PAGOS EN EFECTIVO
+    pago_verificado || false,
+    verificado_por || null,
+    fecha_verificacion || null,
+  ]);
 
-    const result = await conn.query(query, [
-      codigo_inscripcion, codigo_grupo, paquete_id, curso_vacacional_id,
-      nombres, apellido_paterno, apellido_materno, fecha_nacimiento, ci,
-      genero, telefono, email, nombre_tutor, telefono_tutor, email_tutor,
-      parentesco_tutor, monto_pagado, numero_comprobante, fecha_pago,
-      comprobante_pago_url, estado || 'pendiente', observaciones
-    ]);
+  return result.rows[0];
+}
 
-    return result.rows[0];
+// Agregar método para generar recibo interno
+static async generateReciboInterno(client = null) {
+  const conn = client || pool;
+
+  if (client) {
+    await client.query('LOCK TABLE inscripcion_vacacional IN SHARE ROW EXCLUSIVE MODE');
   }
+
+  const query = `
+    SELECT recibo_interno 
+    FROM inscripcion_vacacional 
+    WHERE recibo_interno IS NOT NULL
+      AND metodo_pago = 'efectivo'
+    ORDER BY recibo_interno DESC 
+    LIMIT 1
+  `;
+
+  const result = await conn.query(query);
+
+  if (result.rows.length === 0) {
+    const year = new Date().getFullYear();
+    return `REC-EF-${year}-0001`;
+  }
+
+  const lastRecibo = result.rows[0].recibo_interno;
+  const parts = lastRecibo.split('-');
+  const lastNum = parseInt(parts[parts.length - 1]);
+  const newNum = (lastNum + 1).toString().padStart(4, '0');
+  const year = new Date().getFullYear();
+
+  return `REC-EF-${year}-${newNum}`;
+}
 
   static async generateCodigoInscripcion(curso_id, client = null) {
     const conn = client || pool;

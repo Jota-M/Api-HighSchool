@@ -1,6 +1,7 @@
 // routes/cursoVacacionalRoutes.js
 import express from 'express';
 import CursoVacacionalController from '../controllers/cursoVacacionalController.js';
+import InscripcionVacacionalPDFController from '../controllers/inscripcionVacacionalPDFController.js';
 import { authenticate, authorize, logActivity } from '../Middlewares/auth.js';
 import { upload, handleMulterError } from '../Middlewares/uploadMiddleware.js';
 
@@ -44,6 +45,12 @@ router.post(
   upload.single('comprobante'),
   handleMulterError,
   CursoVacacionalController.inscribir
+);
+
+// ✅ PDF PÚBLICO (sin autenticación)
+router.get(
+  '/publico/inscripciones/:id/pdf',
+  InscripcionVacacionalPDFController.generarPDF
 );
 
 // ==========================================
@@ -209,7 +216,6 @@ router.get(
   CursoVacacionalController.obtenerInscripcion
 );
 
-// Nueva ruta para obtener todas las inscripciones de un grupo
 router.get(
   '/inscripciones/grupo/:codigo_grupo',
   authenticate,
@@ -247,6 +253,26 @@ router.delete(
   authorize('curso_vacacional.eliminar'),
   logActivity('eliminar_inscripcion_vacacional', 'inscripcion_vacacional'),
   CursoVacacionalController.eliminarInscripcion
+);
+
+// ==========================================
+// ✅ RUTAS PDF (protegidas)
+// ==========================================
+
+// Descargar PDF del recibo
+router.get(
+  '/inscripciones/:id/pdf',
+  authenticate,
+  authorize('curso_vacacional.ver'),
+  InscripcionVacacionalPDFController.generarPDF
+);
+
+// Ver PDF en el navegador (preview)
+router.get(
+  '/inscripciones/:id/pdf/preview',
+  authenticate,
+  authorize('curso_vacacional.ver'),
+  InscripcionVacacionalPDFController.verPDFPreview
 );
 
 export default router;
