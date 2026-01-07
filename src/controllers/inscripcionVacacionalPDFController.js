@@ -263,7 +263,7 @@ class InscripcionVacacionalPDFController {
     doc.fontSize(9)
        .font('Helvetica')
        .fillColor(lightGray)
-       .text('$us', 500, currentY + 16);
+       .text('', 500, currentY + 16);
 
     currentY += 50;
 
@@ -454,9 +454,13 @@ class InscripcionVacacionalPDFController {
        .font('Helvetica')
        .fillColor(lightGray)
        .text('Nombre y Apellido:', 80, firmaY + 45);
+    doc.fontSize(8)
+       .font('Helvetica-Bold')
+       .fillColor(darkGray)
+       .text("Patricia Ramírez Villca", 80, firmaY + 56, { width: 160 });
 
     doc.fontSize(7)
-       .text('C.I.:', 80, firmaY + 58);
+       .text('C.I.: 5070770', 80, firmaY + 68);
 
     // Sección RECIBÍ CONFORME
     doc.fontSize(8)
@@ -483,7 +487,7 @@ class InscripcionVacacionalPDFController {
     doc.fontSize(7)
        .font('Helvetica')
        .fillColor(lightGray)
-       .text(`C.I.: ${inscripcion.ci || ''}`, 360, firmaY + 68);
+       .text(`C.I.: ${inscripcion.email_tutor || ''}`, 360, firmaY + 68);
 
     // PIE DE PÁGINA
     const footerY = 730;
