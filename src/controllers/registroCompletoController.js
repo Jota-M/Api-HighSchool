@@ -208,11 +208,11 @@ class RegistroCompletoController {
               email: tutor.email,
               direccion: tutor.direccion,
               ocupacion: tutor.ocupacion,
-              lugar_trabajo: tutor.lugar_trabajo,
-              telefono_trabajo: tutor.telefono_trabajo,
+              // lugar_trabajo: tutor.lugar_trabajo,
+              // telefono_trabajo: tutor.telefono_trabajo,
               parentesco: tutor.parentesco,
               estado_civil: tutor.estado_civil,
-              nivel_educacion: tutor.nivel_educacion
+              // nivel_educacion: tutor.nivel_educacion
             }, client);
 
             tutor_id = nuevoTutor.id;
@@ -347,6 +347,7 @@ class RegistroCompletoController {
           apellido_paterno: estudiante.apellido_paterno,
           apellido_materno: estudiante.apellido_materno,
           fecha_nacimiento: estudiante.fecha_nacimiento,
+          rude: estudiante.rude,
           ci: estudiante.ci,
           lugar_nacimiento: estudiante.lugar_nacimiento,
           genero: estudiante.genero,
@@ -357,7 +358,7 @@ class RegistroCompletoController {
           email: estudiante.email,
           foto_url: foto_url,
           contacto_emergencia: estudiante.contacto_emergencia,
-          telefono_emergencia: estudiante.telefono_emergencia,
+          // telefono_emergencia: estudiante.telefono_emergencia,
           tiene_discapacidad: estudiante.tiene_discapacidad,
           tipo_discapacidad: estudiante.tipo_discapacidad,
           observaciones: estudiante.observaciones,

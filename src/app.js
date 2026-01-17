@@ -37,6 +37,7 @@ import matriculacionRoutes from './routes/matriculacionRoutes.js';
 import autoMatriculacionRoutes from './routes/autoMatriculacionRoutes.js';
 import cursosVacacionalesRoutes from './routes/cursoVacacionalRoutes.js';
 import reportesRoutes from './routes/reportesRoutes.js';
+import paymentRoutes from './routes/paymentRoutes.js';
 
 // Modelo para limpieza de sesiones
 import Sesion from './models/Sesion.js';
@@ -66,7 +67,7 @@ app.use(morgan('dev'));
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', 'https://uepclavozdecristo.site');
   res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
 
   // Manejar preflight requests
@@ -169,6 +170,7 @@ app.use('/auto-matriculacion', autoMatriculacionRoutes);
 app.use('/docente', docenteRoutes);
 app.use('/asignacion-docente', asignacionDocenteRoutes);
 app.use('/cursos-vacacionales', cursosVacacionalesRoutes);
+app.use('/api', paymentRoutes);
 
 // ------------------------------
 // Rutas API antiguas

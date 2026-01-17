@@ -111,109 +111,117 @@ class Matricula {
 
   // Listar matrículas con filtros
   static async findAll(filters = {}) {
-    const { 
-      page = 1, limit = 10, search, periodo_academico_id, 
-      paralelo_id, grado_id, nivel_academico_id, estado 
-    } = filters;
-    const offset = (page - 1) * limit;
+  const { 
+    page = 1, limit = 10, search, periodo_academico_id, 
+    paralelo_id, grado_id, nivel_academico_id, estado,
+    estudiante_id  // ✅ AGREGAR AQUÍ
+  } = filters;
+  const offset = (page - 1) * limit;
 
-    let whereConditions = ['m.deleted_at IS NULL'];
-    let queryParams = [];
-    let paramCounter = 1;
+  let whereConditions = ['m.deleted_at IS NULL'];
+  let queryParams = [];
+  let paramCounter = 1;
 
-    if (search) {
-      whereConditions.push(`(
-        e.nombres ILIKE $${paramCounter} OR 
-        e.apellido_paterno ILIKE $${paramCounter} OR 
-        e.apellido_materno ILIKE $${paramCounter} OR
-        e.codigo ILIKE $${paramCounter} OR
-        m.numero_matricula ILIKE $${paramCounter}
-      )`);
-      queryParams.push(`%${search}%`);
-      paramCounter++;
-    }
-
-    if (periodo_academico_id) {
-      whereConditions.push(`m.periodo_academico_id = $${paramCounter}`);
-      queryParams.push(periodo_academico_id);
-      paramCounter++;
-    }
-
-    if (paralelo_id) {
-      whereConditions.push(`m.paralelo_id = $${paramCounter}`);
-      queryParams.push(paralelo_id);
-      paramCounter++;
-    }
-
-    if (grado_id) {
-      whereConditions.push(`p.grado_id = $${paramCounter}`);
-      queryParams.push(grado_id);
-      paramCounter++;
-    }
-
-    if (nivel_academico_id) {
-      whereConditions.push(`g.nivel_academico_id = $${paramCounter}`);
-      queryParams.push(nivel_academico_id);
-      paramCounter++;
-    }
-
-    if (estado) {
-      whereConditions.push(`m.estado = $${paramCounter}`);
-      queryParams.push(estado);
-      paramCounter++;
-    }
-
-    const whereClause = whereConditions.join(' AND ');
-
-    const countQuery = `
-      SELECT COUNT(*)
-      FROM matricula m
-      INNER JOIN estudiante e ON m.estudiante_id = e.id
-      INNER JOIN paralelo p ON m.paralelo_id = p.id
-      INNER JOIN grado g ON p.grado_id = g.id
-      WHERE ${whereClause}
-    `;
-    const countResult = await pool.query(countQuery, queryParams);
-    const total = parseInt(countResult.rows[0].count);
-
-    const dataQuery = `
-      SELECT m.*,
-        e.codigo as estudiante_codigo,
-        e.nombres as estudiante_nombres,
-        e.apellido_paterno as estudiante_apellido_paterno,
-        e.apellido_materno as estudiante_apellido_materno,
-        e.foto_url as estudiante_foto,
-        pa.nombre as periodo_nombre,
-        pa.codigo as periodo_codigo,
-        p.nombre as paralelo_nombre,
-        p.aula,
-        g.nombre as grado_nombre,
-        n.nombre as nivel_nombre,
-        t.nombre as turno_nombre
-      FROM matricula m
-      INNER JOIN estudiante e ON m.estudiante_id = e.id
-      INNER JOIN periodo_academico pa ON m.periodo_academico_id = pa.id
-      INNER JOIN paralelo p ON m.paralelo_id = p.id
-      INNER JOIN grado g ON p.grado_id = g.id
-      INNER JOIN nivel_academico n ON g.nivel_academico_id = n.id
-      INNER JOIN turno t ON p.turno_id = t.id
-      WHERE ${whereClause}
-      ORDER BY e.apellido_paterno, e.apellido_materno, e.nombres
-      LIMIT $${paramCounter} OFFSET $${paramCounter + 1}
-    `;
-
-    const result = await pool.query(dataQuery, [...queryParams, limit, offset]);
-
-    return {
-      matriculas: result.rows,
-      paginacion: {
-        total,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        totalPages: Math.ceil(total / limit)
-      }
-    };
+  if (search) {
+    whereConditions.push(`(
+      e.nombres ILIKE $${paramCounter} OR 
+      e.apellido_paterno ILIKE $${paramCounter} OR 
+      e.apellido_materno ILIKE $${paramCounter} OR
+      e.codigo ILIKE $${paramCounter} OR
+      m.numero_matricula ILIKE $${paramCounter}
+    )`);
+    queryParams.push(`%${search}%`);
+    paramCounter++;
   }
+
+  // ✅ AGREGAR ESTA CONDICIÓN
+  if (estudiante_id) {
+    whereConditions.push(`m.estudiante_id = $${paramCounter}`);
+    queryParams.push(estudiante_id);
+    paramCounter++;
+  }
+
+  if (periodo_academico_id) {
+    whereConditions.push(`m.periodo_academico_id = $${paramCounter}`);
+    queryParams.push(periodo_academico_id);
+    paramCounter++;
+  }
+
+  if (paralelo_id) {
+    whereConditions.push(`m.paralelo_id = $${paramCounter}`);
+    queryParams.push(paralelo_id);
+    paramCounter++;
+  }
+
+  if (grado_id) {
+    whereConditions.push(`p.grado_id = $${paramCounter}`);
+    queryParams.push(grado_id);
+    paramCounter++;
+  }
+
+  if (nivel_academico_id) {
+    whereConditions.push(`g.nivel_academico_id = $${paramCounter}`);
+    queryParams.push(nivel_academico_id);
+    paramCounter++;
+  }
+
+  if (estado) {
+    whereConditions.push(`m.estado = $${paramCounter}`);
+    queryParams.push(estado);
+    paramCounter++;
+  }
+
+  const whereClause = whereConditions.join(' AND ');
+
+  const countQuery = `
+    SELECT COUNT(*)
+    FROM matricula m
+    INNER JOIN estudiante e ON m.estudiante_id = e.id
+    INNER JOIN paralelo p ON m.paralelo_id = p.id
+    INNER JOIN grado g ON p.grado_id = g.id
+    WHERE ${whereClause}
+  `;
+  const countResult = await pool.query(countQuery, queryParams);
+  const total = parseInt(countResult.rows[0].count);
+
+  const dataQuery = `
+    SELECT m.*,
+      e.codigo as estudiante_codigo,
+      e.nombres as estudiante_nombres,
+      e.apellido_paterno as estudiante_apellido_paterno,
+      e.apellido_materno as estudiante_apellido_materno,
+      e.foto_url as estudiante_foto,
+      pa.nombre as periodo_nombre,
+      pa.codigo as periodo_codigo,
+      p.nombre as paralelo_nombre,
+      p.aula,
+      g.nombre as grado_nombre,
+      n.nombre as nivel_nombre,
+      t.nombre as turno_nombre
+    FROM matricula m
+    INNER JOIN estudiante e ON m.estudiante_id = e.id
+    INNER JOIN periodo_academico pa ON m.periodo_academico_id = pa.id
+    INNER JOIN paralelo p ON m.paralelo_id = p.id
+    INNER JOIN grado g ON p.grado_id = g.id
+    INNER JOIN nivel_academico n ON g.nivel_academico_id = n.id
+    INNER JOIN turno t ON p.turno_id = t.id
+    WHERE ${whereClause}
+    ORDER BY e.apellido_paterno, e.apellido_materno, e.nombres
+    LIMIT $${paramCounter} OFFSET $${paramCounter + 1}
+  `;
+
+  const result = await pool.query(dataQuery, [...queryParams, limit, offset]);
+
+  return {
+    matriculas: result.rows,
+    paginacion: {
+      total,
+      page: parseInt(page),
+      limit: parseInt(limit),
+      totalPages: Math.ceil(total / limit)
+    }
+  };
+}
 
   // Buscar por ID con información completa
   static async findById(id) {

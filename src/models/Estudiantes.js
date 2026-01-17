@@ -5,38 +5,90 @@ class Estudiante {
   // CREAR ESTUDIANTE - VERSIÓN ÚNICA Y CORRECTA
   // =============================================
   static async create(data, client = null) {
-    const conn = client || pool;
-    
-    const {
-      usuario_id, codigo, nombres, apellido_paterno, apellido_materno,
-      fecha_nacimiento, ci, lugar_nacimiento, genero, direccion, zona,
-      ciudad, telefono, email, foto_url, contacto_emergencia,
-      telefono_emergencia, tiene_discapacidad, tipo_discapacidad,
-      observaciones, activo
-    } = data;
+  const conn = client || pool;
 
-    const query = `
-      INSERT INTO estudiante (
-        usuario_id, codigo, nombres, apellido_paterno, apellido_materno,
-        fecha_nacimiento, ci, lugar_nacimiento, genero, direccion, zona,
-        ciudad, telefono, email, foto_url, contacto_emergencia,
-        telefono_emergencia, tiene_discapacidad, tipo_discapacidad,
-        observaciones, activo
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
-      RETURNING *
-    `;
+  const {
+    usuario_id,
+    codigo,
+    rude, // ✅ NUEVO
+    nombres,
+    apellido_paterno,
+    apellido_materno,
+    fecha_nacimiento,
+    ci,
+    lugar_nacimiento,
+    genero,
+    direccion,
+    zona,
+    ciudad,
+    telefono,
+    email,
+    foto_url,
+    contacto_emergencia,
+    tiene_discapacidad,
+    tipo_discapacidad,
+    observaciones,
+    activo
+  } = data;
 
-    const result = await conn.query(query, [
-      usuario_id, codigo, nombres, apellido_paterno, apellido_materno,
-      fecha_nacimiento, ci, lugar_nacimiento, genero, direccion, zona,
-      ciudad, telefono, email, foto_url, contacto_emergencia,
-      telefono_emergencia, tiene_discapacidad ?? false, tipo_discapacidad,
-      observaciones, activo ?? true
-    ]);
+  const query = `
+    INSERT INTO estudiante (
+      usuario_id,
+      codigo,
+      rude,
+      nombres,
+      apellido_paterno,
+      apellido_materno,
+      fecha_nacimiento,
+      ci,
+      lugar_nacimiento,
+      genero,
+      direccion,
+      zona,
+      ciudad,
+      telefono,
+      email,
+      foto_url,
+      contacto_emergencia,
+      tiene_discapacidad,
+      tipo_discapacidad,
+      observaciones,
+      activo
+    )
+    VALUES (
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+      $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21
+    )
+    RETURNING *
+  `;
 
-    return result.rows[0];
-  }
+  const result = await conn.query(query, [
+    usuario_id,
+    codigo,
+    rude ?? null, // ✅
+    nombres,
+    apellido_paterno,
+    apellido_materno,
+    fecha_nacimiento,
+    ci,
+    lugar_nacimiento,
+    genero,
+    direccion,
+    zona,
+    ciudad,
+    telefono,
+    email,
+    foto_url,
+    contacto_emergencia,
+    tiene_discapacidad ?? false,
+    tipo_discapacidad,
+    observaciones,
+    activo ?? true
+  ]);
+
+  return result.rows[0];
+}
+
 
   // =============================================
   // GENERAR CÓDIGO CON BLOQUEO (PARA TRANSACCIONES)
@@ -241,38 +293,80 @@ class Estudiante {
   // ACTUALIZAR ESTUDIANTE
   // =============================================
   static async update(id, data) {
-    const {
-      nombres, apellido_paterno, apellido_materno, fecha_nacimiento,
-      ci, lugar_nacimiento, genero, direccion, zona, ciudad,
-      telefono, email, foto_url, contacto_emergencia,
-      telefono_emergencia, tiene_discapacidad, tipo_discapacidad,
-      observaciones, activo
-    } = data;
+  const {
+    rude, // ✅ AÑADIDO
+    nombres,
+    apellido_paterno,
+    apellido_materno,
+    fecha_nacimiento,
+    ci,
+    lugar_nacimiento,
+    genero,
+    direccion,
+    zona,
+    ciudad,
+    telefono,
+    email,
+    foto_url,
+    contacto_emergencia,
+    tiene_discapacidad,
+    tipo_discapacidad,
+    observaciones,
+    activo
+  } = data;
 
-    const query = `
-      UPDATE estudiante
-      SET nombres = $1, apellido_paterno = $2, apellido_materno = $3,
-          fecha_nacimiento = $4, ci = $5, lugar_nacimiento = $6,
-          genero = $7, direccion = $8, zona = $9, ciudad = $10,
-          telefono = $11, email = $12, foto_url = $13,
-          contacto_emergencia = $14, telefono_emergencia = $15,
-          tiene_discapacidad = $16, tipo_discapacidad = $17,
-          observaciones = $18, activo = $19,
-          updated_at = CURRENT_TIMESTAMP
-      WHERE id = $20 AND deleted_at IS NULL
-      RETURNING *
-    `;
+  const query = `
+    UPDATE estudiante
+    SET rude = $1,
+        nombres = $2,
+        apellido_paterno = $3,
+        apellido_materno = $4,
+        fecha_nacimiento = $5,
+        ci = $6,
+        lugar_nacimiento = $7,
+        genero = $8,
+        direccion = $9,
+        zona = $10,
+        ciudad = $11,
+        telefono = $12,
+        email = $13,
+        foto_url = $14,
+        contacto_emergencia = $15,
+        tiene_discapacidad = $16,
+        tipo_discapacidad = $17,
+        observaciones = $18,
+        activo = $19,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = $20 AND deleted_at IS NULL
+    RETURNING *
+  `;
 
-    const result = await pool.query(query, [
-      nombres, apellido_paterno, apellido_materno, fecha_nacimiento,
-      ci, lugar_nacimiento, genero, direccion, zona, ciudad,
-      telefono, email, foto_url, contacto_emergencia,
-      telefono_emergencia, tiene_discapacidad, tipo_discapacidad,
-      observaciones, activo, id
-    ]);
+  const result = await pool.query(query, [
+    rude ?? null,
+    nombres,
+    apellido_paterno,
+    apellido_materno,
+    fecha_nacimiento,
+    ci,
+    lugar_nacimiento,
+    genero,
+    direccion,
+    zona,
+    ciudad,
+    telefono,
+    email,
+    foto_url,
+    contacto_emergencia,
+    tiene_discapacidad,
+    tipo_discapacidad,
+    observaciones,
+    activo,
+    id
+  ]);
 
-    return result.rows[0];
-  }
+  return result.rows[0];
+}
+
 
   // =============================================
   // SOFT DELETE
@@ -338,30 +432,57 @@ class Estudiante {
 class PadreFamilia {
   static async create(data, client = null) {
     const conn = client || pool;
-    
+
     const {
-      usuario_id, nombres, apellido_paterno, apellido_materno, ci,
-      fecha_nacimiento, telefono, celular, email, direccion,
-      ocupacion, lugar_trabajo, telefono_trabajo, parentesco,
-      estado_civil, nivel_educacion
+      usuario_id,
+      nombres,
+      apellido_paterno,
+      apellido_materno,
+      ci,
+      fecha_nacimiento,
+      telefono,
+      celular,
+      email,
+      direccion,
+      ocupacion, // ✅ SE QUEDA
+      parentesco,
+      estado_civil
     } = data;
 
     const query = `
       INSERT INTO padre_familia (
-        usuario_id, nombres, apellido_paterno, apellido_materno, ci,
-        fecha_nacimiento, telefono, celular, email, direccion,
-        ocupacion, lugar_trabajo, telefono_trabajo, parentesco,
-        estado_civil, nivel_educacion
+        usuario_id,
+        nombres,
+        apellido_paterno,
+        apellido_materno,
+        ci,
+        fecha_nacimiento,
+        telefono,
+        celular,
+        email,
+        direccion,
+        ocupacion,
+        parentesco,
+        estado_civil
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
       RETURNING *
     `;
 
     const result = await conn.query(query, [
-      usuario_id, nombres, apellido_paterno, apellido_materno, ci,
-      fecha_nacimiento, telefono, celular, email, direccion,
-      ocupacion, lugar_trabajo, telefono_trabajo, parentesco,
-      estado_civil, nivel_educacion
+      usuario_id,
+      nombres,
+      apellido_paterno,
+      apellido_materno,
+      ci,
+      fecha_nacimiento,
+      telefono,
+      celular,
+      email,
+      direccion,
+      ocupacion,
+      parentesco,
+      estado_civil
     ]);
 
     return result.rows[0];
@@ -395,31 +516,59 @@ class PadreFamilia {
   }
 
   static async update(id, data) {
-    const {
-      nombres, apellido_paterno, apellido_materno, ci, fecha_nacimiento,
-      telefono, celular, email, direccion, ocupacion, lugar_trabajo,
-      telefono_trabajo, parentesco, estado_civil, nivel_educacion
-    } = data;
+  const {
+    nombres,
+    apellido_paterno,
+    apellido_materno,
+    ci,
+    fecha_nacimiento,
+    telefono,
+    celular,
+    email,
+    direccion,
+    ocupacion,
+    parentesco,
+    estado_civil
+  } = data;
 
-    const query = `
-      UPDATE padre_familia
-      SET nombres = $1, apellido_paterno = $2, apellido_materno = $3,
-          ci = $4, fecha_nacimiento = $5, telefono = $6, celular = $7,
-          email = $8, direccion = $9, ocupacion = $10, lugar_trabajo = $11,
-          telefono_trabajo = $12, parentesco = $13, estado_civil = $14,
-          nivel_educacion = $15, updated_at = CURRENT_TIMESTAMP
-      WHERE id = $16 AND deleted_at IS NULL
-      RETURNING *
-    `;
+  const query = `
+    UPDATE padre_familia
+    SET nombres = $1,
+        apellido_paterno = $2,
+        apellido_materno = $3,
+        ci = $4,
+        fecha_nacimiento = $5,
+        telefono = $6,
+        celular = $7,
+        email = $8,
+        direccion = $9,
+        ocupacion = $10,
+        parentesco = $11,
+        estado_civil = $12,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = $13 AND deleted_at IS NULL
+    RETURNING *
+  `;
 
-    const result = await pool.query(query, [
-      nombres, apellido_paterno, apellido_materno, ci, fecha_nacimiento,
-      telefono, celular, email, direccion, ocupacion, lugar_trabajo,
-      telefono_trabajo, parentesco, estado_civil, nivel_educacion, id
-    ]);
+  const result = await pool.query(query, [
+    nombres,
+    apellido_paterno,
+    apellido_materno,
+    ci,
+    fecha_nacimiento,
+    telefono,
+    celular,
+    email,
+    direccion,
+    ocupacion,
+    parentesco,
+    estado_civil,
+    id
+  ]);
 
-    return result.rows[0];
-  }
+  return result.rows[0];
+}
+
 
   static async softDelete(id) {
     const query = `

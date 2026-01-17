@@ -7,35 +7,37 @@ import UploadImage from '../utils/uploadImage.js';
 class MatriculaController {
   // Listar matrículas
   static async listar(req, res) {
-    try {
-      const { 
-        page, limit, search, periodo_academico_id, paralelo_id, 
-        grado_id, nivel_academico_id, estado 
-      } = req.query;
+  try {
+    const { 
+      page, limit, search, periodo_academico_id, paralelo_id, 
+      grado_id, nivel_academico_id, estado,
+      estudiante_id  // ✅ AGREGAR AQUÍ
+    } = req.query;
 
-      const result = await Matricula.findAll({
-        page: parseInt(page) || 1,
-        limit: parseInt(limit) || 10,
-        search,
-        periodo_academico_id: periodo_academico_id ? parseInt(periodo_academico_id) : undefined,
-        paralelo_id: paralelo_id ? parseInt(paralelo_id) : undefined,
-        grado_id: grado_id ? parseInt(grado_id) : undefined,
-        nivel_academico_id: nivel_academico_id ? parseInt(nivel_academico_id) : undefined,
-        estado
-      });
+    const result = await Matricula.findAll({
+      page: parseInt(page) || 1,
+      limit: parseInt(limit) || 10,
+      search,
+      periodo_academico_id: periodo_academico_id ? parseInt(periodo_academico_id) : undefined,
+      paralelo_id: paralelo_id ? parseInt(paralelo_id) : undefined,
+      grado_id: grado_id ? parseInt(grado_id) : undefined,
+      nivel_academico_id: nivel_academico_id ? parseInt(nivel_academico_id) : undefined,
+      estudiante_id: estudiante_id ? parseInt(estudiante_id) : undefined,  // ✅ AGREGAR AQUÍ
+      estado
+    });
 
-      res.json({
-        success: true,
-        data: result
-      });
-    } catch (error) {
-      console.error('Error al listar matrículas:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Error al listar matrículas: ' + error.message
-      });
-    }
+    res.json({
+      success: true,
+      data: result
+    });
+  } catch (error) {
+    console.error('Error al listar matrículas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al listar matrículas: ' + error.message
+    });
   }
+}
 
   // Obtener matrícula por ID
   static async obtenerPorId(req, res) {

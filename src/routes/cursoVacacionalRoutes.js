@@ -2,6 +2,7 @@
 import express from 'express';
 import CursoVacacionalController from '../controllers/cursoVacacionalController.js';
 import InscripcionVacacionalPDFController from '../controllers/inscripcionVacacionalPDFController.js';
+import CertificadoVacacionalController from '../controllers/certificadoVacacionalController.js';
 import { authenticate, authorize, logActivity } from '../Middlewares/auth.js';
 import { upload, handleMulterError } from '../Middlewares/uploadMiddleware.js';
 
@@ -275,4 +276,28 @@ router.get(
   InscripcionVacacionalPDFController.verPDFPreview
 );
 
+// Listar inscripciones completadas (candidatas para certificado)
+router.get(
+  '/inscripciones-completadas',
+  authenticate,
+  authorize('curso_vacacional.ver'),
+  CertificadoVacacionalController.listarCompletadas
+);
+
+// Generar y descargar certificado
+router.get(
+  '/inscripciones/:id/certificado',
+  authenticate,
+  authorize('curso_vacacional.ver'),
+  logActivity('generar_certificado_vacacional', 'inscripcion_vacacional'),
+  CertificadoVacacionalController.generarCertificado
+);
+
+// Ver certificado en el navegador (preview)
+router.get(
+  '/inscripciones/:id/certificado/preview',
+  authenticate,
+  authorize('curso_vacacional.ver'),
+  CertificadoVacacionalController.verCertificadoPreview
+);
 export default router;
