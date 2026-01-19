@@ -1,4 +1,4 @@
-// controllers/matriculaPDFController.js
+// controllers/matriculaPDFController.js - OPTIMIZADO PARA MEDIA HOJA
 import PDFDocument from 'pdfkit';
 import { Matricula } from '../models/Matricula.js';
 import { Estudiante } from '../models/Estudiantes.js';
@@ -29,7 +29,7 @@ class MatriculaPDFController {
 
       const doc = new PDFDocument({
         size: 'LETTER',
-        margins: { top: 50, bottom: 50, left: 50, right: 50 }
+        margins: { top: 30, bottom: 30, left: 40, right: 40 }
       });
 
       res.setHeader('Content-Type', 'application/pdf');
@@ -92,7 +92,7 @@ class MatriculaPDFController {
 
       const doc = new PDFDocument({
         size: 'LETTER',
-        margins: { top: 50, bottom: 50, left: 50, right: 50 }
+        margins: { top: 30, bottom: 30, left: 40, right: 40 }
       });
 
       doc.pipe(res);
@@ -126,320 +126,319 @@ class MatriculaPDFController {
   }
 
   static async generatePDFContent(doc, matricula, tutores) {
+    const darkBlue = '#1e3a8a';
+    const yellowBorder = '#fbbf24';
     const darkGray = '#1f2937';
     const lightGray = '#6b7280';
-    const borderGray = '#d1d5db';
+    const blueAccent = '#3b82f6';
 
-  const drawWatermark = () => {
-  const watermarkPath = path.join(__dirname, '../public/logo.png');
-  
-  if (fs.existsSync(watermarkPath)) {
-    try {
-      doc.save();
-      doc.opacity(0.08)
-         .image(watermarkPath, 140, 220, { 
-           width: 350,
-           height: 350,
-           align: 'center',
-           valign: 'center'
-         });
-      doc.restore();
-    } catch (error) {
-      console.log('No se pudo cargar la marca de agua:', error);
+    // ═══════════════════════════════════════════════════
+    // MARCA DE AGUA
+    // ═══════════════════════════════════════════════════
+    const watermarkPath = path.join(__dirname, '../public/logo.png');
+    if (fs.existsSync(watermarkPath)) {
+      try {
+        doc.save();
+        doc.opacity(0.04).image(watermarkPath, 200, 80, { width: 180, height: 180 });
+        doc.restore();
+      } catch (error) {
+        console.log('Marca de agua no cargada');
+      }
     }
-  }
-};
-     drawWatermark();
+
+    // ═══════════════════════════════════════════════════
+    // HEADER ULTRA COMPACTO
+    // ═══════════════════════════════════════════════════
+    doc.rect(40, 30, 532, 4).fill(darkBlue);
+    doc.rect(40, 34, 532, 2).fill(yellowBorder);
+
     const logoPath = path.join(__dirname, '../public/logo.png');
-   let logoExists = false;
+    let logoX = 50;
+    if (fs.existsSync(logoPath)) {
+      try {
+        doc.image(logoPath, 50, 42, { width: 28, height: 28 });
+        logoX = 85;
+      } catch (error) {}
+    }
 
-   if (fs.existsSync(logoPath)) {
-   try {
-      doc.image(logoPath, 50, 50, { width: 70, height: 70 });
-      logoExists = true;
-   } catch (error) {
-      console.log('No se pudo cargar el logo:', error);
-   }
-   }
-    const textStartX = logoExists ? 135 : 50;
+    doc.fontSize(8).font('Helvetica-Bold').fillColor(darkBlue)
+       .text('U.E.P. La Voz de Cristo', logoX, 44);
+    doc.fontSize(6).font('Helvetica').fillColor(lightGray)
+       .text('Potosí - Bolivia', logoX, 56);
 
-    doc.fontSize(11)
-       .font('Helvetica-Bold')
-       .fillColor(darkGray)
-       .text('Unidad Educativa Particular', textStartX, 55);
+    doc.fontSize(7).font('Helvetica-Bold').fillColor('#ef4444')
+       .text(`N° ${matricula.numero_matricula}`, 480, 44);
+    doc.fontSize(6).font('Helvetica').fillColor(lightGray)
+       .text(matricula.estado.toUpperCase(), 480, 56);
 
-    doc.fontSize(11)
-       .text('La Voz de Cristo', textStartX, 78);
+    // ═══════════════════════════════════════════════════
+    // TÍTULO
+    // ═══════════════════════════════════════════════════
+    let y = 78;
+    doc.fontSize(11).font('Helvetica-Bold').fillColor(darkBlue)
+       .text('MATRÍCULA ESCOLAR', 40, y, { align: 'center', width: 532 });
+    y += 14;
 
-    doc.fontSize(10)
-       .font('Helvetica')
-       .fillColor(lightGray)
-       .text('Potosi - Bolivia', textStartX, 100);
+    doc.moveTo(180, y).lineTo(432, y).lineWidth(1).strokeColor(yellowBorder).stroke();
+    y += 10;
 
-    doc.fontSize(14)
-       .font('Helvetica-Bold')
-       .fillColor(darkGray)
-       .text('MATRÍCULA ', 50, 135, { align: 'center', width: 512 });
+    // ═══════════════════════════════════════════════════
+    // PERÍODO Y FECHA
+    // ═══════════════════════════════════════════════════
+    doc.fontSize(7).font('Helvetica').fillColor(lightGray).text('Período:', 50, y);
+    doc.fontSize(8).font('Helvetica-Bold').fillColor(darkGray)
+       .text(matricula.periodo_nombre, 90, y);
 
-    doc.moveTo(50, 160)
-       .lineTo(562, 160)
-       .lineWidth(1)
-       .strokeColor(borderGray)
-       .stroke();
+    doc.fontSize(7).font('Helvetica').fillColor(lightGray).text('Fecha:', 380, y);
+    doc.fontSize(8).font('Helvetica-Bold').fillColor(darkGray)
+       .text(new Date(matricula.fecha_matricula).toLocaleDateString('es-BO', {
+         day: '2-digit', month: '2-digit', year: 'numeric'
+       }), 420, y);
 
-    doc.y = 180;
+    y += 18;
 
-    doc.fontSize(11)
-       .font('Helvetica-Bold')
-       .fillColor(darkGray)
-       .text('DATOS DE MATRÍCULA', 50, doc.y);
+    // ═══════════════════════════════════════════════════
+    // 1. INFORMACIÓN ACADÉMICA (PRIMERO)
+    // ═══════════════════════════════════════════════════
+    doc.fontSize(8).font('Helvetica-Bold').fillColor(darkBlue)
+       .text('INFORMACIÓN ACADÉMICA', 50, y);
+    y += 12;
 
-    doc.y += 20;
+    doc.fontSize(7).font('Helvetica').fillColor(lightGray).text('Nivel:', 55, y);
+    doc.fontSize(7).font('Helvetica-Bold').fillColor(darkGray)
+       .text(matricula.nivel_nombre, 85, y);
 
-    const drawField = (label, value, x, y, width) => {
-      if (width === undefined) width = 200;
-      doc.fontSize(8)
-         .font('Helvetica')
-         .fillColor(lightGray)
-         .text(label, x, y);
-      
-      doc.fontSize(10)
-         .font('Helvetica-Bold')
-         .fillColor(darkGray)
-         .text(value || 'N/A', x, y + 12, { width: width });
-    };
+    doc.fontSize(7).font('Helvetica').fillColor(lightGray).text('Grado:', 200, y);
+    doc.fontSize(7).font('Helvetica-Bold').fillColor(darkGray)
+       .text(matricula.grado_nombre, 235, y);
 
-    let currentY = doc.y;
+    doc.fontSize(7).font('Helvetica').fillColor(lightGray).text('Paralelo:', 340, y);
+    doc.fontSize(7).font('Helvetica-Bold').fillColor(darkGray)
+       .text(matricula.paralelo_nombre, 380, y);
 
-    drawField('N° Matrícula', matricula.numero_matricula, 50, currentY);
-    drawField('Fecha', new Date(matricula.fecha_matricula).toLocaleDateString('es-BO'), 230, currentY);
-    drawField('Estado', matricula.estado.toUpperCase(), 410, currentY);
+    doc.fontSize(7).font('Helvetica').fillColor(lightGray).text('Turno:', 460, y);
+    doc.fontSize(7).font('Helvetica-Bold').fillColor(darkGray)
+       .text(matricula.turno_nombre, 490, y);
 
-    currentY += 35;
+    y += 14;
 
-    drawField('Período Académico', matricula.periodo_nombre, 50, currentY, 250);
-    drawField('Usuario Registrador', matricula.usuario_registrador || 'Sistema', 330, currentY, 230);
-
-    currentY += 40;
-
-    doc.moveTo(50, currentY)
-       .lineTo(562, currentY)
-       .lineWidth(0.5)
-       .strokeColor(borderGray)
-       .stroke();
-
-    currentY += 20;
-
-    doc.fontSize(11)
-       .font('Helvetica-Bold')
-       .fillColor(darkGray)
-       .text('DATOS DEL ESTUDIANTE', 50, currentY);
-
-    currentY += 20;
-
-    drawField('Código', matricula.estudiante_codigo, 50, currentY);
-    drawField('Cédula de Identidad', matricula.estudiante_ci || 'Trámite', 230, currentY);
-    drawField('Teléfono', matricula.estudiante_telefono || 'N/A', 410, currentY);
-
-    currentY += 35;
-
-    drawField(
-      'Nombre Completo',
-      `${matricula.estudiante_nombres} ${matricula.estudiante_apellido_paterno} ${matricula.estudiante_apellido_materno || ''}`.trim(),
-      50,
-      currentY,
-      512
-    );
-
-    currentY += 35;
-
-    drawField('Fecha de Nacimiento', new Date(matricula.estudiante_fecha_nacimiento).toLocaleDateString('es-BO'), 50, currentY);
-    drawField('Direccion', matricula.estudiante_direccion || 'N/A', 230, currentY, 280);
-    
-    const edad = new Date().getFullYear() - new Date(matricula.estudiante_fecha_nacimiento).getFullYear();
-    drawField('Edad', `${edad} años`, 230, currentY);
-    
-    drawField('Usuario Sistema', matricula.estudiante_username || 'Sin usuario', 410, currentY);
-
-    currentY += 40;
-
-    doc.moveTo(50, currentY)
-       .lineTo(562, currentY)
-       .lineWidth(0.5)
-       .strokeColor(borderGray)
-       .stroke();
-
-    currentY += 20;
-
-    doc.fontSize(11)
-       .font('Helvetica-Bold')
-       .fillColor(darkGray)
-       .text('INFORMACIÓN ACADÉMICA', 50, currentY);
-
-    currentY += 20;
-
-    drawField('Nivel Académico', matricula.nivel_nombre, 50, currentY);
-    drawField('Grado', matricula.grado_nombre, 230, currentY);
-    drawField('Paralelo', matricula.paralelo_nombre, 410, currentY);
-
-    currentY += 35;
-
-    drawField('Turno', matricula.turno_nombre, 50, currentY);
-    drawField('Aula', matricula.aula || 'Por asignar', 230, currentY);
-
-    currentY += 35;
-
+    // Badges (Becado/Repitente)
     if (matricula.es_becado || matricula.es_repitente) {
       const badges = [];
       if (matricula.es_becado) {
-        badges.push(`Becado: ${matricula.porcentaje_beca || 0}%${matricula.tipo_beca ? ` (${matricula.tipo_beca})` : ''}`);
+        badges.push(`✓ Becado ${matricula.porcentaje_beca || 0}%`);
       }
       if (matricula.es_repitente) {
-        badges.push('Repite grado');
+        badges.push('⚠ Repite grado');
       }
 
-      doc.fontSize(9)
-         .font('Helvetica-Bold')
-         .fillColor(darkGray)
-         .text(badges.join(' | '), 50, currentY);
-
-      currentY += 25;
+      doc.fontSize(6).font('Helvetica-Bold').fillColor('#10b981')
+         .text(badges.join('  |  '), 55, y);
+      y += 12;
     }
 
-    currentY += 15;
+    y += 6;
 
-    doc.moveTo(50, currentY)
-       .lineTo(562, currentY)
-       .lineWidth(0.5)
-       .strokeColor(borderGray)
-       .stroke();
+    // ═══════════════════════════════════════════════════
+    // 2. DATOS DEL ESTUDIANTE (SEGUNDO)
+    // ═══════════════════════════════════════════════════
+    doc.fontSize(8).font('Helvetica-Bold').fillColor(darkBlue)
+       .text('DATOS DEL ESTUDIANTE', 50, y);
+    y += 12;
 
-    currentY += 20;
+    const nombreCompleto = `${matricula.estudiante_nombres} ${matricula.estudiante_apellido_paterno} ${matricula.estudiante_apellido_materno || ''}`.trim();
+    
+    // Nombre y Código
+    doc.fontSize(8).font('Helvetica-Bold').fillColor(darkGray)
+       .text(nombreCompleto, 50, y, { width: 320 });
+    
+    doc.fontSize(7).font('Helvetica').fillColor(lightGray)
+       .text(`Código: `, 390, y);
+    doc.fontSize(7).font('Helvetica-Bold').fillColor(darkGray)
+       .text(matricula.estudiante_codigo, 430, y);
 
+    y += 13;
+
+    // CI, Edad, Teléfono
+    doc.fontSize(6).font('Helvetica').fillColor(lightGray)
+       .text('CI:', 55, y);
+    doc.fontSize(6).font('Helvetica-Bold').fillColor(darkGray)
+       .text(matricula.estudiante_ci || 'Trámite', 70, y);
+    
+    const fechaNac = new Date(matricula.estudiante_fecha_nacimiento);
+    const edad = new Date().getFullYear() - fechaNac.getFullYear();
+    
+    doc.fontSize(6).font('Helvetica').fillColor(lightGray)
+       .text('Edad:', 140, y);
+    doc.fontSize(6).font('Helvetica-Bold').fillColor(darkGray)
+       .text(`${edad} años`, 165, y);
+
+    if (matricula.estudiante_telefono) {
+      doc.fontSize(6).font('Helvetica').fillColor(lightGray)
+         .text('Tel:', 220, y);
+      doc.fontSize(6).font('Helvetica-Bold').fillColor(darkGray)
+         .text(matricula.estudiante_telefono, 240, y);
+    }
+
+    y += 12;
+
+    // USUARIO DEL ESTUDIANTE - DESTACADO
+    if (matricula.estudiante_username) {
+      doc.rect(50, y, 250, 14).fill('#eff6ff');
+      
+      doc.fontSize(6).font('Helvetica').fillColor(lightGray)
+         .text('Usuario Sistema:', 55, y + 3);
+      
+      doc.fontSize(7).font('Helvetica-Bold').fillColor(blueAccent)
+         .text(matricula.estudiante_username, 135, y + 3);
+      
+      y += 16;
+    } else {
+      y += 4;
+    }
+
+    y += 6;
+
+    // ═══════════════════════════════════════════════════
+    // 3. TUTORES (TERCERO)
+    // ═══════════════════════════════════════════════════
     if (tutores && tutores.length > 0) {
-      doc.fontSize(11)
-         .font('Helvetica-Bold')
-         .fillColor(darkGray)
-         .text('DATOS DE TUTORES / PADRES DE FAMILIA', 50, currentY);
-
-      currentY += 20;
+      doc.fontSize(8).font('Helvetica-Bold').fillColor(darkBlue)
+         .text('TUTORES / PADRES DE FAMILIA', 50, y);
+      y += 12;
 
       tutores.forEach((tutor, index) => {
-        doc.fontSize(9)
-           .font('Helvetica-Bold')
-           .fillColor(darkGray)
-           .text(`Tutor ${index + 1}${tutor.es_tutor_principal ? ' (PRINCIPAL)' : ''}`, 50, currentY);
+        const nombreTutor = `${tutor.nombres} ${tutor.apellido_paterno} ${tutor.apellido_materno || ''}`.trim();
+        const esPrincipal = tutor.es_tutor_principal;
 
-        currentY += 15;
+        y += 11;
 
-        drawField(
-          'Nombre Completo',
-          `${tutor.nombres} ${tutor.apellido_paterno} ${tutor.apellido_materno || ''}`.trim(),
-          50,
-          currentY,
-          512
-        );
+        // Datos en línea
+        doc.fontSize(6).font('Helvetica').fillColor(lightGray)
+           .text('Parentesco:', 60, y);
+        doc.fontSize(6).font('Helvetica-Bold').fillColor(darkGray)
+           .text(tutor.parentesco, 105, y);
 
-        currentY += 30;
+        doc.fontSize(6).font('Helvetica').fillColor(lightGray)
+           .text('CI:', 180, y);
+        doc.fontSize(6).font('Helvetica-Bold').fillColor(darkGray)
+           .text(tutor.ci, 195, y);
 
-        drawField('CI', tutor.ci, 50, currentY);
-        drawField('Parentesco', tutor.parentesco, 180, currentY);
-        drawField('Teléfono', tutor.telefono || 'N/A', 310, currentY);
-        drawField('Celular', tutor.celular || 'N/A', 440, currentY);
+        doc.fontSize(6).font('Helvetica').fillColor(lightGray)
+           .text('Cel:', 270, y);
+        doc.fontSize(6).font('Helvetica-Bold').fillColor(darkGray)
+           .text(tutor.celular || tutor.telefono || 'N/A', 290, y);
 
-        currentY += 35;
+        y += 11;
 
-        drawField('Ocupación', tutor.ocupacion || 'N/A', 50, currentY);
-        drawField('Lugar de Trabajo', tutor.lugar_trabajo || 'N/A', 230, currentY);
-        drawField('Dirección', tutor.direccion || 'N/A', 410, currentY, 280);
-        drawField('Usuario Sistema', tutor.username || 'Sin usuario', 410, currentY);
+        // USUARIO DEL TUTOR - DESTACADO
+        if (tutor.username) {
+          doc.rect(55, y, 250, 13).fill('#eff6ff');
+          
+          doc.fontSize(6).font('Helvetica').fillColor(lightGray)
+             .text('Usuario Sistema:', 60, y + 2);
+          
+          doc.fontSize(7).font('Helvetica-Bold').fillColor(blueAccent)
+             .text(tutor.username, 140, y + 2);
+          
+          y += 15;
+        }
 
-        currentY += 30;
-
-        currentY += 10;
+        y += 8;
       });
 
-      currentY += 5;
-
-      doc.moveTo(50, currentY)
-         .lineTo(562, currentY)
-         .lineWidth(0.5)
-         .strokeColor(borderGray)
-         .stroke();
-
-      currentY += 20;
+      y += 2;
     }
 
+    // ═══════════════════════════════════════════════════
+    // OBSERVACIONES (SI EXISTEN)
+    // ═══════════════════════════════════════════════════
     if (matricula.observaciones) {
-      doc.fontSize(11)
-         .font('Helvetica-Bold')
-         .fillColor(darkGray)
-         .text('OBSERVACIONES', 50, currentY);
+      doc.fontSize(7).font('Helvetica-Bold').fillColor(darkBlue)
+         .text('OBSERVACIONES:', 50, y);
+      y += 10;
 
-      currentY += 15;
-
-      doc.fontSize(9)
-         .font('Helvetica')
-         .fillColor(darkGray)
-         .text(matricula.observaciones, 50, currentY, {
-           width: 512,
+      doc.fontSize(6).font('Helvetica').fillColor(darkGray)
+         .text(matricula.observaciones, 50, y, {
+           width: 522,
            align: 'justify'
          });
 
-      currentY = doc.y + 20;
+      y = doc.y + 10;
     }
 
-    if (currentY > 650) {
-      doc.addPage();
-      currentY = 80;
-      drawWatermark();
+    // ═══════════════════════════════════════════════════
+    // FIRMAS
+    // ═══════════════════════════════════════════════════
+    y = Math.max(y + 10, 300); // Asegurar espacio mínimo
+
+    // LADO IZQUIERDO - DATOS DEL TUTOR PRINCIPAL
+    const tutorPrincipal = tutores && tutores.length > 0 
+      ? tutores.find(t => t.es_tutor_principal) || tutores[0]
+      : null;
+
+    doc.fontSize(6).font('Helvetica-Oblique').fillColor(lightGray)
+       .text('FIRMA PADRE/MADRE/TUTOR', 70, y);
+
+    doc.moveTo(70, y + 30)
+       .lineTo(200, y + 30)
+       .lineWidth(0.5)
+       .strokeColor(darkGray)
+       .stroke();
+
+    if (tutorPrincipal) {
+      const nombreTutor = `${tutorPrincipal.nombres} ${tutorPrincipal.apellido_paterno} ${tutorPrincipal.apellido_materno || ''}`.trim();
+      
+      doc.fontSize(6).font('Helvetica').fillColor(lightGray)
+         .text('Nombre:', 70, y + 35);
+      
+      doc.fontSize(7).font('Helvetica-Bold').fillColor(darkGray)
+         .text(nombreTutor, 100, y + 35, { width: 100 });
+
+      doc.fontSize(6).font('Helvetica').fillColor(lightGray)
+         .text('C.I.:', 70, y + 50);
+      
+      doc.fontSize(7).font('Helvetica-Bold').fillColor(darkGray)
+         .text(tutorPrincipal.ci, 100, y + 50);
     } else {
-      currentY = Math.max(currentY, 620);
+      doc.fontSize(6).font('Helvetica').fillColor(lightGray)
+         .text('Nombre: _______________________', 70, y + 35);
+      
+      doc.fontSize(6).font('Helvetica').fillColor(lightGray)
+         .text('C.I.: _______________________', 70, y + 50);
     }
 
-    doc.moveTo(80, currentY)
-       .lineTo(240, currentY)
-       .lineWidth(1)
-       .strokeColor(borderGray)
+    // LADO DERECHO - SOLO SELLO
+    doc.fontSize(6).font('Helvetica-Oblique').fillColor(lightGray)
+       .text('SELLO INSTITUCIÓN', 410, y);
+
+    doc.moveTo(380, y + 30)
+       .lineTo(510, y + 30)
+       .lineWidth(0.5)
+       .strokeColor(darkGray)
        .stroke();
 
-    doc.moveTo(360, currentY)
-       .lineTo(520, currentY)
-       .lineWidth(1)
-       .strokeColor(borderGray)
-       .stroke();
+    // ═══════════════════════════════════════════════════
+    // PIE DE PÁGINA
+    // ═══════════════════════════════════════════════════
+    const footerY = 380;
 
-    doc.fontSize(8)
-       .font('Helvetica')
-       .fillColor(lightGray)
-       .text('Firma del Padre/Madre/Tutor', 80, currentY + 10, { width: 160, align: 'center' });
-
-    doc.text('Sello y Firma de la Institución', 360, currentY + 10, { width: 160, align: 'center' });
-
-    const footerY = 730;
-
-    doc.fontSize(7)
-       .font('Helvetica')
-       .fillColor(lightGray)
+    doc.fontSize(5).font('Helvetica').fillColor(lightGray)
        .text(
-         `Documento generado el ${new Date().toLocaleDateString('es-BO', { 
-           day: '2-digit', 
-           month: 'long', 
-           year: 'numeric' 
-         })} a las ${new Date().toLocaleTimeString('es-BO', { 
-           hour: '2-digit', 
-           minute: '2-digit' 
-         })}`,
-         50,
+         `Generado: ${new Date().toLocaleDateString('es-BO')} ${new Date().toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' })} | Usuario: ${matricula.usuario_registrador || 'Sistema'}`,
+         40,
          footerY,
-         { align: 'center', width: 512 }
+         { align: 'center', width: 532 }
        );
 
-    doc.fontSize(6)
-       .text('Este documento es válido únicamente con sello y firma de la institución educativa', 50, footerY + 12, {
+    doc.fontSize(5).font('Helvetica').fillColor(lightGray)
+       .text('Documento válido únicamente con sello y firma institucional', 40, footerY + 8, {
          align: 'center',
-         width: 512
+         width: 532
        });
+
+    doc.rect(40, 393, 532, 2).fill(yellowBorder);
+    doc.rect(40, 395, 532, 4).fill(darkBlue);
   }
 }
 

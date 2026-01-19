@@ -1,4 +1,4 @@
-// controllers/pagoMensualidadPDFController.js - SISTEMA 10 MESES
+// controllers/pagoMensualidadPDFController.js - SISTEMA 10 MESES - CON SOPORTE PAGO ANUAL
 import PDFDocument from 'pdfkit';
 import { PagoMensualidad } from '../models/Payment.js';
 import ActividadLog from '../models/actividadLog.js';
@@ -182,13 +182,18 @@ class PagoMensualidadPDFController {
   }
 
   /**
-   * 🔧 OPTIMIZADO PARA MEDIA HOJA - Sistema 10 Meses
+   * 🔧 OPTIMIZADO PARA MEDIA HOJA - Sistema 10 Meses - CON SOPORTE PAGO ANUAL
    */
   static async generatePDFContent(doc, todosPagos, datosEntrega, datosRecibe) {
     const darkBlue = '#1e3a8a';
     const yellowBorder = '#fbbf24';
     const darkGray = '#1f2937';
     const lightGray = '#6b7280';
+
+    // 🆕 Detectar si es pago anual
+    const esPagoAnual = todosPagos.length === 1 && 
+                        (todosPagos[0].mes_correspondiente === 'Pago Anual Completo (10 meses)' ||
+                         !todosPagos[0].numero_cuota);
 
     // Agrupar pagos por estudiante
     const pagosPorEstudiante = {};
@@ -252,9 +257,23 @@ class PagoMensualidadPDFController {
     // ═══════════════════════════════════════════════════
     let y = 78;
     
-    const titulo = esMultiEstudiante ? 'RECIBO PAGO MÚLTIPLE' : 'RECIBO DE PAGO';
+    // 🆕 Título dinámico según tipo de pago
+    let titulo = 'RECIBO DE PAGO';
+    if (esPagoAnual) {
+      titulo = 'RECIBO PAGO ANUAL COMPLETO';
+    } else if (esMultiEstudiante) {
+      titulo = 'RECIBO PAGO MÚLTIPLE';
+    }
+    
     doc.fontSize(11).font('Helvetica-Bold').fillColor(darkBlue)
        .text(titulo, 40, y, { align: 'center', width: 532 });
+    
+    // 🆕 Badge especial para pago anual
+    if (esPagoAnual) {
+      y += 14;
+      doc.fontSize(7).font('Helvetica-Bold').fillColor('#10b981')
+         .text('★ PAGO COMPLETO - 1 MES GRATIS ★', 40, y, { align: 'center', width: 532 });
+    }
     
     y += 16;
 
@@ -310,16 +329,21 @@ class PagoMensualidadPDFController {
     doc.fontSize(7).font('Helvetica').fillColor(lightGray).text('Por concepto de:', 50, y);
     y += 10;
 
+    // 🆕 Concepto dinámico
+    const concepto = esPagoAnual 
+      ? 'Pago Anual Completo - 10 Meses de Mensualidades Escolares (con 10% descuento)'
+      : 'Pago de Mensualidades Escolares (Sistema 10 Meses)';
+    
     doc.fontSize(8).font('Helvetica-Bold').fillColor(darkGray)
-       .text('Pago de Mensualidades Escolares (Sistema 10 Meses)', 50, y);
+       .text(concepto, 50, y, { width: 522 });
 
-    y += 14;
+    y += esPagoAnual ? 18 : 14;
 
     // ═══════════════════════════════════════════════════
     // DETALLES DE PAGOS - TABLA COMPACTA
     // ═══════════════════════════════════════════════════
     
-    if (esMultiEstudiante) {
+    if (esMultiEstudiante || !esPagoAnual) {
       doc.fontSize(7).font('Helvetica-Bold').fillColor(lightGray)
          .text('Estudiante', 55, y)
          .text('Mensualidad', 250, y)
@@ -334,33 +358,55 @@ class PagoMensualidadPDFController {
         ? `${est.nombres.split(' ')[0]} ${est.apellidos.split(' ')[0]}`
         : est.nombres.split(' ')[0];
 
-      if (esMultiEstudiante && idx > 0) {
+      if ((esMultiEstudiante || !esPagoAnual) && idx > 0) {
         y += 3;
       }
 
       est.pagos.forEach((pago, pagoIdx) => {
-        const estiloNombre = pagoIdx === 0 && esMultiEstudiante;
-        const xNombre = esMultiEstudiante ? 55 : 60;
-        const xMes = esMultiEstudiante ? 250 : 55;
-        const xMonto = esMultiEstudiante ? 500 : 500;
+        const estiloNombre = pagoIdx === 0 && (esMultiEstudiante || !esPagoAnual);
+        const xNombre = (esMultiEstudiante || !esPagoAnual) ? 55 : 60;
+        const xMes = (esMultiEstudiante || !esPagoAnual) ? 250 : 55;
+        const xMonto = 500;
 
-        if (estiloNombre) {
+        if (estiloNombre && !esPagoAnual) {
           doc.fontSize(7).font('Helvetica-Bold').fillColor(darkGray)
              .text(`${nombreCompleto} (${est.estudiante_codigo})`, xNombre, y, { width: 180 });
         }
 
-        const mesTexto = `${pago.mes_correspondiente} - Cuota ${pago.numero_cuota}/10`;
-        doc.fontSize(7).font('Helvetica').fillColor(darkGray)
-           .text(esMultiEstudiante ? mesTexto : `• ${mesTexto}`, xMes, y);
+        // 🆕 Formato de mes dinámico
+        let mesTexto;
+        if (esPagoAnual) {
+          mesTexto = 'Año Completo - 10 Meses (Febrero a Noviembre)';
+        } else if (pago.numero_cuota) {
+          mesTexto = `${pago.mes_correspondiente} - Cuota ${pago.numero_cuota}/10`;
+        } else {
+          mesTexto = pago.mes_correspondiente;
+        }
+
+        if (esPagoAnual) {
+          // Para pago anual, mostrar en formato destacado
+          doc.fontSize(8).font('Helvetica-Bold').fillColor(darkGray)
+             .text(mesTexto, 50, y, { width: 420 });
+        } else {
+          doc.fontSize(7).font('Helvetica').fillColor(darkGray)
+             .text((esMultiEstudiante || !esPagoAnual) ? mesTexto : `• ${mesTexto}`, xMes, y);
+        }
 
         doc.fontSize(7).font('Helvetica-Bold').fillColor(darkBlue)
            .text(`Bs. ${parseFloat(pago.monto_pagado).toFixed(2)}`, xMonto, y);
 
-        y += 10;
+        y += esPagoAnual ? 14 : 10;
       });
     });
 
     y += 5;
+
+    // 🆕 Nota especial para pago anual
+    if (esPagoAnual) {
+      doc.fontSize(6).font('Helvetica-Oblique').fillColor('#10b981')
+         .text('✓ Este pago incluye descuento del 10% por pago completo', 50, y);
+      y += 12;
+    }
 
     // ═══════════════════════════════════════════════════
     // MÉTODO DE PAGO
@@ -428,39 +474,70 @@ class PagoMensualidadPDFController {
     y += 6;
 
     // ═══════════════════════════════════════════════════
-    // FIRMAS
+    // FIRMAS CON CI
     // ═══════════════════════════════════════════════════
     const firmaY = y;
 
+    // LADO IZQUIERDO - ENTREGUÉ CONFORME
     doc.fontSize(6).font('Helvetica-Oblique').fillColor(lightGray)
        .text('ENTREGUÉ CONFORME', 70, firmaY);
-    doc.moveTo(70, firmaY + 28).lineTo(200, firmaY + 28).lineWidth(0.5).strokeColor(darkGray).stroke();
-    doc.fontSize(6).font('Helvetica').fillColor(lightGray).text('Nombre:', 70, firmaY + 31);
-    doc.fontSize(7).font('Helvetica-Bold').fillColor(darkGray)
-       .text(datosEntrega.nombre, 70, firmaY + 38, { width: 130 });
 
+    doc.moveTo(70, firmaY + 30)
+       .lineTo(200, firmaY + 30)
+       .lineWidth(0.5)
+       .strokeColor(darkGray)
+       .stroke();
+
+    doc.fontSize(6).font('Helvetica').fillColor(lightGray)
+       .text('Nombre:', 70, firmaY + 35);
+
+    doc.fontSize(7).font('Helvetica-Bold').fillColor(darkGray)
+       .text(datosEntrega.nombre, 95, firmaY + 35, { width: 110 });
+
+    doc.fontSize(6).font('Helvetica').fillColor(lightGray)
+       .text('C.I.:', 70, firmaY + 50);
+
+    doc.fontSize(7).font('Helvetica-Bold').fillColor(darkGray)
+       .text(datosEntrega.ci, 95, firmaY + 50);
+
+    // LADO DERECHO - RECIBÍ CONFORME
     doc.fontSize(6).font('Helvetica-Oblique').fillColor(lightGray)
        .text('RECIBÍ CONFORME', 380, firmaY);
-    doc.moveTo(380, firmaY + 28).lineTo(510, firmaY + 28).lineWidth(0.5).strokeColor(darkGray).stroke();
-    doc.fontSize(6).font('Helvetica').fillColor(lightGray).text('Nombre:', 380, firmaY + 31);
+
+    doc.moveTo(380, firmaY + 30)
+       .lineTo(510, firmaY + 30)
+       .lineWidth(0.5)
+       .strokeColor(darkGray)
+       .stroke();
+
+    doc.fontSize(6).font('Helvetica').fillColor(lightGray)
+       .text('Nombre:', 380, firmaY + 35);
+
     doc.fontSize(7).font('Helvetica-Bold').fillColor(darkGray)
-       .text(datosRecibe.nombre, 380, firmaY + 38, { width: 130 });
+       .text(datosRecibe.nombre, 405, firmaY + 35, { width: 110 });
+
+    doc.fontSize(6).font('Helvetica').fillColor(lightGray)
+       .text('C.I.:', 380, firmaY + 50);
+
+    doc.fontSize(7).font('Helvetica-Bold').fillColor(darkGray)
+       .text(datosRecibe.ci, 405, firmaY + 50);
 
     // ═══════════════════════════════════════════════════
     // PIE DE PÁGINA
     // ═══════════════════════════════════════════════════
-    const footerY = 375;
+    const footerY = 380;
 
+    const tipoRecibo = esPagoAnual ? 'Pago Anual Completo' : 'Sistema 10 Meses';
     doc.fontSize(5).font('Helvetica').fillColor(lightGray)
-       .text(
-         `Sistema 10 Meses | Generado: ${new Date().toLocaleDateString('es-BO')} ${new Date().toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' })}`,
-         40,
-         footerY,
-         { align: 'center', width: 532 }
-       );
+      .text(
+        `${tipoRecibo} | Generado: ${new Date().toLocaleDateString('es-BO')} ${new Date().toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' })}`,
+        40,
+        footerY,
+        { align: 'center', width: 532 }
+      );
 
-    doc.rect(40, 388, 532, 2).fill(yellowBorder);
-    doc.rect(40, 390, 532, 4).fill(darkBlue);
+    doc.rect(40, 393, 532, 2).fill(yellowBorder);
+    doc.rect(40, 395, 532, 4).fill(darkBlue);
   }
 
   // Función auxiliar para convertir números a texto

@@ -1,15 +1,18 @@
 import dotenv from 'dotenv';
 
-// Cargar el archivo correspondiente según NODE_ENV
+// Cargar variables de entorno según el entorno
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: 'dev.env' });
 } else {
   dotenv.config();
 }
 
+// Configuración principal de la aplicación
 const config = {
+  // Puerto del servidor
   port: process.env.PORT || 3000,
 
+  // Configuración de la base de datos
   db: {
     user: process.env.DB_USER,
     host: process.env.DB_HOST,
@@ -18,23 +21,36 @@ const config = {
     port: process.env.DB_PORT,
   },
 
-  jwtSecret: process.env.JWT_SECRET || 'tu-secreto-super-seguro-cambiar-en-produccion',
-  jwtRefreshSecret: process.env.JWT_REFRESH_SECRET || 'refresh-secret-cambiar',
-  jwtExpiration: '1h',
-  jwtRefreshExpiration: '30d',
+  // Secretos JWT
+  jwtSecret:
+    process.env.JWT_SECRET ||
+    'tu-secreto-super-seguro-cambiar-en-produccion',
 
+  jwtRefreshSecret:
+    process.env.JWT_REFRESH_SECRET ||
+    'refresh-secret-cambiar',
+
+  // ⏱️ DURACIÓN DE TOKENS
+  jwtExpiration: '5h',        // ✅ Access Token dura 5 horas
+  jwtRefreshExpiration: '30d', // Refresh Token dura 30 días
+
+  // Seguridad de contraseñas
   bcryptRounds: 12,
-  maxLoginAttempts: 5,
-  lockoutDuration: 15 * 60 * 1000, // 15 min
 
+  // Seguridad de login
+  maxLoginAttempts: 5,
+  lockoutDuration: 15 * 60 * 1000, // 15 minutos
+
+  // Configuración de cookies
   cookieOptions: {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // ← CAMBIAR 'strict' a 'none'
+    httpOnly: true, // No accesible desde JS
+    secure: process.env.NODE_ENV === 'production', // HTTPS en producción
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
     maxAge: 30 * 24 * 60 * 60 * 1000, // 30 días
     path: '/',
   },
 
+  // Configuración de Cloudinary
   cloudinary: {
     cloudName: process.env.CLOUDINARY_CLOUD_NAME,
     apiKey: process.env.CLOUDINARY_API_KEY,
