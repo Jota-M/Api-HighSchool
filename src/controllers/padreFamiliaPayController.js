@@ -24,6 +24,11 @@ function extraerIdQrDeObservaciones(observaciones) {
   return match ? match[1] : null;
 }
 
+function normalizarMonto(valor) {
+  const numero = Number(valor);
+  return Number.isFinite(numero) ? Number(numero.toFixed(2)) : null;
+}
+
 class PadreFamiliaPayController {
 
   // ══════════════════════════════════════════════════════════════════════
@@ -397,7 +402,7 @@ class PadreFamiliaPayController {
       }
 
       const resultPago = await pool.query(
-        `SELECT qr_data, qr_estado, qr_expiracion, transaccion_id
+        `SELECT qr_data, qr_estado, qr_expiracion, transaccion_id, monto_pagado
          FROM pago_mensualidad
          WHERE mensualidad_id = $1
            AND qr_estado      IS NOT NULL
@@ -411,7 +416,12 @@ class PadreFamiliaPayController {
         return res.json({ success: true, estado: 'SIN_QR', message: 'No hay un QR generado para esta mensualidad' });
       }
 
-      const { qr_data: alias, qr_expiracion, transaccion_id: idQrGuardado } = resultPago.rows[0];
+      const {
+        qr_data: alias,
+        qr_expiracion,
+        transaccion_id: idQrGuardado,
+        monto_pagado: montoEsperado,
+      } = resultPago.rows[0];
 
       // Consultar estado real en SIP
       let estadoSIP;
@@ -435,6 +445,22 @@ class PadreFamiliaPayController {
           console.warn(
             `[VerificarEstado] ⚠️ idQr no coincide — NO se sincroniza. ` +
             `Guardado: ${idQrGuardado} | SIP devolvió: ${estadoSIP.idQr}`
+          );
+          return res.json({
+            success:       true,
+            estado:        'PENDIENTE',
+            qr_expiracion,
+            message:       'Pago pendiente. Escaneá el QR con la app de tu banco.',
+          });
+        }
+
+        const montoLocal = normalizarMonto(montoEsperado);
+        const montoSIP = normalizarMonto(estadoSIP.monto);
+
+        if (montoLocal === null || montoSIP === null || Math.abs(montoLocal - montoSIP) > 0.01) {
+          console.warn(
+            `[VerificarEstado] Monto no coincide — NO se sincroniza. ` +
+            `Guardado: ${montoLocal} | SIP devolvió: ${estadoSIP.monto}`
           );
           return res.json({
             success:       true,
@@ -829,11 +855,34 @@ class PadreFamiliaPayController {
       // ── PROTECCIÓN CLAVE: solo sincronizar si el idQr coincide ──
       if (estadoSIP.estadoActual === 'PAGADO') {
         const idQrGuardado = pagos[0].id_qr_guardado;
+        const montoEsperado = normalizarMonto(
+          pagos.reduce((total, p) => total + Number(p.monto_pagado || p.monto_final || 0), 0)
+        );
+        const montoSIP = normalizarMonto(estadoSIP.monto);
 
         if (!idQrGuardado || idQrGuardado !== estadoSIP.idQr) {
           console.warn(
             `[VerificarEstadoMultiple] ⚠️ idQr no coincide — NO se sincroniza. ` +
             `Guardado: ${idQrGuardado} | SIP devolvió: ${estadoSIP.idQr}`
+          );
+          return res.json({
+            success:       true,
+            estado:        'PENDIENTE',
+            qr_expiracion: pagos[0].qr_expiracion,
+            message:       'Pago pendiente. Escaneá el QR con la app de tu banco.',
+            mensualidades: pagos.map(p => ({
+              mensualidad_id: p.mensualidad_id,
+              mes:            p.mes_correspondiente,
+              monto:          p.monto_pagado,
+              estado:         p.mensualidad_estado,
+            })),
+          });
+        }
+
+        if (montoEsperado === null || montoSIP === null || Math.abs(montoEsperado - montoSIP) > 0.01) {
+          console.warn(
+            `[VerificarEstadoMultiple] Monto no coincide — NO se sincroniza. ` +
+            `Guardado: ${montoEsperado} | SIP devolvió: ${estadoSIP.monto}`
           );
           return res.json({
             success:       true,

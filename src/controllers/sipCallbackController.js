@@ -5,6 +5,11 @@
 import { pool } from '../db/pool.js';
 import { validarCallbackAuth } from '../services/sipService.js';
 
+function normalizarMonto(valor) {
+  const numero = Number(valor);
+  return Number.isFinite(numero) ? Number(numero.toFixed(2)) : null;
+}
+
 class SipCallbackController {
 
   /**
@@ -65,6 +70,7 @@ class SipCallbackController {
       // Para pago múltiple → N registros (uno por mensualidad)
       const resultPagos = await client.query(
         `SELECT pm.id, pm.mensualidad_id, pm.qr_estado, pm.monto_pagado,
+                pm.transaccion_id AS id_qr_guardado,
                 m.estado AS mensualidad_estado, m.monto_final
          FROM pago_mensualidad pm
          INNER JOIN mensualidad m ON pm.mensualidad_id = m.id
@@ -92,7 +98,54 @@ class SipCallbackController {
         `${pagos.length} mensualidad(es) | Alias: ${alias}`
       );
 
-      // ── 4. VERIFICAR QUE NO ESTÉN YA PROCESADOS ──────────────────────
+      // ── 4. VALIDAR QUE EL CALLBACK COINCIDE CON EL QR GENERADO ─────────
+      // No basta con alias + Basic Auth: en pruebas/SIP pueden llegar callbacks
+      // prematuros o de verificación. Solo procesamos si idQr y monto coinciden.
+      const idQrEsperado = pagos[0].id_qr_guardado;
+      const idsQrConsistentes = pagos.every(p => p.id_qr_guardado === idQrEsperado);
+      const montoEsperado = normalizarMonto(
+        pagos.reduce((total, p) => total + Number(p.monto_pagado || p.monto_final || 0), 0)
+      );
+      const montoRecibido = normalizarMonto(monto);
+      const monedaRecibida = typeof moneda === 'string' ? moneda.toUpperCase() : null;
+
+      if (!idsQrConsistentes || !idQr || idQr !== idQrEsperado) {
+        console.warn(
+          `[SIP Callback] Callback recibido pero NO procesado por idQr inválido. ` +
+          `Alias: ${alias} | Esperado: ${idQrEsperado || 'N/D'} | Recibido: ${idQr || 'N/D'}`
+        );
+        await client.query('ROLLBACK');
+        return res.json({
+          codigo:  '0000',
+          mensaje: 'Recibido - idQr no coincide, pago no procesado',
+        });
+      }
+
+      if (montoRecibido === null || montoEsperado === null || Math.abs(montoRecibido - montoEsperado) > 0.01) {
+        console.warn(
+          `[SIP Callback] Callback recibido pero NO procesado por monto inválido. ` +
+          `Alias: ${alias} | Esperado: ${montoEsperado} | Recibido: ${monto}`
+        );
+        await client.query('ROLLBACK');
+        return res.json({
+          codigo:  '0000',
+          mensaje: 'Recibido - monto no coincide, pago no procesado',
+        });
+      }
+
+      if (monedaRecibida && monedaRecibida !== 'BOB') {
+        console.warn(
+          `[SIP Callback] Callback recibido pero NO procesado por moneda inválida. ` +
+          `Alias: ${alias} | Moneda: ${moneda}`
+        );
+        await client.query('ROLLBACK');
+        return res.json({
+          codigo:  '0000',
+          mensaje: 'Recibido - moneda no coincide, pago no procesado',
+        });
+      }
+
+      // ── 5. VERIFICAR QUE NO ESTÉN YA PROCESADOS ──────────────────────
       const yasProcesados = pagos.every(
         p => p.qr_estado === 'pagado' || p.mensualidad_estado === 'pagado'
       );
@@ -106,7 +159,7 @@ class SipCallbackController {
         });
       }
 
-      // ── 5. PROCESAR CADA PAGO ─────────────────────────────────────────
+      // ── 6. PROCESAR CADA PAGO ─────────────────────────────────────────
       const observacionPagador = ` | Pagador: ${nombreCliente || 'N/D'} CI:${documentoCliente || 'N/D'} Cuenta:${cuentaCliente || 'N/D'}`;
 
       for (const pago of pagos) {
@@ -154,7 +207,7 @@ class SipCallbackController {
         `Cliente: ${nombreCliente || 'N/D'} | Monto total: ${monto} ${moneda}`
       );
 
-      // ── 6. RESPONDER 0000 A SIP ───────────────────────────────────────
+      // ── 7. RESPONDER 0000 A SIP ───────────────────────────────────────
       return res.json({
         codigo:  '0000',
         mensaje: 'Pago confirmado exitosamente',
