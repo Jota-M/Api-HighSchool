@@ -18,7 +18,7 @@ import {
   simularEscenarios       as mlSimularEscenarios,
   simularOptimo           as mlSimularOptimo,
   verificarMLService,
-} from '../services/ml-Service.js'; 
+} from '../services/ml-service.js'; 
 
 
 // ─────────────────────────────────────────────────────────────
