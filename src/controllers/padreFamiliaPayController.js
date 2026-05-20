@@ -29,6 +29,14 @@ function normalizarMonto(valor) {
   return Number.isFinite(numero) ? Number(numero.toFixed(2)) : null;
 }
 
+function calcularExpiracionQR(fechaVencimientoMensualidad) {
+  const ahora = new Date();
+  const vencMensualidad = new Date(fechaVencimientoMensualidad);
+  return vencMensualidad > ahora
+    ? vencMensualidad
+    : new Date(ahora.getTime() + 24 * 60 * 60 * 1000);
+}
+
 class PadreFamiliaPayController {
 
   // ══════════════════════════════════════════════════════════════════════
@@ -284,7 +292,8 @@ class PadreFamiliaPayController {
 
       // ── Preparar y llamar a SIP ──
       const alias            = generarAlias(mensualidad_id);
-      const fechaVencimiento = formatearFechaSIP(mensualidad.fecha_vencimiento);
+      const qrExpiracion     = calcularExpiracionQR(mensualidad.fecha_vencimiento);
+      const fechaVencimiento = formatearFechaSIP(qrExpiracion);
       const glosa            = truncarGlosa(`Mens ${mensualidad.mes_correspondiente} ${mensualidad.apellidos}`);
       const callbackUrl      = `${CALLBACK_URL}/api/sip/callback`;
 
@@ -307,12 +316,6 @@ class PadreFamiliaPayController {
           detalle: sipError.message,
         });
       }
-
-      const ahora           = new Date();
-      const vencMensualidad = new Date(mensualidad.fecha_vencimiento);
-      const qrExpiracion    = vencMensualidad > ahora
-        ? vencMensualidad
-        : new Date(ahora.getTime() + 24 * 60 * 60 * 1000);
 
       const codigoPago = `QR-${Date.now()}-${mensualidad_id}`;
 
@@ -691,7 +694,8 @@ class PadreFamiliaPayController {
         return fecha < min ? fecha : min;
       }, new Date(mensualidades[0].fecha_vencimiento));
 
-      const fechaVencimientoQR = formatearFechaSIP(fechaMasProxima);
+      const qrExpiracion      = calcularExpiracionQR(fechaMasProxima);
+      const fechaVencimientoQR = formatearFechaSIP(qrExpiracion);
       const callbackUrl        = `${CALLBACK_URL}/api/sip/callback`;
 
       let qrData;
@@ -713,11 +717,6 @@ class PadreFamiliaPayController {
           detalle: sipError.message,
         });
       }
-
-      const ahora        = new Date();
-      const qrExpiracion = fechaMasProxima > ahora
-        ? fechaMasProxima
-        : new Date(ahora.getTime() + 24 * 60 * 60 * 1000);
 
       // ── Guardamos idQr de SIP en transaccion_id para verificación posterior ──
       for (const mensualidad of mensualidades) {
