@@ -374,143 +374,79 @@ class PadreFamiliaPayController {
   // ══════════════════════════════════════════════════════════════════════
   // 4. GET /padre-p/mensualidad/:mensualidad_id/estado-qr
   // ══════════════════════════════════════════════════════════════════════
-  static async verificarEstadoQR(req, res) {
-    try {
-      const { mensualidad_id } = req.params;
+  // ══════════════════════════════════════════════════════════════════════
+// 4. GET /padre-p/mensualidad/:mensualidad_id/estado-qr
+// CORREGIDO: solo lectura, no sincroniza con SIP
+// ══════════════════════════════════════════════════════════════════════
+static async verificarEstadoQR(req, res) {
+  try {
+    const { mensualidad_id } = req.params;
 
-      const resultVerif = await pool.query(
-        `SELECT m.id, m.estado
-         FROM mensualidad m
-         INNER JOIN matricula mat      ON m.matricula_id      = mat.id
-         INNER JOIN estudiante e       ON mat.estudiante_id   = e.id
-         INNER JOIN estudiante_tutor et ON e.id               = et.estudiante_id
-         INNER JOIN padre_familia pf   ON et.padre_familia_id = pf.id
-         WHERE m.id          = $1
-           AND pf.usuario_id = $2`,
-        [mensualidad_id, req.user.id]
-      );
+    const resultVerif = await pool.query(
+      `SELECT m.id, m.estado
+       FROM mensualidad m
+       INNER JOIN matricula mat      ON m.matricula_id      = mat.id
+       INNER JOIN estudiante e       ON mat.estudiante_id   = e.id
+       INNER JOIN estudiante_tutor et ON e.id               = et.estudiante_id
+       INNER JOIN padre_familia pf   ON et.padre_familia_id = pf.id
+       WHERE m.id          = $1
+         AND pf.usuario_id = $2`,
+      [mensualidad_id, req.user.id]
+    );
 
-      if (resultVerif.rows.length === 0) {
-        return res.status(403).json({ success: false, message: 'No tenés acceso a esta mensualidad' });
-      }
+    if (resultVerif.rows.length === 0) {
+      return res.status(403).json({ success: false, message: 'No tenés acceso a esta mensualidad' });
+    }
 
-      // Si ya está pagada en BD, responder directo sin consultar SIP
-      if (resultVerif.rows[0].estado === 'pagado') {
-        return res.json({
-          success:       true,
-          estado:        'PAGADO',
-          en_nuestra_bd: true,
-          message:       '¡Pago confirmado! Tu mensualidad está al día.',
-        });
-      }
+    // Si ya está pagada en BD (el callback ya llegó), responder directo
+    if (resultVerif.rows[0].estado === 'pagado') {
+      return res.json({
+        success:  true,
+        estado:   'PAGADO',
+        message:  '¡Pago confirmado! Tu mensualidad está al día.',
+      });
+    }
 
-      const resultPago = await pool.query(
-        `SELECT qr_data, qr_estado, qr_expiracion, transaccion_id, monto_pagado
-         FROM pago_mensualidad
-         WHERE mensualidad_id = $1
-           AND qr_estado      IS NOT NULL
-           AND anulado        = false
-         ORDER BY created_at DESC
-         LIMIT 1`,
-        [mensualidad_id]
-      );
+    // Leer el QR activo desde BD local, sin consultar SIP
+    const resultPago = await pool.query(
+      `SELECT qr_data, qr_estado, qr_expiracion
+       FROM pago_mensualidad
+       WHERE mensualidad_id = $1
+         AND qr_estado      IS NOT NULL
+         AND anulado        = false
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [mensualidad_id]
+    );
 
-      if (resultPago.rows.length === 0) {
-        return res.json({ success: true, estado: 'SIN_QR', message: 'No hay un QR generado para esta mensualidad' });
-      }
+    if (resultPago.rows.length === 0) {
+      return res.json({ success: true, estado: 'SIN_QR', message: 'No hay un QR generado para esta mensualidad' });
+    }
 
-      const {
-        qr_data: alias,
-        qr_expiracion,
-        transaccion_id: idQrGuardado,
-        monto_pagado: montoEsperado,
-      } = resultPago.rows[0];
+    const { qr_estado, qr_expiracion } = resultPago.rows[0];
 
-      // Consultar estado real en SIP
-      let estadoSIP;
-      try {
-        estadoSIP = await consultarEstado(alias);
-      } catch (sipError) {
-        console.error('[VerificarEstado] Error consultando SIP:', sipError.message);
-        return res.json({
-          success:       true,
-          estado:        resultPago.rows[0].qr_estado.toUpperCase(),
-          message:       'Estado obtenido desde base de datos local',
-          qr_expiracion,
-        });
-      }
-
-      // ── PROTECCIÓN CLAVE: solo sincronizar si el idQr coincide ──
-      // Evita que un QR viejo o de otro alias dispare un falso PAGADO
-      if (estadoSIP.estadoActual === 'PAGADO' && resultVerif.rows[0].estado !== 'pagado') {
-
-        if (!idQrGuardado || idQrGuardado !== estadoSIP.idQr) {
-          console.warn(
-            `[VerificarEstado] ⚠️ idQr no coincide — NO se sincroniza. ` +
-            `Guardado: ${idQrGuardado} | SIP devolvió: ${estadoSIP.idQr}`
-          );
-          return res.json({
-            success:       true,
-            estado:        'PENDIENTE',
-            qr_expiracion,
-            message:       'Pago pendiente. Escaneá el QR con la app de tu banco.',
-          });
-        }
-
-        const montoLocal = normalizarMonto(montoEsperado);
-        const montoSIP = normalizarMonto(estadoSIP.monto);
-
-        if (montoLocal === null || montoSIP === null || Math.abs(montoLocal - montoSIP) > 0.01) {
-          console.warn(
-            `[VerificarEstado] Monto no coincide — NO se sincroniza. ` +
-            `Guardado: ${montoLocal} | SIP devolvió: ${estadoSIP.monto}`
-          );
-          return res.json({
-            success:       true,
-            estado:        'PENDIENTE',
-            qr_expiracion,
-            message:       'Pago pendiente. Escaneá el QR con la app de tu banco.',
-          });
-        }
-
-        console.log(`[VerificarEstado] ✅ idQr coincide. Sincronizando mensualidad ${mensualidad_id}`);
-
-        await pool.query(
-          `UPDATE pago_mensualidad
-           SET qr_estado      = 'pagado',
-               updated_at     = CURRENT_TIMESTAMP
-           WHERE qr_data = $1 AND anulado = false`,
-          [alias]
-        );
-
-        await pool.query(
-          `UPDATE mensualidad
-           SET estado = 'pagado', updated_at = CURRENT_TIMESTAMP
-           WHERE id = $1`,
-          [mensualidad_id]
-        );
-      }
-
+    // QR expirado
+    if (new Date(qr_expiracion) < new Date()) {
       return res.json({
         success:       true,
-        estado:        estadoSIP.estadoActual,
+        estado:        'EXPIRADO',
         qr_expiracion,
-        datos_pago:    estadoSIP.estadoActual === 'PAGADO' ? {
-          monto:         estadoSIP.monto,
-          moneda:        estadoSIP.moneda,
-          fecha:         estadoSIP.fechaProcesamiento,
-          nombreCliente: estadoSIP.nombreCliente,
-        } : null,
-        message: estadoSIP.estadoActual === 'PAGADO'
-          ? '¡Pago confirmado! Tu mensualidad está al día.'
-          : 'Pago pendiente. Escaneá el QR con la app de tu banco.',
+        message:       'El QR expiró. Cancelalo y generá uno nuevo.',
       });
-
-    } catch (error) {
-      console.error('Error al verificar estado QR:', error);
-      return res.status(500).json({ success: false, message: 'Error al verificar el estado: ' + error.message });
     }
+
+    return res.json({
+      success:       true,
+      estado:        qr_estado.toUpperCase(), // 'GENERADO' → el frontend sigue mostrando el QR
+      qr_expiracion,
+      message:       'Pago pendiente. Escaneá el QR con la app de tu banco.',
+    });
+
+  } catch (error) {
+    console.error('Error al verificar estado QR:', error);
+    return res.status(500).json({ success: false, message: 'Error al verificar el estado: ' + error.message });
   }
+}
 
   // ══════════════════════════════════════════════════════════════════════
   // 5. DELETE /padre-p/mensualidad/:mensualidad_id/cancelar-qr
@@ -780,169 +716,85 @@ class PadreFamiliaPayController {
   // ══════════════════════════════════════════════════════════════════════
   // 7. GET /padre-p/mensualidades/estado-qr-multiple
   // ══════════════════════════════════════════════════════════════════════
-  static async verificarEstadoQRMultiple(req, res) {
-    try {
-      const { alias } = req.query;
+  // ══════════════════════════════════════════════════════════════════════
+// 7. GET /padre-p/mensualidades/estado-qr-multiple
+// CORREGIDO: solo lectura, no sincroniza con SIP
+// ══════════════════════════════════════════════════════════════════════
+static async verificarEstadoQRMultiple(req, res) {
+  try {
+    const { alias } = req.query;
 
-      if (!alias) {
-        return res.status(400).json({ success: false, message: 'El alias es requerido' });
-      }
+    if (!alias) {
+      return res.status(400).json({ success: false, message: 'El alias es requerido' });
+    }
 
-      const resultPagos = await pool.query(
-        `SELECT
-           pm.id,
-           pm.mensualidad_id,
-           pm.qr_estado,
-           pm.qr_expiracion,
-           pm.monto_pagado,
-           pm.transaccion_id AS id_qr_guardado,
-           m.estado          AS mensualidad_estado,
-           m.mes_correspondiente,
-           m.monto_final
-         FROM pago_mensualidad pm
-         INNER JOIN mensualidad m ON pm.mensualidad_id = m.id
-         WHERE pm.qr_data = $1
-           AND pm.anulado  = false
-         ORDER BY pm.id ASC`,
-        [alias]
-      );
+    const resultPagos = await pool.query(
+      `SELECT
+         pm.mensualidad_id,
+         pm.qr_estado,
+         pm.qr_expiracion,
+         pm.monto_pagado,
+         m.estado AS mensualidad_estado,
+         m.mes_correspondiente
+       FROM pago_mensualidad pm
+       INNER JOIN mensualidad m ON pm.mensualidad_id = m.id
+       WHERE pm.qr_data = $1
+         AND pm.anulado  = false
+       ORDER BY pm.id ASC`,
+      [alias]
+    );
 
-      if (resultPagos.rows.length === 0) {
-        return res.status(404).json({ success: false, message: 'No se encontró ningún QR con ese alias' });
-      }
+    if (resultPagos.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'No se encontró ningún QR con ese alias' });
+    }
 
-      const pagos = resultPagos.rows;
+    const pagos = resultPagos.rows;
+    const mensualidades = pagos.map(p => ({
+      mensualidad_id: p.mensualidad_id,
+      mes:            p.mes_correspondiente,
+      monto:          p.monto_pagado,
+      estado:         p.mensualidad_estado,
+    }));
 
-      const todosPagados = pagos.every(
-        p => p.qr_estado === 'pagado' || p.mensualidad_estado === 'pagado'
-      );
+    // El callback ya actualizó la BD — solo leer el estado real
+    const todosPagados = pagos.every(
+      p => p.qr_estado === 'pagado' || p.mensualidad_estado === 'pagado'
+    );
 
-      if (todosPagados) {
-        return res.json({
-          success:       true,
-          estado:        'PAGADO',
-          en_nuestra_bd: true,
-          message:       '¡Pago confirmado! Todas las mensualidades están al día.',
-          mensualidades: pagos.map(p => ({
-            mensualidad_id: p.mensualidad_id,
-            mes:            p.mes_correspondiente,
-            monto:          p.monto_pagado,
-            estado:         p.mensualidad_estado,
-          })),
-        });
-      }
-
-      let estadoSIP;
-      try {
-        estadoSIP = await consultarEstado(alias);
-      } catch (sipError) {
-        console.error('[VerificarEstadoMultiple] Error consultando SIP:', sipError.message);
-        return res.json({
-          success:       true,
-          estado:        pagos[0].qr_estado?.toUpperCase() || 'PENDIENTE',
-          qr_expiracion: pagos[0].qr_expiracion,
-          message:       'Estado obtenido desde base de datos local',
-          mensualidades: pagos.map(p => ({
-            mensualidad_id: p.mensualidad_id,
-            mes:            p.mes_correspondiente,
-            monto:          p.monto_pagado,
-            estado:         p.mensualidad_estado,
-          })),
-        });
-      }
-
-      // ── PROTECCIÓN CLAVE: solo sincronizar si el idQr coincide ──
-      if (estadoSIP.estadoActual === 'PAGADO') {
-        const idQrGuardado = pagos[0].id_qr_guardado;
-        const montoEsperado = normalizarMonto(
-          pagos.reduce((total, p) => total + Number(p.monto_pagado || p.monto_final || 0), 0)
-        );
-        const montoSIP = normalizarMonto(estadoSIP.monto);
-
-        if (!idQrGuardado || idQrGuardado !== estadoSIP.idQr) {
-          console.warn(
-            `[VerificarEstadoMultiple] ⚠️ idQr no coincide — NO se sincroniza. ` +
-            `Guardado: ${idQrGuardado} | SIP devolvió: ${estadoSIP.idQr}`
-          );
-          return res.json({
-            success:       true,
-            estado:        'PENDIENTE',
-            qr_expiracion: pagos[0].qr_expiracion,
-            message:       'Pago pendiente. Escaneá el QR con la app de tu banco.',
-            mensualidades: pagos.map(p => ({
-              mensualidad_id: p.mensualidad_id,
-              mes:            p.mes_correspondiente,
-              monto:          p.monto_pagado,
-              estado:         p.mensualidad_estado,
-            })),
-          });
-        }
-
-        if (montoEsperado === null || montoSIP === null || Math.abs(montoEsperado - montoSIP) > 0.01) {
-          console.warn(
-            `[VerificarEstadoMultiple] Monto no coincide — NO se sincroniza. ` +
-            `Guardado: ${montoEsperado} | SIP devolvió: ${estadoSIP.monto}`
-          );
-          return res.json({
-            success:       true,
-            estado:        'PENDIENTE',
-            qr_expiracion: pagos[0].qr_expiracion,
-            message:       'Pago pendiente. Escaneá el QR con la app de tu banco.',
-            mensualidades: pagos.map(p => ({
-              mensualidad_id: p.mensualidad_id,
-              mes:            p.mes_correspondiente,
-              monto:          p.monto_pagado,
-              estado:         p.mensualidad_estado,
-            })),
-          });
-        }
-
-        console.log(`[VerificarEstadoMultiple] ✅ idQr coincide. Sincronizando ${pagos.length} mensualidades`);
-
-        for (const pago of pagos) {
-          if (pago.qr_estado !== 'pagado') {
-            await pool.query(
-              `UPDATE pago_mensualidad
-               SET qr_estado  = 'pagado', updated_at = CURRENT_TIMESTAMP
-               WHERE id = $1`,
-              [pago.id]
-            );
-            await pool.query(
-              `UPDATE mensualidad
-               SET estado = 'pagado', updated_at = CURRENT_TIMESTAMP
-               WHERE id = $1`,
-              [pago.mensualidad_id]
-            );
-          }
-        }
-      }
-
+    if (todosPagados) {
       return res.json({
         success:       true,
-        estado:        estadoSIP.estadoActual,
-        qr_expiracion: pagos[0].qr_expiracion,
-        mensualidades: pagos.map(p => ({
-          mensualidad_id: p.mensualidad_id,
-          mes:            p.mes_correspondiente,
-          monto:          p.monto_pagado,
-          estado:         p.mensualidad_estado,
-        })),
-        datos_pago: estadoSIP.estadoActual === 'PAGADO' ? {
-          monto:         estadoSIP.monto,
-          moneda:        estadoSIP.moneda,
-          fecha:         estadoSIP.fechaProcesamiento,
-          nombreCliente: estadoSIP.nombreCliente,
-        } : null,
-        message: estadoSIP.estadoActual === 'PAGADO'
-          ? `¡${pagos.length} mensualidades pagadas! Tu cuenta está al día.`
-          : 'Pago pendiente. Escaneá el QR con la app de tu banco.',
+        estado:        'PAGADO',
+        message:       `¡${pagos.length} mensualidades pagadas! Tu cuenta está al día.`,
+        mensualidades,
       });
-
-    } catch (error) {
-      console.error('Error al verificar estado QR múltiple:', error);
-      return res.status(500).json({ success: false, message: 'Error al verificar el estado: ' + error.message });
     }
+
+    const qr_expiracion = pagos[0].qr_expiracion;
+
+    if (new Date(qr_expiracion) < new Date()) {
+      return res.json({
+        success: true,
+        estado:  'EXPIRADO',
+        qr_expiracion,
+        message: 'El QR expiró. Cancelalo y generá uno nuevo.',
+        mensualidades,
+      });
+    }
+
+    return res.json({
+      success:       true,
+      estado:        'PENDIENTE',
+      qr_expiracion,
+      message:       'Pago pendiente. Escaneá el QR con la app de tu banco.',
+      mensualidades,
+    });
+
+  } catch (error) {
+    console.error('Error al verificar estado QR múltiple:', error);
+    return res.status(500).json({ success: false, message: 'Error al verificar el estado: ' + error.message });
   }
+}
 }
 
 export default PadreFamiliaPayController;
