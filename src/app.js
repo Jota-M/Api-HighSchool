@@ -50,7 +50,7 @@ import asistenciaRoutes from './routes/asistenciaRoutes.js';
 
 import estudiantedRoutes from './routes/estudiantedRoutes.js';
 import padreRoutes from './routes/padreRoutes.js';
-import reportesAsistenciaRoutes from './routes/reportesAsistenciaRoutes.js';
+import reportesAsistenciaRoutes from './routes/Reportesasistenciaroutes.js';
 import horarioRoutes from './routes/horarioRoutes.js';
 import seguimientoRoutes from './routes/seguimientoPedagogicoRoutes.js';
 import docentedRoutes from './routes/docentedRoutes.js';
