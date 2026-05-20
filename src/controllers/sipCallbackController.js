@@ -28,7 +28,14 @@ class SipCallbackController {
 
     // ── 1. VALIDAR QUE VIENE DE SIP ──────────────────────────────────────
     const authHeader = req.headers['authorization'];
-
+    console.log('[SIP Callback] Auth recibido:', authHeader);
+    console.log('[SIP Callback] Decoded:', 
+      authHeader?.startsWith('Basic ') 
+        ? Buffer.from(authHeader.slice(6), 'base64').toString('utf8')
+        : 'no es Basic'
+    );
+    console.log('[SIP Callback] CALLBACK_USER en env:', process.env.CALLBACK_USER);
+    console.log('[SIP Callback] CALLBACK_PASSWORD en env:', !!process.env.CALLBACK_PASSWORD);
     if (!validarCallbackAuth(authHeader)) {
       console.warn('[SIP Callback] Request rechazado: credenciales inválidas');
       return res.status(401).json({
