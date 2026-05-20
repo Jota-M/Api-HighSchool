@@ -803,34 +803,88 @@ class ReportesPagosController {
     try {
       const { periodo_academico_id, grado_id, paralelo_id } = req.query;
       
-      let whereConditions = [];
+      // 🔧 CORREGIDO: Construir query directamente sin usar la vista problemática
+      let whereConditions = ['mat.estado = \'activo\'', 'mat.deleted_at IS NULL'];
       let queryParams = [];
       let paramCounter = 1;
 
       if (periodo_academico_id) {
-        whereConditions.push(`periodo_academico_id = $${paramCounter}`);
+        whereConditions.push(`mat.periodo_academico_id = $${paramCounter}`);
         queryParams.push(parseInt(periodo_academico_id));
         paramCounter++;
       }
 
       if (grado_id) {
-        whereConditions.push(`grado_id = $${paramCounter}`);
+        whereConditions.push(`g.id = $${paramCounter}`);
         queryParams.push(parseInt(grado_id));
         paramCounter++;
       }
 
       if (paralelo_id) {
-        whereConditions.push(`paralelo_id = $${paramCounter}`);
+        whereConditions.push(`p.id = $${paramCounter}`);
         queryParams.push(parseInt(paralelo_id));
         paramCounter++;
       }
 
-      const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
+      const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
+      // 🔧 QUERY CORREGIDA: Sin vista, calculando todo directamente
       const query = `
-        SELECT * FROM v_estado_pagos_estudiante
+        SELECT 
+          e.id as estudiante_id,
+          e.codigo as estudiante_codigo,
+          e.nombres,
+          e.apellidos,
+          g.nombre as grado,
+          p.nombre as paralelo,
+          mat.es_becado,
+          mat.porcentaje_beca,
+          mat.periodo_academico_id,
+          g.id as grado_id,
+          p.id as paralelo_id,
+          
+          -- Total de mensualidades
+          COUNT(m.id) as total_mensualidades,
+          
+          -- Mensualidades pagadas
+          COUNT(CASE WHEN m.estado = 'pagado' THEN 1 END) as mensualidades_pagadas,
+          
+          -- Mensualidades pendientes
+          COUNT(CASE WHEN m.estado IN ('pendiente', 'vencido') THEN 1 END) as mensualidades_pendientes,
+          
+          -- Mensualidades vencidas
+          COUNT(CASE WHEN m.estado = 'vencido' THEN 1 END) as mensualidades_vencidas,
+          
+          -- Monto total
+          COALESCE(SUM(m.monto_final), 0) as monto_total,
+          
+          -- Monto pagado
+          COALESCE(SUM(
+            CASE WHEN m.estado = 'pagado' 
+            THEN m.monto_final 
+            ELSE 0 
+            END
+          ), 0) as monto_pagado,
+          
+          -- Monto pendiente
+          COALESCE(SUM(
+            CASE WHEN m.estado IN ('pendiente', 'vencido') 
+            THEN m.monto_final 
+            ELSE 0 
+            END
+          ), 0) as monto_pendiente
+          
+        FROM estudiante e
+        INNER JOIN matricula mat ON e.id = mat.estudiante_id
+        INNER JOIN paralelo p ON mat.paralelo_id = p.id
+        INNER JOIN grado g ON p.grado_id = g.id
+        LEFT JOIN mensualidad m ON mat.id = m.matricula_id
         ${whereClause}
-        ORDER BY apellidos ASC, nombres ASC
+        GROUP BY 
+          e.id, e.codigo, e.nombres, e.apellidos,
+          g.nombre, p.nombre, mat.es_becado, mat.porcentaje_beca,
+          mat.periodo_academico_id, g.id, p.id
+        ORDER BY e.apellidos ASC, e.nombres ASC
       `;
 
       const result = await pool.query(query, queryParams);
@@ -856,33 +910,44 @@ class ReportesPagosController {
     try {
       const { periodo_academico_id, mes_inicio, mes_fin } = req.query;
       
-      let whereConditions = [];
+      let whereConditions = ['NOT pm.anulado'];
       let queryParams = [];
       let paramCounter = 1;
 
       if (periodo_academico_id) {
-        whereConditions.push(`periodo_id = $${paramCounter}`);
+        whereConditions.push(`mat.periodo_academico_id = $${paramCounter}`);
         queryParams.push(parseInt(periodo_academico_id));
         paramCounter++;
       }
 
       if (mes_inicio) {
-        whereConditions.push(`mes >= $${paramCounter}::date`);
+        whereConditions.push(`pm.fecha_pago >= $${paramCounter}::date`);
         queryParams.push(mes_inicio);
         paramCounter++;
       }
 
       if (mes_fin) {
-        whereConditions.push(`mes <= ${paramCounter}::date`);
+        whereConditions.push(`pm.fecha_pago <= $${paramCounter}::date`);
         queryParams.push(mes_fin);
         paramCounter++;
       }
 
       const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
 
+      // 🔧 QUERY CORREGIDA: Agrupar por mes
       const query = `
-        SELECT * FROM v_ingresos_por_periodo
+        SELECT 
+          DATE_TRUNC('month', pm.fecha_pago) as mes,
+          TO_CHAR(pm.fecha_pago, 'YYYY-MM') as mes_formato,
+          TO_CHAR(pm.fecha_pago, 'TMMonth YYYY') as mes_nombre,
+          COUNT(pm.id) as cantidad_pagos,
+          SUM(pm.monto_pagado) as total_ingreso,
+          COUNT(DISTINCT mat.estudiante_id) as estudiantes_distintos
+        FROM pago_mensualidad pm
+        INNER JOIN mensualidad m ON pm.mensualidad_id = m.id
+        INNER JOIN matricula mat ON m.matricula_id = mat.id
         ${whereClause}
+        GROUP BY DATE_TRUNC('month', pm.fecha_pago), TO_CHAR(pm.fecha_pago, 'YYYY-MM'), TO_CHAR(pm.fecha_pago, 'TMMonth YYYY')
         ORDER BY mes DESC
       `;
 
@@ -914,44 +979,84 @@ class ReportesPagosController {
 
   // GET /api/reportes-pagos/morosos - Lista de morosos
   static async morosos(req, res) {
-    try {
-      const { grado_id, paralelo_id, dias_mora_minimo } = req.query;
-      
-      let whereConditions = [];
-      let queryParams = [];
-      let paramCounter = 1;
+  try {
+    const { grado_id, paralelo_id, dias_mora_minimo, periodo_academico_id } = req.query;
+    
+    let whereConditions = [
+      'm.estado IN (\'pendiente\', \'vencido\')',
+      'm.fecha_vencimiento < CURRENT_DATE',
+      'mat.estado = \'activo\'',
+      'mat.deleted_at IS NULL'
+    ];
+    let queryParams = [];
+    let paramCounter = 1;
 
-      if (grado_id) {
-        whereConditions.push(`grado_id = ${paramCounter}`);
-        queryParams.push(parseInt(grado_id));
-        paramCounter++;
-      }
+    if (periodo_academico_id) {
+      whereConditions.push(`mat.periodo_academico_id = $${paramCounter}`);
+      queryParams.push(parseInt(periodo_academico_id));
+      paramCounter++;
+    }
 
-      if (paralelo_id) {
-        whereConditions.push(`paralelo_id = ${paramCounter}`);
-        queryParams.push(parseInt(paralelo_id));
-        paramCounter++;
-      }
+    if (grado_id) {
+      whereConditions.push(`g.id = $${paramCounter}`);
+      queryParams.push(parseInt(grado_id));
+      paramCounter++;
+    }
 
-      if (dias_mora_minimo) {
-        whereConditions.push(`dias_mora >= ${paramCounter}`);
-        queryParams.push(parseInt(dias_mora_minimo));
-        paramCounter++;
-      }
+    if (paralelo_id) {
+      whereConditions.push(`p.id = $${paramCounter}`);
+      queryParams.push(parseInt(paralelo_id));
+      paramCounter++;
+    }
 
-      const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
+    const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
+      // 🔧 QUERY CORREGIDA: Calcular días de mora directamente
       const query = `
-        SELECT * FROM v_lista_morosos
+        SELECT 
+          e.id as estudiante_id,
+          e.codigo,
+          e.nombres,
+          e.apellidos,
+          g.nombre as grado,
+          p.nombre as paralelo,
+          m.numero_cuota,
+          m.mes_correspondiente,
+          m.fecha_vencimiento,
+          m.monto_final,
+          m.estado,
+          g.id as grado_id,
+          p.id as paralelo_id,
+          CURRENT_DATE - m.fecha_vencimiento as dias_mora,
+          
+          -- Calcular saldo pendiente
+          (m.monto_final - COALESCE((
+            SELECT SUM(pm.monto_pagado)
+            FROM pago_mensualidad pm
+            WHERE pm.mensualidad_id = m.id
+              AND NOT pm.anulado
+          ), 0)) as saldo_pendiente
+          
+        FROM mensualidad m
+        INNER JOIN matricula mat ON m.matricula_id = mat.id
+        INNER JOIN estudiante e ON mat.estudiante_id = e.id
+        INNER JOIN paralelo p ON mat.paralelo_id = p.id
+        INNER JOIN grado g ON p.grado_id = g.id
         ${whereClause}
-        ORDER BY dias_mora DESC, apellidos ASC
+        ORDER BY dias_mora DESC, e.apellidos ASC
       `;
 
-      const result = await pool.query(query, queryParams);
+      let result = await pool.query(query, queryParams);
+
+      // 🔧 Filtrar por días de mora DESPUÉS de la query (porque usamos CURRENT_DATE)
+      if (dias_mora_minimo) {
+        const minDias = parseInt(dias_mora_minimo);
+        result.rows = result.rows.filter(row => row.dias_mora >= minDias);
+      }
 
       // Calcular deuda total
       const deudaTotal = result.rows.reduce((acc, row) => {
-        return acc + parseFloat(row.monto_final);
+        return acc + parseFloat(row.saldo_pendiente || row.monto_final);
       }, 0);
 
       res.json({
@@ -971,7 +1076,7 @@ class ReportesPagosController {
     }
   }
 
-  // GET /api/reportes-pagos/resumen - Resumen general
+  // GET /api/reportes-pagos/resumen - Resumen general (este está OK)
   static async resumen(req, res) {
     try {
       const { periodo_academico_id } = req.query;

@@ -3,6 +3,7 @@ import { pool } from '../db/pool.js';
 import { Estudiante, PadreFamilia, EstudianteTutor } from './Estudiantes.js';
 import { Matricula } from './Matricula.js';
 import EmailService from '../utils/emailService.js';
+import WhatsAppService from '../utils/whatsappService.js';
 import Usuario from './Usuario.js';
 
 class PreInscripcion {
@@ -660,13 +661,19 @@ class PreInscripcion {
       // Enviar email asíncronamente
       if (shouldManageTransaction) {
         setImmediate(async () => {
-          try {
-            const preinscripcionCompleta = await this.obtenerPorId(id);
-            await EmailService.notificarCambioEstado(preinscripcionCompleta, estadoAnterior);
-          } catch (error) {
-            console.error('❌ Error al enviar email:', error);
-          }
-        });
+  try {
+    const preinscripcionCompleta = await this.obtenerPorId(id);
+
+    // 📧 Email
+    await EmailService.notificarCambioEstado(preinscripcionCompleta, estadoAnterior);
+
+    // 📱 WhatsApp (NUEVO)
+    await WhatsAppService.notificarCambioEstado(preinscripcionCompleta, estadoAnterior);
+
+  } catch (error) {
+    console.error('❌ Error notificaciones:', error);
+  }
+});
       }
 
       return result.rows[0];

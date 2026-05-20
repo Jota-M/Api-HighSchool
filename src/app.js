@@ -38,6 +38,30 @@ import autoMatriculacionRoutes from './routes/autoMatriculacionRoutes.js';
 import cursosVacacionalesRoutes from './routes/cursoVacacionalRoutes.js';
 import reportesRoutes from './routes/reportesRoutes.js';
 import paymentRoutes from './routes/paymentRoutes.js';
+import materialRoutes from './routes/materialRoutes.js';
+
+//Rutas modulo transporte
+import rutaTransporteRoutes from './routes/rutaTransporteRoutes.js';
+import asignacionTransporteRoutes from './routes/asignacionTransporteRoutes.js';
+import pagoTransporteRoutes from './routes/pagoTransporteRoutes.js';
+import ingresoRoutes from './routes/ingresoRoutes.js';
+import notasRoutes from './routes/notasRoutes.js';
+import asistenciaRoutes from './routes/asistenciaRoutes.js';
+
+import estudiantedRoutes from './routes/estudiantedRoutes.js';
+import padreRoutes from './routes/padreRoutes.js';
+import reportesAsistenciaRoutes from './routes/reportesAsistenciaRoutes.js';
+import horarioRoutes from './routes/horarioRoutes.js';
+import seguimientoRoutes from './routes/seguimientoPedagogicoRoutes.js';
+import docentedRoutes from './routes/docentedRoutes.js';
+import reportesNotasRoutes from './routes/reportesNotasRoutes.js';
+import notificacionRoutes from './routes/notificacionRoutes.js';
+import permisosRoutes from './routes/permisosRoutes.js';
+import prediccionRoutes from './routes/prediccionRoutes.js';
+import backupRoutes from './routes/backupRoutes.js';
+import whatsappRoutes from './routes/whatsappRoutes.js';
+import sipCallbackRoutes  from './routes/sipCallbackRoutes.js';
+import padrePagoRoutes    from './routes/padrePagoRoutes.js';
 
 // Modelo para limpieza de sesiones
 import Sesion from './models/Sesion.js';
@@ -132,6 +156,11 @@ app.use('/public/academicos', publicAcademicosRoutes);
 app.use('/auth', authRoutes);
 
 // ------------------------------
+// SIP CALLBACK (PUBLICO)
+// ------------------------------
+app.use('/api/sip', sipCallbackRoutes);
+
+// ------------------------------
 // Aplicar rate limit al resto de rutas
 // ------------------------------
 app.use(limiter);
@@ -140,7 +169,7 @@ app.use(limiter);
 // Admin / Sistema
 // ------------------------------
 app.use('/usuarios', usuariosRoutes);
-app.use('/roles', rolesRoutes);
+//app.use('/roles', rolesRoutes);
 app.use('/actividad', actividadRoutes);
 app.use('/sesiones', sesionesRoutes);
 app.use('/configuracion', configuracionRoutes);
@@ -173,10 +202,45 @@ app.use('/cursos-vacacionales', cursosVacacionalesRoutes);
 app.use('/api', paymentRoutes);
 
 // ------------------------------
+// Rutas del módulo de notas y asistencia
+// ------------------------------
+app.use('/notas', notasRoutes);
+app.use('/asistencia', asistenciaRoutes);
+app.use('/permisos', asistenciaRoutes);
+app.use('/materiales', materialRoutes);
+
+// ------------------------------
+// Rutas del módulo de transporte
+// ------------------------------
+app.use('/api/ruta-transporte', rutaTransporteRoutes);
+app.use('/api/asignacion-transporte', asignacionTransporteRoutes);
+app.use('/api/pago-transporte', pagoTransporteRoutes);
+app.use('/api/ingreso', ingresoRoutes);
+
+app.use('/estudianted', estudiantedRoutes);
+app.use('/reportes/asistencia', reportesAsistenciaRoutes);
+app.use('/reportes/notas', reportesNotasRoutes);
+app.use('/horarios', horarioRoutes);
+app.use('/seguimiento', seguimientoRoutes);
+app.use('/docentes', docentedRoutes);
+// app.use('/reportes/notas', reportesNotasRoutes);
+app.use('/notificaciones', notificacionRoutes);
+app.use('/', permisosRoutes);
+app.use('/padre', padreRoutes);
+app.use('/prediccion', prediccionRoutes);
+app.use('/backups', backupRoutes);
+app.use('/whatsapp', whatsappRoutes);
+// ------------------------------
+// PADRE PAGOS
+// ------------------------------
+app.use('/padre-p', padrePagoRoutes);
+
+// ------------------------------
 // Rutas API antiguas
 // ------------------------------
 app.use('/preinscripcion', preinscripcionRoutes);
 app.use('/cupos', cupoPreinscripcionRoutes);
+
 
 // ------------------------------
 // Manejo de errores / fallback 404

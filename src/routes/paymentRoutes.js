@@ -248,4 +248,5 @@ router.post(
   authorize('pago_mensualidad.leer'),
   PagoMensualidadPDFController.generarPDFMultiple
 );
+router.post('/pago-mensualidad/pdf-directo', PagoMensualidadPDFController.generarPDFDirecto);
 export default router;

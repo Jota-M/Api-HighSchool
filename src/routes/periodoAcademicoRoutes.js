@@ -10,14 +10,14 @@ router.use(authenticate);
 // GET /api/periodo-academico - Listar periodos
 router.get(
   '/',
-  authorize('periodo_academico.leer'),
+  // authorize('periodo_academico.leer'),
   PeriodoAcademicoController.listar
 );
 
 // GET /api/periodo-academico/activo - Obtener periodo activo
 router.get(
   '/activo',
-  authorize('periodo_academico.leer'),
+  // authorize('periodo_academico.leer'),
   PeriodoAcademicoController.obtenerActivo
 );
 

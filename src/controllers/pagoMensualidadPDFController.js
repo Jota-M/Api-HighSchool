@@ -180,6 +180,64 @@ class PagoMensualidadPDFController {
       }
     }
   }
+  static async generarPDFDirecto(req, res) {
+  try {
+    const { pagos, nombre_entrega, ci_entrega, quien_recibe, preview } = req.body;
+
+    if (!pagos || !Array.isArray(pagos) || pagos.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Debe proporcionar al menos un pago'
+      });
+    }
+
+    const datosEntrega = {
+      nombre: nombre_entrega || 'Sin especificar',
+      ci: ci_entrega || 'N/A'
+    };
+
+    const personasQueReciben = {
+      patricia: { nombre: 'Patricia Ramírez Villca', ci: '5070770' },
+      oswaldo: { nombre: 'Oswaldo Esteban Bohorquez Velasco', ci: '5071886' }
+    };
+
+    const datosRecibe = personasQueReciben[quien_recibe] || personasQueReciben.patricia;
+
+    const doc = new PDFDocument({
+      size: 'LETTER',
+      margins: { top: 30, bottom: 30, left: 40, right: 40 }
+    });
+
+    const year = new Date().getFullYear();
+    const disposition = preview ? 'inline' : 'attachment';
+    
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `${disposition}; filename=Recibo_${pagos[0].codigo_pago}.pdf`
+    );
+
+    doc.pipe(res);
+
+    await PagoMensualidadPDFController.generatePDFContent(
+      doc,
+      pagos, // Usar los datos directamente
+      datosEntrega,
+      datosRecibe
+    );
+
+    doc.end();
+
+  } catch (error) {
+    console.error('Error al generar PDF directo:', error);
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        message: 'Error al generar PDF: ' + error.message
+      });
+    }
+  }
+}
 
   /**
    * 🔧 OPTIMIZADO PARA MEDIA HOJA - Sistema 10 Meses - CON SOPORTE PAGO ANUAL
