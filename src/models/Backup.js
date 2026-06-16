@@ -1,18 +1,14 @@
 // models/Backup.js
-// ⚠️ No usa pg_dump — funciona con cualquier BD:
-//    Docker local, Supabase, Render, Railway, etc.
-//    El dump se genera directamente con el pool de pg.
-
-import fs         from 'fs';
-import os         from 'os';
-import path       from 'path';
-import { pool }   from '../db/pool.js';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { pool } from '../db/pool.js';
 import UploadFile from '../utils/uploadFile.js';
 import { splitSqlStatements } from '../utils/sqlSplitter.js';
 
 // ─── Helpers internos ────────────────────────────────────────────────────────
 function formatSize(bytes) {
-  if (bytes < 1024)        return `${bytes} B`;
+  if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
@@ -24,16 +20,16 @@ function generateKey() {
 // Escapar valores para SQL INSERT
 function escapeSqlValue(val) {
   if (val === null || val === undefined) return 'NULL';
-  if (typeof val === 'boolean')          return val ? 'TRUE' : 'FALSE';
-  if (typeof val === 'number')           return String(val);
-  if (val instanceof Date)               return `'${val.toISOString()}'`;
+  if (typeof val === 'boolean') return val ? 'TRUE' : 'FALSE';
+  if (typeof val === 'number') return String(val);
+  if (val instanceof Date) return `'${val.toISOString()}'`;
 
   // ← NUEVO: arrays de PostgreSQL
   if (Array.isArray(val)) {
     const elements = val.map(item => {
       if (item === null || item === undefined) return 'NULL';
       if (typeof item === 'boolean') return item ? 'TRUE' : 'FALSE';
-      if (typeof item === 'number')  return String(item);
+      if (typeof item === 'number') return String(item);
       // Strings: escapar comillas simples y envolver en comillas dobles (formato pg array)
       return `"${String(item).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
     });
@@ -124,8 +120,8 @@ async function generarDumpSQL(client) {
       let tipo = col.udt_name === 'varchar' && col.character_maximum_length
         ? `character varying(${col.character_maximum_length})`
         : col.data_type === 'USER-DEFINED'
-        ? col.udt_name
-        : col.data_type;
+          ? col.udt_name
+          : col.data_type;
 
       let def = `    "${col.column_name}" ${tipo}`;
       if (col.column_default) def += ` DEFAULT ${col.column_default}`;
@@ -154,11 +150,11 @@ async function generarDumpSQL(client) {
     lines.push(`);`);
     lines.push('');
 
-// 2c. Datos: INSERT INTO
-const dataResult = await client.query(`SELECT * FROM "${tabla}"`);
+    // 2c. Datos: INSERT INTO
+    const dataResult = await client.query(`SELECT * FROM "${tabla}"`);
 
-// ← NUEVO: detectar columnas generadas para excluirlas del INSERT
-const generatedColsResult = await client.query(`
+    // ← NUEVO: detectar columnas generadas para excluirlas del INSERT
+    const generatedColsResult = await client.query(`
   SELECT column_name
   FROM information_schema.columns
   WHERE table_schema = 'public'
@@ -166,36 +162,36 @@ const generatedColsResult = await client.query(`
     AND is_generated = 'ALWAYS'
 `, [tabla]);
 
-const generatedCols = new Set(
-  generatedColsResult.rows.map(r => r.column_name)
-);
+    const generatedCols = new Set(
+      generatedColsResult.rows.map(r => r.column_name)
+    );
 
-// TRUNCATE igual que antes
-lines.push(`TRUNCATE TABLE "${tabla}" RESTART IDENTITY CASCADE;`);
-lines.push('');
+    // TRUNCATE igual que antes
+    lines.push(`TRUNCATE TABLE "${tabla}" RESTART IDENTITY CASCADE;`);
+    lines.push('');
 
-if (dataResult.rows.length > 0) {
-  // Filtrar campos generados tanto en columnas como en valores
-  const fields = dataResult.fields.filter(f => !generatedCols.has(f.name));
-  const columnas = fields.map(f => `"${f.name}"`).join(', ');
+    if (dataResult.rows.length > 0) {
+      // Filtrar campos generados tanto en columnas como en valores
+      const fields = dataResult.fields.filter(f => !generatedCols.has(f.name));
+      const columnas = fields.map(f => `"${f.name}"`).join(', ');
 
-  lines.push(`-- Datos de ${tabla} (${dataResult.rows.length} filas)`);
+      lines.push(`-- Datos de ${tabla} (${dataResult.rows.length} filas)`);
 
-  const LOTE = 100;
-  for (let i = 0; i < dataResult.rows.length; i += LOTE) {
-    const lote = dataResult.rows.slice(i, i + LOTE);
-    const valores = lote.map(row => {
-      // Solo los valores de columnas no generadas
-      const vals = fields.map(f => escapeSqlValue(row[f.name]));
-      return `(${vals.join(', ')})`;
-    }).join(',\n  ');
+      const LOTE = 100;
+      for (let i = 0; i < dataResult.rows.length; i += LOTE) {
+        const lote = dataResult.rows.slice(i, i + LOTE);
+        const valores = lote.map(row => {
+          // Solo los valores de columnas no generadas
+          const vals = fields.map(f => escapeSqlValue(row[f.name]));
+          return `(${vals.join(', ')})`;
+        }).join(',\n  ');
 
-    lines.push(`INSERT INTO "${tabla}" (${columnas}) VALUES`);
-    lines.push(`  ${valores}`);
-    lines.push(`;`);
-  }
-  lines.push('');
-}
+        lines.push(`INSERT INTO "${tabla}" (${columnas}) VALUES`);
+        lines.push(`  ${valores}`);
+        lines.push(`;`);
+      }
+      lines.push('');
+    }
 
     // 2d. Resetear sequences (para que los SERIAL sigan desde el máximo)
     const seqResult = await client.query(`
@@ -262,15 +258,15 @@ class Backup {
   // Usa el pool de pg para leer el schema y los datos → genera .sql → Cloudinary
   static async generate(usuario_id) {
     const backup_key = generateKey();
-    const timestamp  = new Date().toISOString().replace(/[:.]/g, '-');
-    const filename   = `backup_${timestamp}.sql`;
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `backup_${timestamp}.sql`;
 
     const client = await pool.connect();
     try {
       // 1. Generar el SQL completo programáticamente
       const sqlContent = await generarDumpSQL(client);
-      const buffer     = Buffer.from(sqlContent, 'utf8');
-      const sizeBytes  = buffer.length;
+      const buffer = Buffer.from(sqlContent, 'utf8');
+      const sizeBytes = buffer.length;
 
       // 2. Subir a Cloudinary como raw (igual que permisos_adjuntos)
       const uploaded = await UploadFile.uploadFromBuffer(
@@ -306,58 +302,58 @@ class Backup {
   // ── Restaurar BD ─────────────────────────────────────────────────────────────
   // Descarga el .sql de Cloudinary y ejecuta cada sentencia con el pool
   // models/Backup.js — método restore()
-static async restore(backup_key, usuario_id) {
-  const backup = await Backup.findById(backup_key);
-  if (!backup) throw new Error('Backup no encontrado');
+  static async restore(backup_key, usuario_id) {
+    const backup = await Backup.findById(backup_key);
+    if (!backup) throw new Error('Backup no encontrado');
 
-  const response = await fetch(backup.cloudinary_url);
-  if (!response.ok) throw new Error('No se pudo descargar el archivo desde Cloudinary');
-  const sqlContent = await response.text();
+    const response = await fetch(backup.cloudinary_url);
+    if (!response.ok) throw new Error('No se pudo descargar el archivo desde Cloudinary');
+    const sqlContent = await response.text();
 
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
 
-    // ← Deshabilitar triggers (incluye FK checks) durante la restauración
-    await client.query('SET session_replication_role = replica;');
+      // ← Deshabilitar triggers (incluye FK checks) durante la restauración
+      await client.query('SET session_replication_role = replica;');
 
-    const SQL_KEYWORDS = new Set([
-      'SELECT', 'INSERT', 'UPDATE', 'DELETE',
-      'CREATE', 'DROP', 'ALTER', 'TRUNCATE',
-      'SET', 'DO', 'GRANT', 'REVOKE', 'COMMENT',
-    ]);
+      const SQL_KEYWORDS = new Set([
+        'SELECT', 'INSERT', 'UPDATE', 'DELETE',
+        'CREATE', 'DROP', 'ALTER', 'TRUNCATE',
+        'SET', 'DO', 'GRANT', 'REVOKE', 'COMMENT',
+      ]);
 
-    const sentencias = splitSqlStatements(sqlContent).filter(s => {
-      const firstWord = s.split(/\s+/)[0].toUpperCase();
-      return SQL_KEYWORDS.has(firstWord);
-    });
+      const sentencias = splitSqlStatements(sqlContent).filter(s => {
+        const firstWord = s.split(/\s+/)[0].toUpperCase();
+        return SQL_KEYWORDS.has(firstWord);
+      });
 
-    for (const sentencia of sentencias) {
-      await client.query(sentencia);
-    }
+      for (const sentencia of sentencias) {
+        await client.query(sentencia);
+      }
 
-    // ← Volver a habilitar FK checks
-    await client.query('SET session_replication_role = DEFAULT;');
+      // ← Volver a habilitar FK checks
+      await client.query('SET session_replication_role = DEFAULT;');
 
-    await client.query('COMMIT');
+      await client.query('COMMIT');
 
-    const result = await pool.query(`
+      const result = await pool.query(`
       UPDATE backup_registro
       SET ultima_restauracion_at = CURRENT_TIMESTAMP, restaurado_por = $1
       WHERE backup_key = $2 RETURNING *
     `, [usuario_id, backup_key]);
 
-    return result.rows[0];
+      return result.rows[0];
 
-  } catch (error) {
-    await client.query('ROLLBACK');
-    // Asegurarse de restaurar el modo aunque falle
-    await client.query('SET session_replication_role = DEFAULT;').catch(() => {});
-    throw new Error('Error al ejecutar el backup: ' + error.message);
-  } finally {
-    client.release();
+    } catch (error) {
+      await client.query('ROLLBACK');
+      // Asegurarse de restaurar el modo aunque falle
+      await client.query('SET session_replication_role = DEFAULT;').catch(() => { });
+      throw new Error('Error al ejecutar el backup: ' + error.message);
+    } finally {
+      client.release();
+    }
   }
-}
 
   // ── Eliminar backup ──────────────────────────────────────────────────────────
   static async delete(backup_key, usuario_id) {
@@ -387,7 +383,7 @@ static async restore(backup_key, usuario_id) {
     const total = parseInt(countResult.rows[0].count);
     if (total <= maxCount) return { eliminados: 0 };
 
-    const sobran      = total - maxCount;
+    const sobran = total - maxCount;
     const viejosResult = await pool.query(`
       SELECT backup_key, cloudinary_public_id, filename
       FROM backup_registro

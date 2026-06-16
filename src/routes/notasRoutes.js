@@ -56,6 +56,19 @@ router.get(
   authorize('notas.leer'),
   DimensionEvaluacionController.listar
 );
+router.post(
+  '/dimensiones',
+  authorize('dimension_evaluacion.crear'),
+  logActivity('crear', 'dimension_evaluacion'),
+  DimensionEvaluacionController.crear
+);
+
+router.put(
+  '/dimensiones/:id',
+  authorize('dimension_evaluacion.actualizar'),
+  logActivity('actualizar', 'dimension_evaluacion'),
+  DimensionEvaluacionController.actualizar
+);
 
 // ==========================================
 // PERÍODOS DE EVALUACIÓN (trimestres)

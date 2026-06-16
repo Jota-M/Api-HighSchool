@@ -8,7 +8,8 @@ import {
   AccesoMaterialController,
   ComentarioMaterialController,
   FavoritoMaterialController,
-  ProgresoEstudianteController
+  ProgresoEstudianteController,
+  TemaQuizController
 } from '../controllers/materialController.js';
 import { authenticate, authorize, logActivity } from '../Middlewares/auth.js';
 import { upload, handleMulterError } from '../Middlewares/uploadMiddleware.js';
@@ -157,6 +158,17 @@ router.delete(
   TemaController.eliminar
 );
 
+/**
+ * POST /api/materiales/temas/:id/generar-contenido
+ * Genera contenido para un tema usando IA.
+ * Solo docente.
+ */
+router.post(
+  '/temas/:id/generar-contenido',
+  authorize('tema.actualizar'),
+  logActivity('generar_contenido', 'tema'),
+  TemaController.generarContenido
+);
 // ==========================================================
 // MATERIALES ACADÉMICOS
 // ==========================================================
@@ -442,4 +454,85 @@ router.put(
   ProgresoEstudianteController.actualizar
 );
 
+// ==========================================================
+// ESTADÍSTICAS DE PROGRESO POR TEMA
+// ==========================================================
+
+/**
+ * GET /api/materiales/temas/:id/progreso-resumen
+ * Resumen de progreso de estudiantes en un tema específico.
+ * Query: ?paralelo_id=X&periodo_academico_id=Y
+ */
+router.get(
+  '/temas/:id/progreso-resumen',
+  authorize('progreso.leer'),
+  ProgresoEstudianteController.getResumenPorTema
+);
+// ==========================================================
+// QUIZ AUTOMÁTICO POR TEMA (Nivel 2 - IA)
+// ==========================================================
+
+/**
+ * POST /api/materiales/temas/:id/generar-quiz
+ * Genera (o regenera) el quiz de un tema con IA, basado en tema.contenido.
+ * Body: { cantidad_preguntas?: number } (1-20, default 5)
+ * Requiere que el tema ya tenga contenido generado.
+ */
+router.post(
+  '/temas/:id/generar-quiz',
+  authorize('tema.actualizar'),
+  logActivity('generar_quiz', 'tema'),
+  TemaQuizController.generarQuiz
+);
+
+/**
+ * GET /api/materiales/temas/:id/quiz
+ * Lista las preguntas del quiz SIN respuesta correcta (para que el estudiante resuelva).
+ */
+router.get(
+  '/temas/:id/quiz',
+  authorize('tema.leer'),
+  TemaQuizController.listarParaEstudiante
+);
+
+/**
+ * GET /api/materiales/temas/:id/quiz/completo
+ * Lista las preguntas CON respuesta correcta y explicación (vista docente).
+ */
+router.get(
+  '/temas/:id/quiz/completo',
+  authorize('tema.actualizar'),
+  TemaQuizController.listarCompleto
+);
+
+/**
+ * POST /api/materiales/temas/:id/quiz/responder
+ * El estudiante envía respuestas y recibe calificación inmediata.
+ * Body: { matricula_id, respuestas: [{ quiz_id, respuesta_dada }] }
+ */
+router.post(
+  '/temas/:id/quiz/responder',
+  authorize('tema.leer'),
+  TemaQuizController.responder
+);
+
+/**
+ * GET /api/materiales/temas/:id/quiz/mi-resultado?matricula_id=X
+ * Último intento del estudiante autenticado para este tema.
+ */
+router.get(
+  '/temas/:id/quiz/mi-resultado',
+  authorize('tema.leer'),
+  TemaQuizController.miResultado
+);
+
+/**
+ * GET /api/materiales/temas/:id/quiz/resumen?paralelo_id=X&periodo_academico_id=Y
+ * Resumen agregado de resultados del quiz para el docente.
+ */
+router.get(
+  '/temas/:id/quiz/resumen',
+  authorize('progreso.leer'),
+  TemaQuizController.getResumen
+);
 export default router;

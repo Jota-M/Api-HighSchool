@@ -7,7 +7,7 @@ const DIAS_SEMANA = { 1: 'Lunes', 2: 'Martes', 3: 'Miércoles', 4: 'Jueves', 5: 
 
 // CORRECCIÓN: máquina de estados explícita — evita transiciones inválidas como archivado → publicado
 const TRANSICIONES_VALIDAS = {
-  borrador:  ['publicado'],
+  borrador: ['publicado'],
   publicado: ['archivado', 'borrador'],
   archivado: [],
 };
@@ -18,9 +18,11 @@ const TRANSICIONES_VALIDAS = {
 class BloqueHorarioController {
   static async listar(req, res) {
     try {
-      const { turno_id, activo, incluir_recreos } = req.query;
+      const { turno_id, nivel_academico_id, activo, incluir_recreos } = req.query;
+
       const bloques = await BloqueHorario.findAll({
         turno_id: turno_id ? parseInt(turno_id) : undefined,
+        nivel_academico_id: nivel_academico_id ? parseInt(nivel_academico_id) : undefined,
         activo: activo !== undefined ? activo === 'true' : undefined,
         incluir_recreos: incluir_recreos !== 'false',
       });
@@ -68,8 +70,10 @@ class BloqueHorarioController {
 
       res.status(201).json({ success: true, message: 'Bloque creado exitosamente', data: { bloque } });
     } catch (error) {
-      if (error.constraint === 'bloque_horario_turno_id_numero_key') {
-        return res.status(409).json({ success: false, message: 'Ya existe un bloque con ese número en este turno' });
+      if (error.constraint === 'bloque_horario_turno_id_numero_key' ||
+          error.constraint === 'uq_bloque_turno_nivel_numero' ||
+          error.constraint === 'uq_bloque_turno_numero_sin_nivel') {
+        return res.status(409).json({ success: false, message: 'Ya existe un bloque con ese número para este turno y nivel académico' });
       }
       res.status(500).json({ success: false, message: 'Error al crear bloque: ' + error.message });
     }
@@ -143,10 +147,10 @@ class HorarioController {
 
       const horarios = await Horario.findAll({
         periodo_academico_id: periodo_academico_id ? parseInt(periodo_academico_id) : undefined,
-        paralelo_id:          paralelo_id          ? parseInt(paralelo_id)          : undefined,
+        paralelo_id: paralelo_id ? parseInt(paralelo_id) : undefined,
         estado,
-        grado_id:             grado_id             ? parseInt(grado_id)             : undefined,
-        nivel_academico_id:   nivel_academico_id   ? parseInt(nivel_academico_id)   : undefined,
+        grado_id: grado_id ? parseInt(grado_id) : undefined,
+        nivel_academico_id: nivel_academico_id ? parseInt(nivel_academico_id) : undefined,
       });
 
       res.json({ success: true, data: { horarios, total: horarios.length } });
@@ -547,10 +551,10 @@ class HorarioDetalleController {
 
       const conflicto = await HorarioDetalle.verificarConflictoDocente({
         asignacion_docente_id: parseInt(asignacion_docente_id),
-        dia_semana:            parseInt(dia_semana),
-        bloque_horario_id:     parseInt(bloque_horario_id),
-        periodo_academico_id:  parseInt(periodo_academico_id),
-        excluir_detalle_id:    excluir_detalle_id ? parseInt(excluir_detalle_id) : null,
+        dia_semana: parseInt(dia_semana),
+        bloque_horario_id: parseInt(bloque_horario_id),
+        periodo_academico_id: parseInt(periodo_academico_id),
+        excluir_detalle_id: excluir_detalle_id ? parseInt(excluir_detalle_id) : null,
       });
 
       res.json({

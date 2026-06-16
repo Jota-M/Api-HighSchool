@@ -20,7 +20,7 @@ const upload = multer({
         cb(new Error('Solo se permiten imágenes para la foto'), false);
       }
     } else if (file.fieldname === 'cv') {
-      const allowedTypes = ['application/pdf', 'application/msword', 
+      const allowedTypes = ['application/pdf', 'application/msword',
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
       if (allowedTypes.includes(file.mimetype)) {
         cb(null, true);
@@ -48,14 +48,14 @@ router.use(authenticate);
 // GET /docente/estadisticas - Obtener estadísticas generales
 router.get(
   '/estadisticas',
-  authorize('docente.leer'),
+  authorize('docentes.leer'),
   DocenteController.obtenerEstadisticas
 );
 
 // POST /docente/registro-completo - Registro completo SIN ASIGNACIONES
 router.post(
   '/registro-completo',
-  authorize('docente.crear'),
+  authorize('docentes.crear'),
   uploadFields,
   formDataConfigs.registroDocente,
   logActivity('registro_completo', 'docente'),
@@ -65,21 +65,21 @@ router.post(
 // GET /docente - Listar docentes
 router.get(
   '/',
-  authorize('docente.leer'),
+  authorize('docentes.leer'),
   DocenteController.listar
 );
 
 // GET /docente/:id - Obtener docente por ID
 router.get(
   '/:id',
-  authorize('docente.leer'),
+  authorize('docentes.leer'),
   DocenteController.obtenerPorId
 );
 
 // PUT /docente/:id - Actualizar docente
 router.put(
   '/:id',
-  authorize('docente.actualizar'),
+  authorize('docentes.actualizar'),
   uploadFields,
   logActivity('actualizar', 'docente'),
   DocenteController.actualizar
@@ -88,7 +88,7 @@ router.put(
 // DELETE /docente/:id - Eliminar docente
 router.delete(
   '/:id',
-  authorize('docente.eliminar'),
+  authorize('docentes.eliminar'),
   logActivity('eliminar', 'docente'),
   DocenteController.eliminar
 );
@@ -96,7 +96,7 @@ router.delete(
 // POST /docente/:id/crear-usuario - Crear usuario para docente existente
 router.post(
   '/:id/crear-usuario',
-  authorize('docente.crear'),
+  authorize('docentes.crear'),
   logActivity('crear_usuario', 'docente'),
   DocenteController.crearUsuario
 );

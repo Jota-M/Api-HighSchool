@@ -13,6 +13,7 @@
   "license": "ISC",
   "description": "This is a backend for a user authentication system using Node.js, Express, bcryptjs for password hashing, and jsonwebtoken for token generation.",
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "bcrypt": "^6.0.0",
     "bcryptjs": "3.0.2",
     "cloudinary": "^1.41.3",

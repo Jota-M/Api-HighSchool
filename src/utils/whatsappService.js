@@ -251,7 +251,7 @@ class WhatsAppService {
       },
       body: JSON.stringify({
         number: numero,
-        text:   texto,
+        text: texto,
       }),
     });
 
@@ -265,27 +265,27 @@ class WhatsAppService {
 
   // ─── Enviar imagen con caption ────────────────────────────────
   async _enviarImagen(numero, imageUrl, caption = '') {
-  const response = await fetch(`${process.env.EVOLUTION_API_URL}/send/media`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'apikey': process.env.EVOLUTION_INSTANCE_TOKEN,
-    },
-    body: JSON.stringify({
-      number:  numero,
-      type:    'image',   // ← era "mediatype"
-      url:     imageUrl,  // ← era "media"
-      caption: caption,
-    }),
-  });
+    const response = await fetch(`${process.env.EVOLUTION_API_URL}/send/media`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': process.env.EVOLUTION_INSTANCE_TOKEN,
+      },
+      body: JSON.stringify({
+        number: numero,
+        type: 'image',   // ← era "mediatype"
+        url: imageUrl,  // ← era "media"
+        caption: caption,
+      }),
+    });
 
-  const text = await response.text();
-  const data = JSON.parse(text);
-  if (!response.ok) {
-    throw new Error(data.message || data.error || `HTTP ${response.status}`);
+    const text = await response.text();
+    const data = JSON.parse(text);
+    if (!response.ok) {
+      throw new Error(data.message || data.error || `HTTP ${response.status}`);
+    }
+    return data;
   }
-  return data;
-}
 
   // ─── Método genérico de envío ─────────────────────────────────
   async enviarMensaje({ to, body, foto_url = null }) {
@@ -388,10 +388,10 @@ class WhatsAppService {
     const body = this.generarMensajeAsistencia({
       estado,
       nombreEstudiante: `${estudiante.nombres} ${estudiante.apellidos}`.trim(),
-      grado:   `${estudiante.grado_nombre} ${estudiante.paralelo_nombre}`,
+      grado: `${estudiante.grado_nombre} ${estudiante.paralelo_nombre}`,
       materia: materia_nombre,
       fecha,
-      turno:   estudiante.turno_nombre,
+      turno: estudiante.turno_nombre,
     });
 
     const resultados = await Promise.allSettled(
@@ -425,8 +425,8 @@ class WhatsAppService {
     const resultados = await Promise.allSettled(
       aNotificar.map(reg =>
         this.notificarAsistencia({
-          matricula_id:        reg.matricula_id,
-          estado:              reg.estado,
+          matricula_id: reg.matricula_id,
+          estado: reg.estado,
           materia_nombre,
           fecha,
           asignacion_docente_id,
@@ -441,9 +441,9 @@ class WhatsAppService {
   generarMensajeAsistencia({ estado, nombreEstudiante, grado, materia, fecha, turno }) {
     const fechaFormateada = new Date(fecha + 'T12:00:00').toLocaleDateString('es-BO', {
       weekday: 'long',
-      year:    'numeric',
-      month:   'long',
-      day:     'numeric',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
     });
 
     const esAusente = estado === 'ausente';
@@ -468,6 +468,122 @@ class WhatsAppService {
     ]
       .filter(l => l !== null)
       .join('\n');
+  }
+  // ─── Obtener celular del tutor principal de una preinscripción ───
+  obtenerCelularTutor(preinscripcion) {
+    const tutor = preinscripcion?.tutor;
+    if (!tutor) return null;
+    return tutor.celular || tutor.telefono || null;
+  }
+
+  // ─── Notificación: preinscripción recibida ─────────────────────
+  async notificarPreinscripcionCreada(preinscripcion) {
+    const celular = this.obtenerCelularTutor(preinscripcion);
+    if (!celular) {
+      console.log('⚠️ Sin celular de tutor para notificar creación');
+      return { success: false, message: 'Sin celular registrado' };
+    }
+    const body = this.generarMensajeCreacion(preinscripcion);
+    return await this.enviarMensaje({ to: celular, body });
+  }
+
+  // ─── Notificación: cambio de estado ────────────────────────────
+  async notificarCambioEstado(preinscripcion, estadoAnterior) {
+    const celular = this.obtenerCelularTutor(preinscripcion);
+    if (!celular) {
+      console.log('⚠️ Sin celular de tutor para notificar cambio de estado');
+      return { success: false, message: 'Sin celular registrado' };
+    }
+    const body = this.generarMensajeCambioEstado(preinscripcion, estadoAnterior);
+    return await this.enviarMensaje({ to: celular, body });
+  }
+
+  // ─── Templates ──────────────────────────────────────────────────
+
+  _obtenerInfoEstadoSimple(estado) {
+    const estados = {
+      'iniciada': { emoji: '📝', titulo: 'Preinscripción Iniciada' },
+      'datos_completos': { emoji: '✅', titulo: 'Datos Completos Recibidos' },
+      'documentos_pendientes': { emoji: '📄', titulo: 'Documentos Pendientes' },
+      'en_revision': { emoji: '🔍', titulo: 'En Revisión' },
+      'documentos_aprobados': { emoji: '✅', titulo: 'Documentos Aprobados' },
+      'entrevista_pendiente': { emoji: '📅', titulo: 'Entrevista Pendiente' },
+      'entrevista_programada': { emoji: '📅', titulo: 'Entrevista Programada' },
+      'entrevista_completada': { emoji: '✅', titulo: 'Entrevista Completada' },
+      'aprobada': { emoji: '🎉', titulo: '¡Preinscripción Aprobada!' },
+      'rechazada': { emoji: '❌', titulo: 'Preinscripción Rechazada' },
+      'convertida': { emoji: '🎓', titulo: '¡Inscripción Completada!' },
+      'expirada': { emoji: '⏰', titulo: 'Preinscripción Expirada' },
+      'cancelada': { emoji: '🚫', titulo: 'Preinscripción Cancelada' },
+    };
+    return estados[estado] || { emoji: '📋', titulo: 'Actualización de Estado' };
+  }
+
+  generarMensajeCreacion(preinscripcion) {
+    const estudiante = preinscripcion.estudiante || {};
+    const tutor = preinscripcion.tutor || {};
+    const nombreEstudiante = `${estudiante.nombres || ''} ${estudiante.apellido_paterno || ''}`.trim();
+    const nombreTutor = `${tutor.nombres || ''} ${tutor.apellido_paterno || ''}`.trim();
+
+    return [
+      `📝 *¡Gracias por registrarte!*`,
+      `🏫 Unidad Educativa La Voz de Cristo`,
+      ``,
+      `Hola ${nombreTutor || 'Padre/Tutor'},`,
+      ``,
+      `Hemos recibido correctamente la preinscripción de *${nombreEstudiante}*.`,
+      ``,
+      `📋 Código: *${preinscripcion.codigo_inscripcion}*`,
+      ``,
+      `Guarda este código para dar seguimiento a tu solicitud.`,
+      `Te avisaremos por este medio sobre cualquier novedad. ¡Gracias por confiar en nosotros!`,
+      ``,
+      `📞 _Colegio: +591 69624189_`,
+      `_Este es un mensaje automático._`,
+    ].join('\n');
+  }
+
+  generarMensajeCambioEstado(preinscripcion, estadoAnterior) {
+    const estudiante = preinscripcion.estudiante || {};
+    const tutor = preinscripcion.tutor || {};
+    const nombreEstudiante = `${estudiante.nombres || ''} ${estudiante.apellido_paterno || ''}`.trim();
+    const nombreTutor = `${tutor.nombres || ''} ${tutor.apellido_paterno || ''}`.trim();
+    const info = this._obtenerInfoEstadoSimple(preinscripcion.estado);
+
+    const lineas = [
+      `${info.emoji} *${info.titulo}*`,
+      `🏫 Unidad Educativa La Voz de Cristo`,
+      ``,
+      `Hola ${nombreTutor || 'Padre/Tutor'},`,
+      ``,
+      `La preinscripción de *${nombreEstudiante}* (código *${preinscripcion.codigo_inscripcion}*) ha cambiado de estado:`,
+      ``,
+      `📊 Nuevo estado: *${info.titulo}*`,
+    ];
+
+    if (preinscripcion.observaciones) {
+      lineas.push(``, `📝 Observaciones: ${preinscripcion.observaciones}`);
+    }
+
+    if (preinscripcion.estado === 'documentos_pendientes') {
+      lineas.push(``, `⚠️ *Acción requerida:* completa la carga de documentos lo antes posible.`);
+    }
+
+    if (preinscripcion.estado === 'aprobada') {
+      lineas.push(``, `🎉 ¡Felicitaciones! Pronto recibirás más información sobre los siguientes pasos.`);
+    }
+
+    if (preinscripcion.estado === 'rechazada' && preinscripcion.motivo_rechazo) {
+      lineas.push(``, `❌ Motivo: ${preinscripcion.motivo_rechazo}`);
+    }
+
+    lineas.push(
+      ``,
+      `📞 _Colegio: +591 69624189_`,
+      `_Este es un mensaje automático._`,
+    );
+
+    return lineas.join('\n');
   }
 }
 

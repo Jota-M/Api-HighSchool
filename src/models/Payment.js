@@ -102,29 +102,29 @@ class CostoMensualidad {
 
   // Actualizar
   static async update(id, data) {
-    const { monto_base, descuento_pago_completo, activo, observaciones } = data;
-    
-    const query = `
-      UPDATE costo_mensualidad 
-      SET monto_base = $1,
-          descuento_pago_completo = $2,
-          activo = $3,
-          observaciones = $4,
-          updated_at = CURRENT_TIMESTAMP
-      WHERE id = $5
-      RETURNING *
-    `;
-    
-    const result = await pool.query(query, [
-      monto_base,
-      descuento_pago_completo,
-      activo,
-      observaciones,
-      id
-    ]);
-    
-    return result.rows[0];
-  }
+  const { monto_base, descuento_pago_completo, activo, observaciones } = data;
+  
+  const query = `
+    UPDATE costo_mensualidad 
+    SET monto_base = $1,
+        descuento_pago_completo = $2,
+        activo = COALESCE($3, activo),   -- ✅ Si llega null/undefined, conserva el valor actual
+        observaciones = $4,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = $5
+    RETURNING *
+  `;
+  
+  const result = await pool.query(query, [
+    monto_base,
+    descuento_pago_completo,
+    activo ?? null,   // ✅ undefined → null, así COALESCE lo ignora
+    observaciones,
+    id
+  ]);
+  
+  return result.rows[0];
+}
 
   // Eliminar (soft delete desactivando)
   static async delete(id) {

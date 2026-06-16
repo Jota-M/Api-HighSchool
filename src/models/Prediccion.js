@@ -52,7 +52,7 @@ class Prediccion {
       throw new Error(`Período de evaluación ${periodoEvaluacionId} no encontrado o inactivo`);
     }
 
-    const periodo       = resPeriodo.rows[0];
+    const periodo = resPeriodo.rows[0];
     const ponderaciones = {};
 
     for (const row of resPond.rows) {
@@ -71,9 +71,9 @@ class Prediccion {
         total_semanas: Math.max(8, Math.min(20, periodo.total_semanas)),
         ponderaciones,
       },
-      semana_actual:  Math.min(periodo.semana_actual, periodo.total_semanas),
+      semana_actual: Math.min(periodo.semana_actual, periodo.total_semanas),
       numero_periodo: periodo.numero_periodo,
-      anio_periodo:   periodo.anio_periodo,
+      anio_periodo: periodo.anio_periodo,
     };
   }
 
@@ -157,7 +157,7 @@ class Prediccion {
     const notasPorDimension = {};
     for (const row of rows) {
       const nota = parseFloat(row.nota_normalizada);
-      const dim  = row.dimension_codigo;
+      const dim = row.dimension_codigo;
       if (isNaN(nota) || !dim) continue;
       if (!notasPorDimension[dim]) notasPorDimension[dim] = [];
       notasPorDimension[dim].push(nota);
@@ -313,25 +313,25 @@ class Prediccion {
       }
 
       const n_obs_conducta = (obsMap['CONDUCTA_informativo'] ?? 0)
-                           + (obsMap['CONDUCTA_requiere_atencion'] ?? 0)
-                           + (obsMap['CONDUCTA_urgente'] ?? 0);
+        + (obsMap['CONDUCTA_requiere_atencion'] ?? 0)
+        + (obsMap['CONDUCTA_urgente'] ?? 0);
 
-      const n_obs_socioem  = (obsMap['SOCIOEM_informativo'] ?? 0)
-                           + (obsMap['SOCIOEM_requiere_atencion'] ?? 0)
-                           + (obsMap['SOCIOEM_urgente'] ?? 0);
+      const n_obs_socioem = (obsMap['SOCIOEM_informativo'] ?? 0)
+        + (obsMap['SOCIOEM_requiere_atencion'] ?? 0)
+        + (obsMap['SOCIOEM_urgente'] ?? 0);
 
       const n_obs_urgentes = observaciones.rows
         .filter(r => r.nivel_relevancia === 'urgente')
         .reduce((acc, r) => acc + parseInt(r.total), 0);
 
       const n_logros = (obsMap['LOGRO_informativo'] ?? 0)
-                     + (obsMap['LOGRO_requiere_atencion'] ?? 0);
+        + (obsMap['LOGRO_requiere_atencion'] ?? 0);
 
       const total_obs = n_obs_conducta + n_obs_socioem + n_obs_urgentes + n_logros;
       const ratio_obs_negativas = total_obs > 0
         ? parseFloat(
-            ((n_obs_conducta + n_obs_socioem + n_obs_urgentes) / total_obs).toFixed(3)
-          )
+          ((n_obs_conducta + n_obs_socioem + n_obs_urgentes) / total_obs).toFixed(3)
+        )
         : 0;
 
       // ── Correlación entre materias ────────────────────────────────────────────
@@ -342,7 +342,7 @@ class Prediccion {
 
       return {
         nota_trim_ant,
-        asist_trim_ant:        -1,
+        asist_trim_ant: -1,
         reprobo_trim_ant,
         racha_trims_riesgo,
         mejor_nota_historica,
@@ -360,20 +360,20 @@ class Prediccion {
     } catch (err) {
       console.warn('[Prediccion] getHistorialFeatures falló, usando defaults:', err.message);
       return {
-        nota_trim_ant:         -1,
-        asist_trim_ant:        -1,
-        reprobo_trim_ant:       0,
-        racha_trims_riesgo:     0,
-        mejor_nota_historica:  -1,
-        tend_intertrimestral:   0,
-        reprobo_misma_mat_ant:  0.0,
-        n_obs_conducta:         0,
-        n_obs_socioem:          0,
-        n_obs_urgentes:         0,
-        n_logros:               0,
-        ratio_obs_negativas:    0,
-        n_materias_riesgo_sim:  0,
-        reprobo_mat_correlac:   0,
+        nota_trim_ant: -1,
+        asist_trim_ant: -1,
+        reprobo_trim_ant: 0,
+        racha_trims_riesgo: 0,
+        mejor_nota_historica: -1,
+        tend_intertrimestral: 0,
+        reprobo_misma_mat_ant: 0.0,
+        n_obs_conducta: 0,
+        n_obs_socioem: 0,
+        n_obs_urgentes: 0,
+        n_logros: 0,
+        ratio_obs_negativas: 0,
+        n_materias_riesgo_sim: 0,
+        reprobo_mat_correlac: 0,
       };
     }
   }
@@ -386,7 +386,7 @@ class Prediccion {
     const notas_hac = notasPorDimension['HAC'] ?? [];
 
     let notaComplementariaPonderada = 0;
-    let pesoComplementario          = 0;
+    let pesoComplementario = 0;
 
     for (const [codigo, notas] of Object.entries(notasPorDimension)) {
       if (DIMS_PRINCIPALES.has(codigo)) continue;
@@ -395,7 +395,7 @@ class Prediccion {
       if (pond === 0) continue;
       const prom = notas.reduce((a, b) => a + b, 0) / notas.length;
       notaComplementariaPonderada += prom * pond;
-      pesoComplementario          += pond;
+      pesoComplementario += pond;
     }
 
     const nota_complementaria_pct = pesoComplementario > 0
@@ -418,7 +418,7 @@ class Prediccion {
     matriculaId,
     asignacionDocenteId,
     periodoEvaluacionId,
-    umbralNota    = 60,
+    umbralNota = 60,
     maxMateriales = 8,
   ) {
     const { rows: temas } = await client.query(`
@@ -460,15 +460,15 @@ class Prediccion {
     `, [temaIds, maxMateriales]);
 
     return materiales.map(m => ({
-      id:           m.id,
-      titulo:       m.titulo,
-      tipo:         m.tipo,
-      tipo_codigo:  m.tipo_codigo,
-      tema_id:      m.tema_id,
-      tema_titulo:  m.tema_titulo,
-      descripcion:  m.descripcion || null,
+      id: m.id,
+      titulo: m.titulo,
+      tipo: m.tipo,
+      tipo_codigo: m.tipo_codigo,
+      tema_id: m.tema_id,
+      tema_titulo: m.tema_titulo,
+      descripcion: m.descripcion || null,
       es_destacado: m.es_destacado,
-      url:          m.url_externa || m.url_archivo || null,
+      url: m.url_externa || m.url_archivo || null,
     }));
   }
 
@@ -573,11 +573,11 @@ class Prediccion {
         : '';
 
       const etiquetas = {
-        medio:   '🟡 Riesgo MEDIO',
-        alto:    '🟠 Riesgo ALTO',
+        medio: '🟡 Riesgo MEDIO',
+        alto: '🟠 Riesgo ALTO',
         critico: '🔴 Riesgo CRÍTICO',
       };
-      const titulo  = `${etiquetas[nivelRiesgo] ?? '⚠️ Alerta'} — ${nombreEstudiante} · ${materia}`;
+      const titulo = `${etiquetas[nivelRiesgo] ?? '⚠️ Alerta'} — ${nombreEstudiante} · ${materia}`;
       const mensaje = mensajeAlerta?.trim()
         ? mensajeAlerta
         : buildMensajeDocente({ nivelRiesgo, nombreEstudiante, materia, contextoAula, notaEstimada });
@@ -666,6 +666,7 @@ class Prediccion {
       client.release();
     }
   }
+
 }
 
 function buildMensajeDocente({ nivelRiesgo, nombreEstudiante, materia, contextoAula, notaEstimada }) {

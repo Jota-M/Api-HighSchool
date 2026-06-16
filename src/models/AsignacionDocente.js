@@ -72,9 +72,9 @@ class AsignacionDocente {
 
   // Listar asignaciones con filtros
   static async findAll(filters = {}) {
-    const { 
-      page = 1, limit = 20, docente_id, grado_id, materia_id, 
-      paralelo_id, periodo_academico_id, activo 
+    const {
+      page = 1, limit = 20, docente_id, grado_id, materia_id,
+      paralelo_id, periodo_academico_id, activo
     } = filters;
     const offset = (page - 1) * limit;
 
@@ -212,31 +212,66 @@ class AsignacionDocente {
     return result.rows;
   }
 
-  // Obtener docentes asignados a un paralelo
-  static async findByParalelo(paralelo_id, periodo_academico_id) {
+  // Obtener asignación activa para una materia/paralelo específico
+  static async findByGradoMateria(grado_materia_id, paralelo_id, periodo_academico_id) {
     const query = `
-      SELECT ad.*,
-        d.codigo as docente_codigo,
-        d.nombres as docente_nombres,
-        d.apellidos as docente_apellidos,
-        d.foto_url as docente_foto,
-        d.email as docente_email,
-        d.especialidad,
-        m.nombre as materia_nombre,
-        m.codigo as materia_codigo,
-        m.color as materia_color,
-        m.horas_semanales
-      FROM asignacion_docente ad
-      INNER JOIN docente d ON ad.docente_id = d.id
-      INNER JOIN grado_materia gm ON ad.grado_materia_id = gm.id
-      INNER JOIN materia m ON gm.materia_id = m.id
-      WHERE ad.paralelo_id = $1 
-        AND ad.periodo_academico_id = $2
-        AND ad.activo = true 
-        AND ad.deleted_at IS NULL
-      ORDER BY m.nombre
-    `;
-    const result = await pool.query(query, [paralelo_id, periodo_academico_id]);
+    SELECT ad.*,
+      d.codigo as docente_codigo,
+      d.nombres as docente_nombres,
+      d.apellidos as docente_apellidos,
+      d.foto_url as docente_foto,
+      m.nombre as materia_nombre,
+      m.codigo as materia_codigo,
+      m.color as materia_color
+    FROM asignacion_docente ad
+    INNER JOIN docente d ON ad.docente_id = d.id
+    INNER JOIN grado_materia gm ON ad.grado_materia_id = gm.id
+    INNER JOIN materia m ON gm.materia_id = m.id
+    WHERE ad.grado_materia_id = $1
+      AND ad.paralelo_id = $2
+      AND ad.periodo_academico_id = $3
+      AND ad.activo = true
+      AND ad.deleted_at IS NULL
+    LIMIT 1
+  `;
+    const result = await pool.query(query, [grado_materia_id, paralelo_id, periodo_academico_id]);
+    return result.rows[0] || null;
+  }
+  // Obtener docentes asignados a un paralelo
+  static async findByParalelo(paralelo_id, periodo_academico_id, grado_materia_id = null) {
+    let whereConditions = [
+      'ad.paralelo_id = $1',
+      'ad.periodo_academico_id = $2',
+      'ad.activo = true',
+      'ad.deleted_at IS NULL'
+    ];
+    let queryParams = [paralelo_id, periodo_academico_id];
+
+    if (grado_materia_id) {
+      whereConditions.push(`ad.grado_materia_id = $${queryParams.length + 1}`);
+      queryParams.push(grado_materia_id);
+    }
+
+    const query = `
+    SELECT ad.*,
+      d.codigo as docente_codigo,
+      d.nombres as docente_nombres,
+      d.apellidos as docente_apellidos,
+      d.foto_url as docente_foto,
+      d.email as docente_email,
+      d.especialidad,
+      m.nombre as materia_nombre,
+      m.codigo as materia_codigo,
+      m.color as materia_color,
+      m.horas_semanales
+    FROM asignacion_docente ad
+    INNER JOIN docente d ON ad.docente_id = d.id
+    INNER JOIN grado_materia gm ON ad.grado_materia_id = gm.id
+    INNER JOIN materia m ON gm.materia_id = m.id
+    WHERE ${whereConditions.join(' AND ')}
+    ORDER BY m.nombre
+  `;
+    const result = await pool.query(query, queryParams);
     return result.rows;
   }
 
@@ -263,7 +298,7 @@ class AsignacionDocente {
   // Cambiar docente de una asignación
   static async cambiarDocente(id, nuevo_docente_id, client = null) {
     const db = client || pool;
-    
+
     const query = `
       UPDATE asignacion_docente SET
         docente_id = $1,
@@ -293,7 +328,7 @@ class AsignacionDocente {
   // Copiar asignaciones de un periodo a otro
   static async copiarDePeriodo(periodo_origen_id, periodo_destino_id, client = null) {
     const db = client || pool;
-    
+
     const query = `
       INSERT INTO asignacion_docente (
         docente_id, grado_materia_id, paralelo_id, periodo_academico_id,

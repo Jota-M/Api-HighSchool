@@ -7,10 +7,11 @@ import ActividadLog from '../models/actividadLog.js';
 import RequestInfo from '../utils/requestInfo.js';
 import { pool } from '../db/pool.js';
 import {
-    dispararPrediccionAlCierre,
-    cerrarPeriodoClase,
-    dispararAsignacionMaterial
-  } from '../services/prediccionAutomatica.js';
+  dispararPrediccionAlCierre,
+  cerrarPeriodoClase,
+  dispararAsignacionMaterial
+} from '../services/prediccionAutomatica.js';
+import notificacionesAcademicas from '../utils/notificacionesAcademicas.js';
 
 // =============================================
 // PERIODO EVALUACION
@@ -83,7 +84,6 @@ class PeriodoEvaluacionController {
         data: { periodo }
       });
     } catch (error) {
-      // Conflicto de orden único por periodo_academico
       if (error.code === '23505') {
         return res.status(409).json({
           success: false,
@@ -136,7 +136,6 @@ class PeriodoEvaluacionController {
 // =============================================
 class DimensionEvaluacionController {
 
-  // GET /api/dimensiones
   static async listar(_req, res) {
     try {
       const dimensiones = await DimensionEvaluacion.findAll();
@@ -145,6 +144,138 @@ class DimensionEvaluacionController {
       res.status(500).json({
         success: false,
         message: 'Error al listar dimensiones: ' + error.message
+      });
+    }
+  }
+
+  static async crear(req, res) {
+    try {
+      const { nombre, codigo, orden, color, porcentaje_ponderacion, descripcion } = req.body;
+
+      if (!nombre || !codigo || orden === undefined || porcentaje_ponderacion === undefined) {
+        return res.status(400).json({
+          success: false,
+          message: 'nombre, codigo, orden y porcentaje_ponderacion son requeridos'
+        });
+      }
+
+      const result = await pool.query(`
+        INSERT INTO dimension_evaluacion
+          (nombre, codigo, orden, color, porcentaje_ponderacion, descripcion)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING *
+      `, [
+        nombre,
+        codigo.toUpperCase(),
+        orden,
+        color || null,
+        porcentaje_ponderacion,
+        descripcion || null
+      ]);
+
+      const reqInfo = RequestInfo.extract(req);
+      await ActividadLog.create({
+        usuario_id:     req.user.id,
+        accion:         'crear',
+        modulo:         'dimension_evaluacion',
+        tabla_afectada: 'dimension_evaluacion',
+        registro_id:    result.rows[0].id,
+        datos_nuevos:   result.rows[0],
+        ip_address:     reqInfo.ip,
+        user_agent:     reqInfo.userAgent,
+        resultado:      'exitoso',
+        mensaje:        `Dimensión creada: ${nombre} (${codigo})`
+      });
+
+      res.status(201).json({
+        success: true,
+        message: 'Dimensión creada exitosamente',
+        data: { dimension: result.rows[0] }
+      });
+
+    } catch (error) {
+      if (error.code === '23505') {
+        return res.status(409).json({
+          success: false,
+          message: 'Ya existe una dimensión con ese código'
+        });
+      }
+      res.status(500).json({
+        success: false,
+        message: 'Error al crear dimensión: ' + error.message
+      });
+    }
+  }
+
+  static async actualizar(req, res) {
+    try {
+      const { id } = req.params;
+      const { nombre, codigo, orden, color, porcentaje_ponderacion, descripcion, activo } = req.body;
+
+      const anterior = await pool.query(
+        `SELECT * FROM dimension_evaluacion WHERE id = $1`, [id]
+      );
+      if (!anterior.rows[0]) {
+        return res.status(404).json({
+          success: false,
+          message: 'Dimensión no encontrada'
+        });
+      }
+
+      const result = await pool.query(`
+        UPDATE dimension_evaluacion SET
+          nombre                 = COALESCE($1, nombre),
+          codigo                 = COALESCE($2, codigo),
+          orden                  = COALESCE($3, orden),
+          color                  = COALESCE($4, color),
+          porcentaje_ponderacion = COALESCE($5, porcentaje_ponderacion),
+          descripcion            = COALESCE($6, descripcion),
+          activo                 = COALESCE($7, activo),
+          updated_at             = CURRENT_TIMESTAMP
+        WHERE id = $8
+        RETURNING *
+      `, [
+        nombre        || null,
+        codigo        ? codigo.toUpperCase() : null,
+        orden         ?? null,
+        color         || null,
+        porcentaje_ponderacion ?? null,
+        descripcion   || null,
+        activo        ?? null,
+        id
+      ]);
+
+      const reqInfo = RequestInfo.extract(req);
+      await ActividadLog.create({
+        usuario_id:       req.user.id,
+        accion:           'actualizar',
+        modulo:           'dimension_evaluacion',
+        tabla_afectada:   'dimension_evaluacion',
+        registro_id:      parseInt(id),
+        datos_anteriores: anterior.rows[0],
+        datos_nuevos:     result.rows[0],
+        ip_address:       reqInfo.ip,
+        user_agent:       reqInfo.userAgent,
+        resultado:        'exitoso',
+        mensaje:          `Dimensión actualizada: ${result.rows[0].nombre}`
+      });
+
+      res.json({
+        success: true,
+        message: 'Dimensión actualizada exitosamente',
+        data: { dimension: result.rows[0] }
+      });
+
+    } catch (error) {
+      if (error.code === '23505') {
+        return res.status(409).json({
+          success: false,
+          message: 'Ya existe una dimensión con ese código'
+        });
+      }
+      res.status(500).json({
+        success: false,
+        message: 'Error al actualizar dimensión: ' + error.message
       });
     }
   }
@@ -161,7 +292,7 @@ class EvaluacionController {
       const {
         page, limit, asignacion_docente_id,
         dimension_evaluacion_id, periodo_evaluacion_id, activo,
-        tema_id       // ← NUEVO
+        tema_id
       } = req.query;
 
       const result = await Evaluacion.findAll({
@@ -171,7 +302,7 @@ class EvaluacionController {
         dimension_evaluacion_id: dimension_evaluacion_id ? parseInt(dimension_evaluacion_id) : undefined,
         periodo_evaluacion_id:   periodo_evaluacion_id   ? parseInt(periodo_evaluacion_id)   : undefined,
         activo:                  activo !== undefined     ? activo === 'true'                : undefined,
-        tema_id:                 tema_id                 ? parseInt(tema_id)                : undefined  // ← NUEVO
+        tema_id:                 tema_id                 ? parseInt(tema_id)                : undefined
       });
 
       res.json({ success: true, data: result });
@@ -200,13 +331,13 @@ class EvaluacionController {
   }
 
   // POST /api/evaluaciones
+  // ✅ SIN hook de notificación — crear evaluación no es registrar nota
   static async crear(req, res) {
     try {
       const {
         asignacion_docente_id, dimension_evaluacion_id, periodo_evaluacion_id,
         nombre, tipo, descripcion, fecha, puntaje_maximo, peso_en_dimension,
-        visible_para_padres,
-        tema_id       // ← NUEVO
+        visible_para_padres, tema_id
       } = req.body;
 
       if (!asignacion_docente_id || !dimension_evaluacion_id || !periodo_evaluacion_id || !nombre) {
@@ -216,7 +347,6 @@ class EvaluacionController {
         });
       }
 
-      // Validar que el tema_id pertenece a la misma materia (opcional pero recomendado)
       if (tema_id) {
         const temaCheck = await pool.query(`
           SELECT t.id
@@ -237,8 +367,7 @@ class EvaluacionController {
       const evaluacion = await Evaluacion.create({
         asignacion_docente_id, dimension_evaluacion_id, periodo_evaluacion_id,
         nombre, tipo, descripcion, fecha, puntaje_maximo, peso_en_dimension,
-        visible_para_padres,
-        tema_id       // ← NUEVO
+        visible_para_padres, tema_id
       });
 
       const reqInfo = RequestInfo.extract(req);
@@ -327,33 +456,17 @@ class EvaluacionController {
 }
 
 // =============================================
-// CALIFICACION
+// MIS MATERIAS
 // =============================================
-
-// ──────────────────────────────────────────────────────────────
-// MATERIAS DEL DOCENTE AUTENTICADO
-// Flujo: token → usuario_id → docente → materias con resumen
-// ──────────────────────────────────────────────────────────────
 class MisMateriasController {
 
   // GET /api/notas/mis-materias
-  // Query: ?periodo_evaluacion_id=X (opcional, filtra un trimestre específico)
-  //
-  // Sin filtro   → devuelve todas las materias con resumen de TODOS los trimestres
-  // Con filtro   → devuelve solo el resumen del trimestre indicado
-  //
-  // Flujo de uso en frontend:
-  //   1. Docente inicia sesión
-  //   2. GET /mis-materias               → ve sus materias del año con totales generales
-  //   3. GET /mis-materias?periodo_evaluacion_id=2  → filtra por 2do trimestre
-  //   4. Selecciona materia+trimestre    → GET /evaluaciones?asignacion_docente_id=X&periodo_evaluacion_id=Y
-  //   5. Crea/edita evaluaciones y registra notas
   static async getMisMaterias(req, res) {
     try {
       const { periodo_evaluacion_id } = req.query;
 
       const materias = await Evaluacion.getMisMaterias({
-        usuario_id:           req.user.id,
+        usuario_id:            req.user.id,
         periodo_evaluacion_id: periodo_evaluacion_id ? parseInt(periodo_evaluacion_id) : null
       });
 
@@ -383,14 +496,17 @@ class MisMateriasController {
   }
 }
 
+// =============================================
+// CALIFICACION
+// =============================================
 class CalificacionController {
- 
+
   // GET /api/notas/calificaciones/evaluacion/:evaluacion_id
   static async listarPorEvaluacion(req, res) {
     try {
       const { evaluacion_id } = req.params;
       const calificaciones = await Calificacion.findByEvaluacion(parseInt(evaluacion_id));
- 
+
       res.json({
         success: true,
         data: {
@@ -407,7 +523,7 @@ class CalificacionController {
       });
     }
   }
- 
+
   // GET /api/notas/calificaciones/matricula/:matricula_id/periodo/:periodo_evaluacion_id
   static async listarPorMatriculaPeriodo(req, res) {
     try {
@@ -424,29 +540,29 @@ class CalificacionController {
       });
     }
   }
- 
+
   // POST /api/notas/calificaciones
-  // Registro individual — con hook de asignación automática de materiales
+  // ✅ Hook de notificación individual — después del upsert, antes del res.json
   static async registrar(req, res) {
     try {
       const {
         evaluacion_id, matricula_id, puntaje_obtenido,
         esta_ausente, observacion,
       } = req.body;
- 
+
       if (!evaluacion_id || !matricula_id || puntaje_obtenido === undefined) {
         return res.status(400).json({
           success: false,
           message: 'evaluacion_id, matricula_id y puntaje_obtenido son requeridos',
         });
       }
- 
+
       const calificacion = await Calificacion.upsert({
         evaluacion_id, matricula_id, puntaje_obtenido,
         esta_ausente: esta_ausente ?? false,
         observacion, registrado_por: req.user.id,
       });
- 
+
       const reqInfo = RequestInfo.extract(req);
       await ActividadLog.create({
         usuario_id: req.user.id, accion: 'crear',
@@ -456,20 +572,25 @@ class CalificacionController {
         resultado: 'exitoso',
         mensaje: `Nota registrada: matrícula ${matricula_id} → ${puntaje_obtenido}`,
       });
- 
+
       // ── HOOK: asignación automática de materiales ─────────────────────────
-      // Fire-and-forget — no bloquea la respuesta al docente.
-      // Internamente verifica si la nota < 60 y si el tema tiene materiales.
       dispararAsignacionMaterial({
-        evaluacionId:   parseInt(evaluacion_id),
-        matriculaId:    parseInt(matricula_id),
+        evaluacionId:    parseInt(evaluacion_id),
+        matriculaId:     parseInt(matricula_id),
         puntajeObtenido: calificacion.puntaje_obtenido,
-        estaAusente:    calificacion.esta_ausente,
+        estaAusente:     calificacion.esta_ausente,
       }).catch(err =>
         console.error('[notasController] asignación material falló:', err.message)
       );
+
+      // ✅ HOOK: notificación automática al estudiante y padre
+      notificacionesAcademicas.onCalificacionCargada({
+        calificacion_id: calificacion.id,
+        matricula_id:    parseInt(matricula_id),
+        evaluacion_id:   parseInt(evaluacion_id),
+      }).catch(() => {});
       // ─────────────────────────────────────────────────────────────────────
- 
+
       res.status(201).json({
         success: true,
         message: 'Calificación registrada exitosamente',
@@ -483,26 +604,26 @@ class CalificacionController {
       });
     }
   }
- 
+
   // POST /api/notas/calificaciones/masivo
-  // Registro masivo — hook por cada registro con nota baja
+  // ✅ Hook de notificación por cada calificación del loop
   static async registrarMasivo(req, res) {
     try {
       const { evaluacion_id, registros } = req.body;
- 
+
       if (!evaluacion_id || !Array.isArray(registros) || registros.length === 0) {
         return res.status(400).json({
           success: false,
           message: 'evaluacion_id y registros[] son requeridos',
         });
       }
- 
+
       const resultado = await Calificacion.upsertMasivo({
         evaluacion_id: parseInt(evaluacion_id),
         registrado_por: req.user.id,
         registros,
       });
- 
+
       const reqInfo = RequestInfo.extract(req);
       await ActividadLog.create({
         usuario_id: req.user.id, accion: 'registrar_masivo',
@@ -512,13 +633,10 @@ class CalificacionController {
         resultado: 'exitoso',
         mensaje: `Notas masivas: ${resultado.length} registros para evaluación ${evaluacion_id}`,
       });
- 
-      // ── HOOK: asignación automática por cada calificación baja ────────────
-      // Se lanza un hook por cada registro — todos fire-and-forget.
-      // dispararAsignacionMaterial hace su propio filtro interno (nota < 60,
-      // tema_id presente, materiales disponibles) así que es seguro llamarlo
-      // para todos sin pre-filtrar acá.
+
+      // ── HOOKS por cada calificación registrada ────────────────────────────
       for (const cal of resultado) {
+        // Asignación automática de materiales
         dispararAsignacionMaterial({
           evaluacionId:    parseInt(evaluacion_id),
           matriculaId:     cal.matricula_id,
@@ -530,9 +648,16 @@ class CalificacionController {
             err.message
           )
         );
+
+        // ✅ Notificación automática al estudiante y padre
+        notificacionesAcademicas.onCalificacionCargada({
+          calificacion_id: cal.id,
+          matricula_id:    cal.matricula_id,
+          evaluacion_id:   parseInt(evaluacion_id),
+        }).catch(() => {});
       }
       // ─────────────────────────────────────────────────────────────────────
- 
+
       res.status(201).json({
         success: true,
         message: `${resultado.length} calificaciones guardadas`,
@@ -554,7 +679,6 @@ class CalificacionController {
 class NotasCalculoController {
 
   // POST /api/notas/calcular
-  // Body: { matricula_id, grado_materia_id, periodo_evaluacion_id }
   static async calcular(req, res) {
     try {
       const { matricula_id, grado_materia_id, periodo_evaluacion_id } = req.body;
@@ -637,32 +761,32 @@ class NotasCalculoController {
   }
 
   // PATCH /api/notas/cerrar-periodo
-  // Body: { matricula_id, grado_materia_id, periodo_evaluacion_id }
+  // ✅ Hook de notificación al cerrar período individual
   static async cerrarPeriodo(req, res) {
     try {
       const { matricula_id, grado_materia_id, periodo_evaluacion_id } = req.body;
- 
+
       if (!matricula_id || !grado_materia_id || !periodo_evaluacion_id) {
         return res.status(400).json({
           success: false,
           message: 'matricula_id, grado_materia_id y periodo_evaluacion_id son requeridos',
         });
       }
- 
+
       const calificacion = await NotasCalculo.cerrarPeriodo(
         parseInt(matricula_id),
         parseInt(grado_materia_id),
         parseInt(periodo_evaluacion_id),
         req.user.id,
       );
- 
+
       if (!calificacion) {
         return res.status(404).json({
           success: false,
           message: 'No se encontró calificación activa para cerrar',
         });
       }
- 
+
       const reqInfo = RequestInfo.extract(req);
       await ActividadLog.create({
         usuario_id:     req.user.id,
@@ -676,10 +800,9 @@ class NotasCalculoController {
         resultado:      'exitoso',
         mensaje:        `Período cerrado: matrícula ${matricula_id} / materia ${grado_materia_id}`,
       });
- 
-      // ── NUEVO: disparar predicción en background ──────────────
-      // Necesitamos asignacion_docente_id — lo obtenemos de la BD
-        const { rows: [asig] } = await pool.query(`
+
+      // ── Obtener asignacion_docente_id para la predicción ──────────────────
+      const { rows: [asig] } = await pool.query(`
         SELECT ad.id AS asignacion_docente_id
         FROM   asignacion_docente ad
         WHERE  ad.grado_materia_id = $1
@@ -687,8 +810,9 @@ class NotasCalculoController {
           AND  ad.deleted_at       IS NULL
         LIMIT 1
       `, [grado_materia_id]);
-    
+
       if (asig?.asignacion_docente_id) {
+        // Predicción automática
         dispararPrediccionAlCierre({
           matriculaId:         parseInt(matricula_id),
           gradoMateriaId:      parseInt(grado_materia_id),
@@ -698,16 +822,23 @@ class NotasCalculoController {
         }).catch(err =>
           console.error('[notasController] predicción automática falló:', err.message)
         );
-      
       }
-      // ─────────────────────────────────────────────────────────
- 
+
+      // ✅ Notificación automática al estudiante y padre con nota de período
+      notificacionesAcademicas.onNotaPeriodoCerrada({
+        calificacion_periodo_id: calificacion.id,
+        matricula_id:            parseInt(matricula_id),
+        grado_materia_id:        parseInt(grado_materia_id),
+        periodo_evaluacion_id:   parseInt(periodo_evaluacion_id),
+      }).catch(() => {});
+      // ─────────────────────────────────────────────────────────────────────
+
       return res.json({
         success: true,
         message: 'Período cerrado exitosamente',
         data:    { calificacion },
       });
- 
+
     } catch (error) {
       res.status(500).json({
         success: false,
@@ -716,24 +847,27 @@ class NotasCalculoController {
     }
   }
 
+  // PATCH /api/notas/cerrar-periodo-clase
+  // ✅ El cierre masivo dispara notificaciones internamente desde cerrarPeriodoClase
+  //    (que a su vez llama cerrarPeriodo por cada matrícula)
   static async cerrarPeriodoClase(req, res) {
     try {
       const { asignacion_docente_id, grado_materia_id, periodo_evaluacion_id } = req.body;
- 
+
       if (!asignacion_docente_id || !grado_materia_id || !periodo_evaluacion_id) {
         return res.status(400).json({
           success: false,
           message: 'asignacion_docente_id, grado_materia_id y periodo_evaluacion_id son requeridos',
         });
       }
- 
-      // Responder inmediatamente al docente — el proceso continúa en background
+
+      // Responder inmediatamente — el proceso continúa en background
       res.json({
         success: true,
-        message: 'Cierre iniciado. Las predicciones se generarán automáticamente.',
+        message: 'Cierre iniciado. Las predicciones y notificaciones se generarán automáticamente.',
         data:    { asignacion_docente_id, grado_materia_id, periodo_evaluacion_id },
       });
- 
+
       // Fire-and-forget del cierre masivo + predicciones
       cerrarPeriodoClase({
         asignacionDocenteId: parseInt(asignacion_docente_id),
@@ -743,9 +877,8 @@ class NotasCalculoController {
       }).catch(err =>
         console.error('[notasController] cerrarPeriodoClase falló:', err.message)
       );
- 
+
     } catch (error) {
-      // Solo llega acá si hay error antes del res.json
       if (!res.headersSent) {
         res.status(500).json({
           success: false,
@@ -754,8 +887,8 @@ class NotasCalculoController {
       }
     }
   }
+
   // PATCH /api/notas/nota-manual
-  // Requiere permiso especial: notas.manual
   static async aplicarNotaManual(req, res) {
     try {
       const {
@@ -808,28 +941,18 @@ class NotasCalculoController {
     }
   }
 }
+
+// =============================================
+// TAREAS (vista del padre/estudiante)
+// =============================================
 class TareasController {
- 
-  /**
-   * GET /api/notas/tareas/:matricula_id
-   * Query: ?periodo_evaluacion_id=X (opcional)
-   *        &estado=pendiente|entregado|atrasado (opcional)
-   *
-   * Devuelve todas las evaluaciones visibles para el padre,
-   * con su calificación y estado calculado:
-   *   - 'entregado' → tiene calificacion.puntaje_obtenido registrado
-   *   - 'atrasado'  → no tiene nota Y fecha_limite < ahora
-   *   - 'pendiente' → no tiene nota Y (fecha_limite >= ahora O fecha_limite es NULL)
-   *   - 'ausente'   → calificacion.esta_ausente = true
-   *
-   * Solo devuelve evaluaciones con visible_para_padres = true.
-   * El padre solo puede ver las de su propio hijo (valida matricula_id).
-   */
+
+  // GET /api/notas/tareas/:matricula_id
   static async listarTareas(req, res) {
     try {
       const { matricula_id } = req.params;
       const { periodo_evaluacion_id, estado } = req.query;
- 
+
       // Verificar que la matrícula pertenece al usuario autenticado
       const verificacion = await pool.query(`
         SELECT m.id
@@ -841,29 +964,28 @@ class TareasController {
           AND pf.usuario_id = $2
           AND m.deleted_at IS NULL
       `, [matricula_id, req.user.id]);
- 
+
       if (!verificacion.rows[0]) {
         return res.status(403).json({
           success: false,
           message: 'No tenés acceso a esta matrícula'
         });
       }
- 
+
       const params = [matricula_id];
       let p = 2;
       let filtros = '';
- 
+
       if (periodo_evaluacion_id) {
         filtros += ` AND ev.periodo_evaluacion_id = $${p++}`;
         params.push(parseInt(periodo_evaluacion_id));
       }
- 
-      // Filtro de estado aplicado DESPUÉS del HAVING via subconsulta
+
       const estadoFiltro = estado
         ? `WHERE estado_calculado = $${p++}`
         : '';
       if (estado) params.push(estado);
- 
+
       const query = `
         SELECT *
         FROM (
@@ -878,39 +1000,33 @@ class TareasController {
             ev.puntaje_maximo,
             ev.peso_en_dimension,
             ev.publicado_en,
- 
-            -- Dimensión
+
             de.id                         AS dimension_id,
             de.nombre                     AS dimension_nombre,
             de.codigo                     AS dimension_codigo,
             de.color                      AS dimension_color,
             de.porcentaje_ponderacion,
- 
-            -- Materia
+
             mat.nombre                    AS materia_nombre,
             mat.codigo                    AS materia_codigo,
             mat.color                     AS materia_color,
- 
-            -- Período
+
             pe.nombre                     AS periodo_nombre,
             pe.id                         AS periodo_evaluacion_id,
             pe.orden                      AS periodo_orden,
- 
-            -- Calificación (puede ser NULL si no fue registrada aún)
+
             c.id                          AS calificacion_id,
             c.puntaje_obtenido,
             c.esta_ausente,
             c.observacion                 AS observacion_docente,
             c.fecha_registro,
- 
-            -- Nota sobre 100 (normalizada)
+
             CASE
               WHEN c.puntaje_obtenido IS NOT NULL AND ev.puntaje_maximo > 0
               THEN ROUND((c.puntaje_obtenido / ev.puntaje_maximo * 100)::NUMERIC, 1)
               ELSE NULL
             END                           AS nota_sobre_100,
- 
-            -- Estado calculado
+
             CASE
               WHEN c.esta_ausente = true
                 THEN 'ausente'
@@ -920,14 +1036,13 @@ class TareasController {
                 THEN 'atrasado'
               ELSE 'pendiente'
             END                           AS estado_calculado,
- 
-            -- Días restantes (negativo = atrasado)
+
             CASE
               WHEN ev.fecha_limite IS NOT NULL
               THEN EXTRACT(DAY FROM ev.fecha_limite - NOW())::INTEGER
               ELSE NULL
             END                           AS dias_restantes
- 
+
           FROM matricula m
           INNER JOIN asignacion_docente ad
             ON  ad.paralelo_id          = m.paralelo_id
@@ -951,25 +1066,21 @@ class TareasController {
         ) sub
         ${estadoFiltro}
         ORDER BY
-          -- Primero: atrasados sin nota
           CASE WHEN estado_calculado = 'atrasado'  THEN 0 ELSE 1 END,
-          -- Luego: pendientes próximos a vencer
           CASE WHEN estado_calculado = 'pendiente' THEN 0 ELSE 1 END,
           dias_restantes NULLS LAST,
-          -- Después: entregados recientes
           fecha_registro DESC NULLS LAST,
           evaluacion_id DESC
       `;
- 
+
       const result = await pool.query(query, params);
- 
-      // Estadísticas rápidas para el resumen
+
       const total      = result.rows.length;
       const entregados = result.rows.filter(r => r.estado_calculado === 'entregado').length;
       const pendientes = result.rows.filter(r => r.estado_calculado === 'pendiente').length;
       const atrasados  = result.rows.filter(r => r.estado_calculado === 'atrasado').length;
       const ausentes   = result.rows.filter(r => r.estado_calculado === 'ausente').length;
- 
+
       res.json({
         success: true,
         data: {
@@ -985,18 +1096,14 @@ class TareasController {
       });
     }
   }
-  
 }
+
+// =============================================
+// TEMARIO
+// =============================================
 class TemarioController {
 
-  /**
-   * GET /api/notas/temario/:grado_materia_id
-   * Query: ?periodo_evaluacion_id=X (opcional)
-   *
-   * Devuelve el temario completo de una materia con las
-   * evaluaciones agrupadas por unidad → tema.
-   * Útil para la vista del docente al crear evaluaciones.
-   */
+  // GET /api/notas/temario/:grado_materia_id
   static async getTemario(req, res) {
     try {
       const { grado_materia_id } = req.params;
@@ -1019,6 +1126,7 @@ class TemarioController {
     }
   }
 }
+
 export {
   PeriodoEvaluacionController,
   DimensionEvaluacionController,

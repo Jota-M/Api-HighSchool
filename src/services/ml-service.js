@@ -1,26 +1,15 @@
-/**
- * src/services/mlService.js — v8.3
- *
- * Cambios respecto a v8.2:
- *   - buildHistorialFeatures: reprobo_misma_mat_ant ahora es la diferencia
- *     normalizada [-1, 1] entre la nota de esta materia y el promedio de
- *     las otras materias el trimestre anterior. Ya no es un flag binario
- *     redundante con reprobo_trim_ant.
- *   - Q_PROM_OTRAS_MATERIAS_ANT: query nueva para obtener ese promedio.
- *   - El modelo ahora usa 29 features (eliminadas racha, max_racha, asist_critica).
- *     Node.js puede seguir mandando esos campos sin problema — el modelo
- *     simplemente los ignora porque no están en el FEATURE_ORDER.
- */
-
 import { pool } from '../db/pool.js';
+import notificacionesAcademicas from '../utils/notificacionesAcademicas.js';
 
 const ML_BASE_URL = process.env.ML_SERVICE_URL || 'http://localhost:8000/api/v1';
-const ML_TIMEOUT  = parseInt(process.env.ML_TIMEOUT_MS || '15000');
+const ML_TIMEOUT = parseInt(process.env.ML_TIMEOUT_MS || '15000');
 
-const MAX_MATERIALES         = 8;
+const MAX_MATERIALES = 8;
 const UMBRAL_NOTA_MATERIALES = 60;
 
 const DIMS_PRINCIPALES = new Set(['SAB', 'HAC']);
+
+const procesandoClase = new Set();
 
 
 // ─────────────────────────────────────────────────────────────
@@ -132,10 +121,6 @@ const Q_MATERIA = `
   WHERE  ad.id = $1
 `;
 
-
-// v8.3: promedio de OTRAS materias del estudiante en el período anterior
-// Necesario para calcular reprobo_misma_mat_ant como diferencia normalizada
-// en lugar del flag binario redundante que era igual a reprobo_trim_ant.
 const Q_HISTORIAL = `
   SELECT
     cp.nota_final,
@@ -176,6 +161,33 @@ const Q_PROM_OTRAS_MATERIAS_ANT = `
            WHERE  id = $3
          )
     AND  cp.estado != 'anulada'
+`;
+
+const Q_DIMS_TRIM_ANT = `
+  SELECT
+    de.codigo                                              AS dimension_codigo,
+    ROUND(
+      AVG(c.puntaje_obtenido / e.puntaje_maximo * 100)::NUMERIC
+    , 1)                                                   AS promedio_dim
+  FROM   calificacion        c
+  JOIN   evaluacion          e   ON e.id  = c.evaluacion_id
+  JOIN   dimension_evaluacion de ON de.id = e.dimension_evaluacion_id
+  JOIN   asignacion_docente  ad  ON ad.id = e.asignacion_docente_id
+  JOIN   periodo_evaluacion  pe  ON pe.id = e.periodo_evaluacion_id
+  JOIN   periodo_academico   pa  ON pa.id = pe.periodo_academico_id
+  WHERE  c.matricula_id          = $1
+    AND  ad.grado_materia_id     = (
+           SELECT grado_materia_id FROM asignacion_docente WHERE id = $2
+         )
+    AND  (
+      (pe.periodo_academico_id = $3 AND pe.orden = $4)
+      OR
+      (pa.id < $3 AND pe.orden = $4)
+    )
+    AND  e.activo        = true
+    AND  de.activo       = true
+    AND  c.esta_ausente  = false
+  GROUP BY de.codigo
 `;
 
 const Q_OBSERVACIONES = `
@@ -271,16 +283,6 @@ const Q_DOCENTE_DE_ASIGNACION = `
   WHERE  ad.id = $1
 `;
 
-// ─────────────────────────────────────────────────────────────
-// QUERY NUEVAS v8.2
-// ─────────────────────────────────────────────────────────────
-
-// Calcula el estilo del docente desde su historial de notas en esta materia.
-// Compara el promedio de notas que pone contra el promedio general del sistema.
-// sesgo > 8  → flexible (inflador)
-// sesgo < -8 → estricto
-// varianza alta → inconsistente
-// resto → normal
 const Q_ESTILO_DOCENTE = `
   SELECT
     AVG(c.puntaje_obtenido / e.puntaje_maximo * 100) AS promedio_docente,
@@ -301,7 +303,6 @@ const Q_ESTILO_DOCENTE = `
     AND  c.esta_ausente = false
 `;
 
-// Nivel educativo y grado del estudiante desde su matrícula actual
 const Q_NIVEL_GRADO = `
   SELECT
     na.codigo                AS nivel_codigo,
@@ -310,8 +311,6 @@ const Q_NIVEL_GRADO = `
       WHEN LOWER(na.codigo) LIKE '%prim%' OR LOWER(na.nombre) LIKE '%prim%' THEN 0
       ELSE 1
     END                      AS nivel_educativo,
-    -- Horas por grado según malla curricular boliviana
-    -- Primaria (grados 1-6): 136-192h, Secundaria (grados 7-12): 136-192h
     CASE g.orden
       WHEN 1 THEN 136  WHEN 2 THEN 136
       WHEN 3 THEN 176  WHEN 4 THEN 168
@@ -343,7 +342,7 @@ async function buildConfigPeriodo(client, periodoEvaluacionId) {
     throw new Error(`Período de evaluación ${periodoEvaluacionId} no encontrado o inactivo`);
   }
 
-  const periodo       = resPeriodo.rows[0];
+  const periodo = resPeriodo.rows[0];
   const ponderaciones = {};
 
   for (const row of resPond.rows) {
@@ -362,9 +361,9 @@ async function buildConfigPeriodo(client, periodoEvaluacionId) {
       total_semanas: Math.max(8, Math.min(20, periodo.total_semanas)),
       ponderaciones,
     },
-    semana_actual:  Math.min(periodo.semana_actual, periodo.total_semanas),
+    semana_actual: Math.min(periodo.semana_actual, periodo.total_semanas),
     numero_periodo: periodo.numero_periodo,
-    anio_periodo:   periodo.anio_periodo,
+    anio_periodo: periodo.anio_periodo,
     periodo_academico_id: parseInt(periodo.periodo_academico_id)
   };
 }
@@ -378,7 +377,7 @@ function separarNotas(notasRows) {
   const notasPorDimension = {};
   for (const row of notasRows) {
     const nota = parseFloat(row.nota_normalizada);
-    const dim  = row.dimension_codigo;
+    const dim = row.dimension_codigo;
     if (isNaN(nota) || !dim) continue;
     if (!notasPorDimension[dim]) notasPorDimension[dim] = [];
     notasPorDimension[dim].push(nota);
@@ -396,7 +395,7 @@ function construirPayloadNotas(notasPorDimension, ponderaciones) {
   const notas_hac = notasPorDimension['HAC'] ?? [];
 
   let notaComplementariaPonderada = 0;
-  let pesoComplementario          = 0;
+  let pesoComplementario = 0;
 
   for (const [codigo, notas] of Object.entries(notasPorDimension)) {
     if (DIMS_PRINCIPALES.has(codigo)) continue;
@@ -405,7 +404,7 @@ function construirPayloadNotas(notasPorDimension, ponderaciones) {
     if (pond === 0) continue;
     const prom = notas.reduce((a, b) => a + b, 0) / notas.length;
     notaComplementariaPonderada += prom * pond;
-    pesoComplementario          += pond;
+    pesoComplementario += pond;
   }
 
   const nota_complementaria_pct = pesoComplementario > 0
@@ -422,31 +421,24 @@ function construirPayloadNotas(notasPorDimension, ponderaciones) {
 
 
 // ─────────────────────────────────────────────────────────────
-// HELPER — calcularEstiloDocente  ← NUEVO v8.2
+// HELPER — calcularEstiloDocente
 // ─────────────────────────────────────────────────────────────
 
 async function calcularEstiloDocente(client, asignacionDocenteId, periodoEvaluacionId) {
   try {
-    const { rows } = await client.query(
-      Q_ESTILO_DOCENTE,
-      [asignacionDocenteId, periodoEvaluacionId],
-    );
-
+    const { rows } = await client.query(Q_ESTILO_DOCENTE, [asignacionDocenteId, periodoEvaluacionId]);
     const row = rows[0];
-    // Sin historial suficiente → normal
     if (!row || parseInt(row.total_calificaciones) < 20) return 1;
 
     const promedio = parseFloat(row.promedio_docente);
-    const stddev   = parseFloat(row.stddev_docente ?? 0);
-    const PROMEDIO_GENERAL = 62; // promedio histórico del sistema
-
+    const stddev = parseFloat(row.stddev_docente ?? 0);
+    const PROMEDIO_GENERAL = 62;
     const sesgo = promedio - PROMEDIO_GENERAL;
 
-    if (sesgo > 8)  return 0; // flexible (infla notas)
-    if (sesgo < -8) return 2; // estricto (baja notas)
-    if (stddev > 20) return 3; // inconsistente (alta varianza)
-    return 1; // normal
-
+    if (sesgo > 8) return 0;
+    if (sesgo < -8) return 2;
+    if (stddev > 20) return 3;
+    return 1;
   } catch (err) {
     console.warn('[mlService] calcularEstiloDocente falló, usando default 1:', err.message);
     return 1;
@@ -455,7 +447,7 @@ async function calcularEstiloDocente(client, asignacionDocenteId, periodoEvaluac
 
 
 // ─────────────────────────────────────────────────────────────
-// HELPER — calcularNivelGrado  ← NUEVO v8.2
+// HELPER — calcularNivelGrado
 // ─────────────────────────────────────────────────────────────
 
 async function calcularNivelGrado(client, matriculaId) {
@@ -464,7 +456,7 @@ async function calcularNivelGrado(client, matriculaId) {
     if (rows.length === 0) return { nivel_educativo: 1, horas_grado: 168 };
     return {
       nivel_educativo: parseInt(rows[0].nivel_educativo),
-      horas_grado:     parseInt(rows[0].horas_grado),
+      horas_grado: parseInt(rows[0].horas_grado),
     };
   } catch (err) {
     console.warn('[mlService] calcularNivelGrado falló, usando defaults:', err.message);
@@ -474,16 +466,11 @@ async function calcularNivelGrado(client, matriculaId) {
 
 
 // ─────────────────────────────────────────────────────────────
-// HELPER — calcularRegimenPond  ← NUEVO v8.2
+// HELPER — calcularRegimenPond
 // ─────────────────────────────────────────────────────────────
 
 function calcularRegimenPond(anio) {
-  const regimenes = {
-    2021: 0,
-    2022: 1, 2023: 1, 2024: 1,
-    2025: 2,
-    2026: 3,
-  };
+  const regimenes = { 2021: 0, 2022: 1, 2023: 1, 2024: 1, 2025: 2, 2026: 3 };
   return regimenes[anio] ?? 1;
 }
 
@@ -493,52 +480,29 @@ function calcularRegimenPond(anio) {
 // ─────────────────────────────────────────────────────────────
 
 async function buildHistorialFeatures(
-  client,
-  matriculaId,
-  asignacionDocenteId,
-  periodoEvaluacionId,
-  numeroPeriodo,
-  periodoAcademicoId, 
+  client, matriculaId, asignacionDocenteId, periodoEvaluacionId, numeroPeriodo, periodoAcademicoId,
 ) {
   try {
-    // numeroPeriodo es el período ACTUAL (ej: 2)
-    // El período anterior es numeroPeriodo - 1 (ej: 1)
     const periodoAnterior = numeroPeriodo - 1;
 
-    const [historial, observaciones, materiasRiesgo, otrasMateriasAnt] = await Promise.all([
-      // Ahora pasa periodoAcademicoId y numeroPeriodo separados
-      client.query(Q_HISTORIAL, [
-        matriculaId,
-        asignacionDocenteId,
-        periodoAcademicoId,   // $3
-        numeroPeriodo,        // $4
-      ]),
+    const [historial, observaciones, materiasRiesgo, otrasMateriasAnt, dimsAnt] = await Promise.all([
+      client.query(Q_HISTORIAL, [matriculaId, asignacionDocenteId, periodoAcademicoId, numeroPeriodo]),
       client.query(Q_OBSERVACIONES, [matriculaId, periodoEvaluacionId]),
       client.query(Q_MATERIAS_RIESGO, [matriculaId, periodoEvaluacionId, asignacionDocenteId]),
       periodoAnterior >= 1
-        ? client.query(Q_PROM_OTRAS_MATERIAS_ANT, [
-            matriculaId,
-            periodoAnterior,      // $2
-            asignacionDocenteId,  // $3
-            periodoAcademicoId,   // $4
-          ])
+        ? client.query(Q_PROM_OTRAS_MATERIAS_ANT, [matriculaId, periodoAnterior, asignacionDocenteId, periodoAcademicoId])
+        : Promise.resolve({ rows: [] }),
+      periodoAnterior >= 1
+        ? client.query(Q_DIMS_TRIM_ANT, [matriculaId, asignacionDocenteId, periodoAcademicoId, periodoAnterior])
         : Promise.resolve({ rows: [] }),
     ]);
 
-    // ── Historial intertrimestral ────────────────────────────────────────────
     const periodos = historial.rows;
 
-    const nota_trim_ant = periodos[0]?.nota_final != null
-      ? parseFloat(periodos[0].nota_final)
-      : -1;
-
-    const reprobo_trim_ant = periodos[0]
-      ? (parseFloat(periodos[0].nota_final) < 51 ? 1 : 0)
-      : 0;
-
+    const nota_trim_ant = periodos[0]?.nota_final != null ? parseFloat(periodos[0].nota_final) : -1;
+    const reprobo_trim_ant = periodos[0] ? (parseFloat(periodos[0].nota_final) < 51 ? 1 : 0) : 0;
     const mejor_nota_historica = periodos.length > 0
-      ? Math.max(...periodos.map(p => parseFloat(p.nota_final)))
-      : -1;
+      ? Math.max(...periodos.map(p => parseFloat(p.nota_final))) : -1;
 
     let racha_trims_riesgo = 0;
     for (const p of periodos) {
@@ -553,90 +517,60 @@ async function buildHistorialFeatures(
       tend_intertrimestral = diff > 3 ? 1 : diff < -3 ? -1 : 0;
     }
 
-    // ── reprobo_misma_mat_ant — v8.3: diferencia normalizada ─────────────────
-    // Ya no es un flag binario igual a reprobo_trim_ant.
-    // Es la diferencia entre la nota de ESTA materia y el promedio de
-    // las OTRAS materias ese trimestre anterior, normalizada a [-1, 1].
-    //
-    // Ejemplos:
-    //   nota_mat=40, prom_otras=70 → diff=-30 → normalizado=-0.60 (muy por debajo)
-    //   nota_mat=65, prom_otras=65 → diff=0   → normalizado= 0.00 (igual al promedio)
-    //   nota_mat=80, prom_otras=60 → diff=+20 → normalizado=+0.40 (mejor que el resto)
-    //
-    // Rango de normalización: dividir por 50 (diferencia máxima plausible)
     let reprobo_misma_mat_ant = 0.0;
     if (nota_trim_ant >= 0 && otrasMateriasAnt.rows.length > 0) {
       const promOtras = parseFloat(otrasMateriasAnt.rows[0].promedio_otras_materias ?? 65);
-      const diff      = nota_trim_ant - promOtras;
+      const diff = nota_trim_ant - promOtras;
       reprobo_misma_mat_ant = parseFloat(Math.max(-1.0, Math.min(1.0, diff / 50)).toFixed(3));
     }
-    // Si no hay historial (primer período del año) → 0.0 (neutro)
 
-    // ── Observaciones pedagógicas ────────────────────────────────────────────
+    const dimsMap = {};
+    for (const row of dimsAnt.rows) {
+      dimsMap[row.dimension_codigo] = parseFloat(row.promedio_dim);
+    }
+    const sab_trim_ant = dimsMap['SAB'] ?? -1;
+    const hac_trim_ant = dimsMap['HAC'] ?? -1;
+
     const obsMap = {};
     for (const row of observaciones.rows) {
       const key = `${row.categoria_codigo}_${row.nivel_relevancia}`;
       obsMap[key] = (obsMap[key] ?? 0) + parseInt(row.total);
     }
 
-    const n_obs_conducta = (obsMap['CONDUCTA_informativo']        ?? 0)
-                         + (obsMap['CONDUCTA_requiere_atencion']  ?? 0)
-                         + (obsMap['CONDUCTA_urgente']            ?? 0);
-
-    const n_obs_socioem  = (obsMap['SOCIOEM_informativo']         ?? 0)
-                         + (obsMap['SOCIOEM_requiere_atencion']   ?? 0)
-                         + (obsMap['SOCIOEM_urgente']             ?? 0);
-
+    const n_obs_conducta = (obsMap['CONDUCTA_informativo'] ?? 0)
+      + (obsMap['CONDUCTA_requiere_atencion'] ?? 0)
+      + (obsMap['CONDUCTA_urgente'] ?? 0);
+    const n_obs_socioem = (obsMap['SOCIOEM_informativo'] ?? 0)
+      + (obsMap['SOCIOEM_requiere_atencion'] ?? 0)
+      + (obsMap['SOCIOEM_urgente'] ?? 0);
     const n_obs_urgentes = observaciones.rows
       .filter(r => r.nivel_relevancia === 'urgente')
       .reduce((acc, r) => acc + parseInt(r.total), 0);
-
-    const n_logros = (obsMap['LOGRO_informativo']       ?? 0)
-                   + (obsMap['LOGRO_requiere_atencion'] ?? 0);
+    const n_logros = (obsMap['LOGRO_informativo'] ?? 0) + (obsMap['LOGRO_requiere_atencion'] ?? 0);
 
     const total_obs = n_obs_conducta + n_obs_socioem + n_obs_urgentes + n_logros;
     const ratio_obs_negativas = total_obs > 0
-      ? parseFloat(((n_obs_conducta + n_obs_socioem + n_obs_urgentes) / total_obs).toFixed(3))
-      : 0;
+      ? parseFloat(((n_obs_conducta + n_obs_socioem + n_obs_urgentes) / total_obs).toFixed(3)) : 0;
 
-    // ── Correlación entre materias ───────────────────────────────────────────
     const n_materias_riesgo_sim = parseInt(materiasRiesgo.rows[0]?.n_materias_riesgo ?? 0);
-    const reprobo_mat_correlac  = n_materias_riesgo_sim > 0 ? 1 : 0;
+    const reprobo_mat_correlac = n_materias_riesgo_sim > 0 ? 1 : 0;
 
     return {
-      nota_trim_ant,
-      asist_trim_ant:        -1,
-      reprobo_trim_ant,
-      racha_trims_riesgo,
-      mejor_nota_historica,
-      tend_intertrimestral,
-      reprobo_misma_mat_ant,  // v8.3: continuo [-1, 1], no flag binario
-      n_obs_conducta,
-      n_obs_socioem,
-      n_obs_urgentes,
-      n_logros,
-      ratio_obs_negativas,
-      n_materias_riesgo_sim,
-      reprobo_mat_correlac,
+      nota_trim_ant, asist_trim_ant: -1, reprobo_trim_ant, racha_trims_riesgo,
+      mejor_nota_historica, tend_intertrimestral, reprobo_misma_mat_ant,
+      sab_trim_ant, hac_trim_ant,
+      n_obs_conducta, n_obs_socioem, n_obs_urgentes, n_logros, ratio_obs_negativas,
+      n_materias_riesgo_sim, reprobo_mat_correlac,
     };
 
   } catch (err) {
     console.warn('[mlService] buildHistorialFeatures falló, usando defaults:', err.message);
     return {
-      nota_trim_ant:         -1,
-      asist_trim_ant:        -1,
-      reprobo_trim_ant:       0,
-      racha_trims_riesgo:     0,
-      mejor_nota_historica:  -1,
-      tend_intertrimestral:   0,
-      reprobo_misma_mat_ant:  0.0,  // neutro
-      n_obs_conducta:         0,
-      n_obs_socioem:          0,
-      n_obs_urgentes:         0,
-      n_logros:               0,
-      ratio_obs_negativas:    0,
-      n_materias_riesgo_sim:  0,
-      reprobo_mat_correlac:   0,
+      nota_trim_ant: -1, asist_trim_ant: -1, reprobo_trim_ant: 0, racha_trims_riesgo: 0,
+      mejor_nota_historica: -1, tend_intertrimestral: 0, reprobo_misma_mat_ant: 0.0,
+      sab_trim_ant: -1, hac_trim_ant: -1,
+      n_obs_conducta: 0, n_obs_socioem: 0, n_obs_urgentes: 0, n_logros: 0,
+      ratio_obs_negativas: 0, n_materias_riesgo_sim: 0, reprobo_mat_correlac: 0,
     };
   }
 }
@@ -646,55 +580,31 @@ async function buildHistorialFeatures(
 // HELPER — consultarMaterialesParaEstudiante
 // ─────────────────────────────────────────────────────────────
 
-async function consultarMaterialesParaEstudiante(
-  client,
-  matriculaId,
-  asignacionDocenteId,
-  periodoEvaluacionId,
-) {
+async function consultarMaterialesParaEstudiante(client, matriculaId, asignacionDocenteId, periodoEvaluacionId) {
   const { rows: temas } = await client.query(Q_TEMAS_CON_PROBLEMAS, [
-    matriculaId,
-    asignacionDocenteId,
-    periodoEvaluacionId,
-    UMBRAL_NOTA_MATERIALES,
+    matriculaId, asignacionDocenteId, periodoEvaluacionId, UMBRAL_NOTA_MATERIALES,
   ]);
-
   if (temas.length === 0) return [];
 
   const temaIds = temas.map(t => t.tema_id);
-
-  const { rows: materiales } = await client.query(
-    Q_MATERIALES_POR_TEMAS,
-    [temaIds, MAX_MATERIALES],
-  );
+  const { rows: materiales } = await client.query(Q_MATERIALES_POR_TEMAS, [temaIds, MAX_MATERIALES]);
 
   return materiales.map(m => ({
-    id:           m.id,
-    titulo:       m.titulo,
-    tipo:         m.tipo,
-    tipo_codigo:  m.tipo_codigo,
-    tema_id:      m.tema_id,
-    tema_titulo:  m.tema_titulo,
-    descripcion:  m.descripcion || null,
-    es_destacado: m.es_destacado,
-    url:          m.url_externa || m.url_archivo || null,
+    id: m.id, titulo: m.titulo, tipo: m.tipo, tipo_codigo: m.tipo_codigo,
+    tema_id: m.tema_id, tema_titulo: m.tema_titulo,
+    descripcion: m.descripcion || null, es_destacado: m.es_destacado,
+    url: m.url_externa || m.url_archivo || null,
   }));
 }
 
 
 // ─────────────────────────────────────────────────────────────
-// HELPER — buildPayloadCompleto  ← NUEVO v8.2
-//
-// Centraliza la construcción del payload ML para no repetir
-// la misma lógica en predecirEstudiante, generarPlanRecuperacion
-// y las variantes del controlador.
+// HELPER — buildPayloadCompleto
 // ─────────────────────────────────────────────────────────────
 
 export async function buildPayloadCompleto(
-  client,
-  { matriculaId, asignacionDocenteId, periodoEvaluacionId, conMateriales = true },
+  client, { matriculaId, asignacionDocenteId, periodoEvaluacionId, conMateriales = true },
 ) {
-  // Queries en paralelo — solo una ronda a la BD
   const [configResult, asistResult, notasResult, materiaResult, nivelGrado, estiloDocente] =
     await Promise.all([
       buildConfigPeriodo(client, periodoEvaluacionId),
@@ -705,22 +615,18 @@ export async function buildPayloadCompleto(
       calcularEstiloDocente(client, asignacionDocenteId, periodoEvaluacionId),
     ]);
 
-  const { config_periodo, semana_actual, numero_periodo, anio_periodo, periodo_academico_id  } = configResult;
-  const asist   = asistResult.rows[0];
+  const { config_periodo, semana_actual, numero_periodo, anio_periodo, periodo_academico_id } = configResult;
+  const asist = asistResult.rows[0];
   const materia = materiaResult.rows[0];
 
-  if (!materia) {
-    throw new Error(`Asignación docente ${asignacionDocenteId} no encontrada`);
-  }
+  if (!materia) throw new Error(`Asignación docente ${asignacionDocenteId} no encontrada`);
 
   const { notasPorDimension } = separarNotas(notasResult.rows);
   const payloadNotas = construirPayloadNotas(notasPorDimension, config_periodo.ponderaciones);
-
   const tieneEvaluaciones = (payloadNotas.notas_sab.length + payloadNotas.notas_hac.length) > 0;
 
-  // Historial después de tener numero_periodo — sin segunda llamada a buildConfigPeriodo
   const historialFeatures = await buildHistorialFeatures(
-    client, matriculaId, asignacionDocenteId, periodoEvaluacionId, numero_periodo,periodo_academico_id,
+    client, matriculaId, asignacionDocenteId, periodoEvaluacionId, numero_periodo, periodo_academico_id,
   );
 
   let materiales_disponibles = [];
@@ -735,40 +641,39 @@ export async function buildPayloadCompleto(
   }
 
   const mlRequest = {
-    estudiante_id:            matriculaId,
-    materia:                  materia.materia_nombre,
-    codigo_materia:           materia.materia_codigo,
-    trimestre:                numero_periodo,
+    estudiante_id: matriculaId,
+    materia: materia.materia_nombre,
+    codigo_materia: materia.materia_codigo,
+    trimestre: numero_periodo,
     config_periodo,
-    semana:                   semana_actual,
-    asistencia_acumulada_pct: parseFloat(asist.asistencia_pct)  || 0,
-    racha_inasistencias:      parseInt(asist.racha_actual)       || 0,
-    max_racha_inasistencias:  parseInt(asist.max_racha)          || 0,
+    semana: semana_actual,
+    asistencia_acumulada_pct: parseFloat(asist.asistencia_pct) || 0,
+    racha_inasistencias: parseInt(asist.racha_actual) || 0,
+    max_racha_inasistencias: parseInt(asist.max_racha) || 0,
     ...payloadNotas,
     ...historialFeatures,
-    // Features nuevas v8.2
     nivel_educativo: nivelGrado.nivel_educativo,
-    horas_grado:     nivelGrado.horas_grado,
-    regimen_pond:    calcularRegimenPond(anio_periodo),
-    estilo_docente:  estiloDocente,
+    horas_grado: nivelGrado.horas_grado,
+    regimen_pond: calcularRegimenPond(anio_periodo),
+    estilo_docente: estiloDocente,
     materiales_disponibles,
   };
 
   const meta = {
-    total_clases:            parseInt(asist.total_clases),
-    clases_asistidas:        parseInt(asist.clases_asistidas),
-    n_notas_sab:             payloadNotas.notas_sab.length,
-    n_notas_hac:             payloadNotas.notas_hac.length,
+    total_clases: parseInt(asist.total_clases),
+    clases_asistidas: parseInt(asist.clases_asistidas),
+    n_notas_sab: payloadNotas.notas_sab.length,
+    n_notas_hac: payloadNotas.notas_hac.length,
     nota_complementaria_pct: payloadNotas.nota_complementaria_pct,
-    peso_complementario:     payloadNotas.peso_complementario,
-    materiales_consultados:  materiales_disponibles.length,
-    periodo_nombre:          `Período ${numero_periodo}`,
+    peso_complementario: payloadNotas.peso_complementario,
+    materiales_consultados: materiales_disponibles.length,
+    periodo_nombre: `Período ${numero_periodo}`,
     semana_actual,
-    total_semanas:           config_periodo.total_semanas,
-    historial_disponible:    historialFeatures.nota_trim_ant !== -1,
-    racha_trims_riesgo:      historialFeatures.racha_trims_riesgo,
-    estilo_docente:          estiloDocente,
-    regimen_pond:            calcularRegimenPond(anio_periodo),
+    total_semanas: config_periodo.total_semanas,
+    historial_disponible: historialFeatures.nota_trim_ant !== -1,
+    racha_trims_riesgo: historialFeatures.racha_trims_riesgo,
+    estilo_docente: estiloDocente,
+    regimen_pond: calcularRegimenPond(anio_periodo),
   };
 
   return { mlRequest, meta, materia };
@@ -776,66 +681,57 @@ export async function buildPayloadCompleto(
 
 
 // ─────────────────────────────────────────────────────────────
-// HELPERS — alertas (sin cambios respecto a versión anterior)
+// HELPERS — alertas
 // ─────────────────────────────────────────────────────────────
 
 async function generarCodigoNotificacion(client) {
   const anio = new Date().getFullYear();
-  const { rows } = await client.query(
-    `SELECT codigo FROM notificacion_institucional
-     WHERE  codigo LIKE $1 ORDER BY codigo DESC LIMIT 1`,
-    [`NOTIF-${anio}-%`],
+  await client.query(`LOCK TABLE notificacion_institucional IN ACCESS EXCLUSIVE MODE`);
+  const { rows: [last] } = await client.query(
+    `SELECT codigo FROM notificacion_institucional WHERE codigo LIKE $1 ORDER BY codigo DESC LIMIT 1`,
+    [`NOTIF-${anio}-%`]
   );
-  const numero = rows.length > 0
-    ? parseInt(rows[0].codigo.split('-')[2], 10) + 1
-    : 1;
+  const numero = last ? parseInt(last.codigo.split('-')[2], 10) + 1 : 1;
   return `NOTIF-${anio}-${String(numero).padStart(6, '0')}`;
 }
 
 async function crearAlertaDocente({
-  asignacionDocenteId,
-  estudianteId,
-  materia,
-  mensajeAlerta,
-  nivelRiesgo,
-  notaEstimada,
-  creadorUsuarioId,
+  asignacionDocenteId, estudianteId, materia, mensajeAlerta,
+  nivelRiesgo, notaEstimada, creadorUsuarioId,
 }) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
-    const { rows: [docente] } = await client.query(
-      Q_DOCENTE_DE_ASIGNACION, [asignacionDocenteId],
-    );
+    const { rows: [docente] } = await client.query(Q_DOCENTE_DE_ASIGNACION, [asignacionDocenteId]);
+    if (!docente) { await client.query('ROLLBACK'); return null; }
 
-    if (!docente) {
+    // FIX #2 — fallback a usuario del docente cuando creadorUsuarioId es null
+    const creadoPor = creadorUsuarioId ?? docente.usuario_id;
+    if (!creadoPor) {
+      console.warn('[mlService] crearAlertaDocente: sin creador disponible, abortando');
       await client.query('ROLLBACK');
       return null;
     }
 
-    const codigo    = await generarCodigoNotificacion(client);
+    const codigo = await generarCodigoNotificacion(client);
     const prioridad = nivelRiesgo === 'critico' ? 'urgente' : 'alta';
-    const titulo    = `⚠️ Alerta de riesgo — ${materia}`;
-    const mensaje   = mensajeAlerta
-      || `Estudiante ID ${estudianteId} con riesgo ${nivelRiesgo.toUpperCase()} `
-       + `en ${materia}. Nota estimada: ${notaEstimada}. Intervención recomendada.`;
+    const titulo = `⚠️ Alerta de riesgo — ${materia}`;
+    const mensaje = mensajeAlerta
+      || `Estudiante ID ${estudianteId} con riesgo ${nivelRiesgo.toUpperCase()} en ${materia}. Nota estimada: ${notaEstimada}. Intervención recomendada.`;
 
     const { rows: [notif] } = await client.query(
       `INSERT INTO notificacion_institucional (
          codigo, titulo, mensaje, tipo, prioridad, audiencia,
          periodo_academico_id, destinatario_usuario_id,
-         enviar_whatsapp, enviar_email, enviar_interno,
-         estado, creada_por
+         enviar_whatsapp, enviar_email, enviar_interno, estado, creada_por
        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
        RETURNING id, codigo`,
       [
-        codigo, titulo, mensaje,
-        'notificacion_individual', prioridad, 'individual',
+        codigo, titulo, mensaje, 'notificacion_individual', prioridad, 'individual',
         docente.periodo_academico_id, docente.usuario_id,
-        docente.celular ? true : false,
-        docente.email   ? true : false,
-        true, 'enviada', creadorUsuarioId,
+        docente.celular ? true : false, docente.email ? true : false,
+        true, 'enviada', creadoPor,
       ],
     );
 
@@ -843,15 +739,11 @@ async function crearAlertaDocente({
       await client.query(
         `INSERT INTO notificacion_destinatario (
            notificacion_id, usuario_id, nombre_destinatario,
-           celular_snapshot, email_snapshot,
-           rol_destinatario, canal, estado_envio, enviado_en
+           celular_snapshot, email_snapshot, rol_destinatario, canal, estado_envio, enviado_en
          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
          ON CONFLICT (notificacion_id, usuario_id, canal) DO NOTHING`,
-        [
-          notif.id, docente.usuario_id, docente.nombre_completo,
-          docente.celular || null, docente.email || null,
-          'docente', 'interno', 'enviado',
-        ],
+        [notif.id, docente.usuario_id, docente.nombre_completo,
+        docente.celular || null, docente.email || null, 'docente', 'interno', 'enviado'],
       );
 
       if (docente.celular) {
@@ -861,10 +753,8 @@ async function crearAlertaDocente({
              celular_snapshot, rol_destinatario, canal, estado_envio
            ) VALUES ($1,$2,$3,$4,$5,$6,$7)
            ON CONFLICT (notificacion_id, usuario_id, canal) DO NOTHING`,
-          [
-            notif.id, docente.usuario_id, docente.nombre_completo,
-            docente.celular, 'docente', 'whatsapp', 'pendiente',
-          ],
+          [notif.id, docente.usuario_id, docente.nombre_completo,
+          docente.celular, 'docente', 'whatsapp', 'pendiente'],
         );
       }
 
@@ -875,10 +765,8 @@ async function crearAlertaDocente({
              email_snapshot, rol_destinatario, canal, estado_envio
            ) VALUES ($1,$2,$3,$4,$5,$6,$7)
            ON CONFLICT (notificacion_id, usuario_id, canal) DO NOTHING`,
-          [
-            notif.id, docente.usuario_id, docente.nombre_completo,
-            docente.email, 'docente', 'email', 'pendiente',
-          ],
+          [notif.id, docente.usuario_id, docente.nombre_completo,
+          docente.email, 'docente', 'email', 'pendiente'],
         );
       }
     }
@@ -896,45 +784,105 @@ async function crearAlertaDocente({
 }
 
 async function crearAlertaInstitucional({
-  asignacionDocenteId,
-  materia,
-  mensajeInstitucional,
-  totalEstudiantes,
-  pctRiesgo,
-  creadorUsuarioId,
+  asignacionDocenteId, materia, mensajeInstitucional,
+  totalEstudiantes, pctRiesgo, creadorUsuarioId,
+  estudiantesCriticos = [],
 }) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
-    const { rows: [docente] } = await client.query(
-      Q_DOCENTE_DE_ASIGNACION, [asignacionDocenteId],
-    );
+    const { rows: [docente] } = await client.query(Q_DOCENTE_DE_ASIGNACION, [asignacionDocenteId]);
+    if (!docente) { await client.query('ROLLBACK'); return; }
 
-    const codigo  = await generarCodigoNotificacion(client);
-    const titulo  = `🚨 Alerta de clase — ${materia}`;
-    const mensaje = mensajeInstitucional
-      || `${pctRiesgo?.toFixed(1) ?? '?'}% de estudiantes en ${materia} en riesgo de reprobar `
-       + `(${totalEstudiantes} evaluados). Requiere atención.`;
+    // FIX #2 — fallback a usuario del docente cuando creadorUsuarioId es null
+    const creadoPor = creadorUsuarioId ?? docente.usuario_id;
+    if (!creadoPor) {
+      console.warn('[mlService] crearAlertaInstitucional: sin creador disponible, abortando');
+      await client.query('ROLLBACK');
+      return;
+    }
 
-    await client.query(
+    const codigo = await generarCodigoNotificacion(client);
+    const titulo = `🚨 Alerta de clase — ${materia}`;
+
+    const listaEstudiantes = estudiantesCriticos.length > 0
+      ? `\n\nEstudiantes en riesgo crítico/alto:\n` +
+      estudiantesCriticos.map(e =>
+        `• ${e.nombre}` +
+        (e.nota_estimada != null ? ` — nota est. ${Number(e.nota_estimada).toFixed(1)}` : '') +
+        (e.asistencia_pct != null ? `, asistencia ${Number(e.asistencia_pct).toFixed(0)}%` : '')
+      ).join('\n')
+      : '';
+
+    const mensaje =
+      `Tu clase de ${materia} presenta una situación crítica:\n` +
+      `• ${pctRiesgo?.toFixed(1) ?? '?'}% de estudiantes en riesgo de reprobar\n` +
+      `• ${totalEstudiantes} estudiantes evaluados` +
+      `${listaEstudiantes}\n\n` +
+      (mensajeInstitucional
+        ? `Análisis adicional:\n${mensajeInstitucional}`
+        : 'Se recomienda intervención grupal inmediata.');
+
+    const { rows: [notif] } = await client.query(
       `INSERT INTO notificacion_institucional (
          codigo, titulo, mensaje, tipo, prioridad, audiencia,
          grado_id, paralelo_id, periodo_academico_id,
-         enviar_interno, estado, creada_por
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+         destinatario_usuario_id,
+         enviar_whatsapp, enviar_email, enviar_interno, estado, creada_por
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+       RETURNING id, codigo`,
       [
         codigo, titulo, mensaje,
-        'comunicado_grado', 'alta', 'todos',
-        docente?.grado_id             || null,
-        docente?.paralelo_id          || null,
-        docente?.periodo_academico_id || null,
-        true, 'enviada', creadorUsuarioId,
+        'notificacion_individual', 'urgente', 'individual',
+        docente.grado_id || null,
+        docente.paralelo_id || null,
+        docente.periodo_academico_id || null,
+        docente.usuario_id,
+        docente.celular ? true : false,
+        docente.email ? true : false,
+        true, 'enviada', creadoPor,
       ],
     );
 
+    if (docente.usuario_id) {
+      await client.query(
+        `INSERT INTO notificacion_destinatario (
+           notificacion_id, usuario_id, nombre_destinatario,
+           celular_snapshot, email_snapshot, rol_destinatario, canal, estado_envio, enviado_en
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
+         ON CONFLICT (notificacion_id, usuario_id, canal) DO NOTHING`,
+        [notif.id, docente.usuario_id, docente.nombre_completo,
+        docente.celular || null, docente.email || null, 'docente', 'interno', 'enviado'],
+      );
+
+      if (docente.celular) {
+        await client.query(
+          `INSERT INTO notificacion_destinatario (
+             notificacion_id, usuario_id, nombre_destinatario,
+             celular_snapshot, rol_destinatario, canal, estado_envio
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+           ON CONFLICT (notificacion_id, usuario_id, canal) DO NOTHING`,
+          [notif.id, docente.usuario_id, docente.nombre_completo,
+          docente.celular, 'docente', 'whatsapp', 'pendiente'],
+        );
+      }
+
+      if (docente.email) {
+        await client.query(
+          `INSERT INTO notificacion_destinatario (
+             notificacion_id, usuario_id, nombre_destinatario,
+             email_snapshot, rol_destinatario, canal, estado_envio
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+           ON CONFLICT (notificacion_id, usuario_id, canal) DO NOTHING`,
+          [notif.id, docente.usuario_id, docente.nombre_completo,
+          docente.email, 'docente', 'email', 'pendiente'],
+        );
+      }
+    }
+
     await client.query('COMMIT');
-    console.info(`[mlService] Alerta institucional creada: ${codigo}`);
+    console.info(`[mlService] Alerta de clase creada para docente ${docente.nombre_completo}: ${codigo}`);
 
   } catch (err) {
     await client.query('ROLLBACK');
@@ -950,39 +898,28 @@ async function crearAlertaInstitucional({
 // ─────────────────────────────────────────────────────────────
 
 export async function predecirEstudiante({
-  estudianteId,
-  matriculaId,
-  asignacionDocenteId,
-  periodoEvaluacionId,
-  creadorUsuarioId = null,
-  incluirGemini = true,
-  usarXgboost   = true,
+  estudianteId, matriculaId, asignacionDocenteId, periodoEvaluacionId,
+  creadorUsuarioId = null, nombreEstudiante = null,
+  incluirGemini = true, usarXgboost = true,
 }) {
   const client = await pool.connect();
 
   try {
     const { mlRequest, meta, materia } = await buildPayloadCompleto(client, {
-      matriculaId,
-      asignacionDocenteId,
-      periodoEvaluacionId,
-      conMateriales: true,
+      matriculaId, asignacionDocenteId, periodoEvaluacionId, conMateriales: true,
     });
 
-    const params = new URLSearchParams({
-      incluir_gemini: incluirGemini,
-      usar_xgboost:   usarXgboost,
-    });
-
+    const params = new URLSearchParams({ incluir_gemini: incluirGemini, usar_xgboost: usarXgboost });
     const controller = new AbortController();
-    const timeoutId  = setTimeout(() => controller.abort(), ML_TIMEOUT);
+    const timeoutId = setTimeout(() => controller.abort(), ML_TIMEOUT);
 
     let response;
     try {
       response = await fetch(`${ML_BASE_URL}/predecir?${params}`, {
-        method:  'POST',
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify(mlRequest),
-        signal:  controller.signal,
+        body: JSON.stringify(mlRequest),
+        signal: controller.signal,
       });
     } finally {
       clearTimeout(timeoutId);
@@ -997,22 +934,61 @@ export async function predecirEstudiante({
 
     let notificacion_alerta = null;
     if (incluirGemini && resultado.analisis?.alerta_urgente === true) {
+      const nivelRiesgo = resultado.modelo?.nivel_riesgo || 'alto';
+      const notaEstimada = resultado.modelo?.nota_estimada_final ?? 0;
+      const asistenciaPct = mlRequest.asistencia_acumulada_pct ?? 0;
+
+      const promSab = mlRequest.notas_sab?.length
+        ? (mlRequest.notas_sab.reduce((a, b) => a + b, 0) / mlRequest.notas_sab.length).toFixed(1)
+        : null;
+      const promHac = mlRequest.notas_hac?.length
+        ? (mlRequest.notas_hac.reduce((a, b) => a + b, 0) / mlRequest.notas_hac.length).toFixed(1)
+        : null;
+
+      const lineasDetalle = [
+        `• Nota estimada al cierre: ${notaEstimada.toFixed(1)}`,
+        `• Nivel de riesgo: ${nivelRiesgo.toUpperCase()}`,
+        `• Asistencia acumulada: ${asistenciaPct.toFixed(1)}%`,
+        promSab != null ? `• Promedio SAB (saber): ${promSab}` : null,
+        promHac != null ? `• Promedio HAC (hacer): ${promHac}` : null,
+        meta.racha_trims_riesgo > 0
+          ? `• Trimestres consecutivos en riesgo: ${meta.racha_trims_riesgo}` : null,
+        mlRequest.racha_inasistencias > 2
+          ? `• Racha de inasistencias actual: ${mlRequest.racha_inasistencias} clases` : null,
+      ].filter(Boolean).join('\n');
+
+      const contextoGemini = resultado.analisis?.mensaje_alerta
+        ? `\n\nAnálisis adicional:\n${resultado.analisis.mensaje_alerta}` : '';
+
+      const encabezado = nombreEstudiante
+        ? `🔴 ATENCIÓN: ${nombreEstudiante} está en riesgo ${nivelRiesgo.toUpperCase()} de reprobar ${materia.materia_nombre}`
+        : `🔴 ATENCIÓN: Estudiante ID ${estudianteId} en riesgo ${nivelRiesgo.toUpperCase()} en ${materia.materia_nombre}`;
+
+      const mensajeEnriquecido =
+        `${encabezado} (${meta.periodo_nombre}).\n\n` +
+        `${lineasDetalle}${contextoGemini}\n\nSe recomienda intervención inmediata.`;
+
       notificacion_alerta = await crearAlertaDocente({
-        asignacionDocenteId,
-        estudianteId,
-        materia:         materia.materia_nombre,
-        mensajeAlerta:   resultado.analisis.mensaje_alerta,
-        nivelRiesgo:     resultado.modelo?.nivel_riesgo || 'alto',
-        notaEstimada:    resultado.modelo?.nota_estimada_final || 0,
-        creadorUsuarioId,
+        asignacionDocenteId, estudianteId,
+        materia: materia.materia_nombre,
+        mensajeAlerta: mensajeEnriquecido,
+        nivelRiesgo, notaEstimada, creadorUsuarioId,
       });
+
+      if (nivelRiesgo === 'critico') {
+        notificacionesAcademicas.onAlertaMLPadre({
+          matricula_id: matriculaId,
+          materia_nombre: materia.materia_nombre,
+          nota_estimada: notaEstimada,
+          asistencia_pct: asistenciaPct,
+          recomendaciones: resultado.analisis?.recomendaciones ?? [],
+        }).catch(err =>
+          console.error('[mlService] onAlertaMLPadre (estudiante) falló:', err.message)
+        );
+      }
     }
 
-    return {
-      ...resultado,
-      _meta: meta,
-      notificacion_alerta,
-    };
+    return { ...resultado, _meta: meta, notificacion_alerta };
 
   } finally {
     client.release();
@@ -1025,50 +1001,46 @@ export async function predecirEstudiante({
 // ─────────────────────────────────────────────────────────────
 
 export async function analizarClase({
-  asignacionDocenteId,
-  periodoEvaluacionId,
-  paraleloId,
-  creadorUsuarioId = null,
-  incluirGemini = true,
+  asignacionDocenteId, periodoEvaluacionId, paraleloId,
+  creadorUsuarioId = null, incluirGemini = true,
 }) {
+  // FIX #1 — guard anti-duplicados
+  const cacheKey = `clase:${asignacionDocenteId}:${periodoEvaluacionId}`;
+  if (procesandoClase.has(cacheKey)) {
+    throw new Error('Análisis de clase ya en progreso para esta asignación y período');
+  }
+  procesandoClase.add(cacheKey);
+
   const client = await pool.connect();
 
   try {
-        
     const { config_periodo, semana_actual, numero_periodo, anio_periodo, periodo_academico_id } =
-    await buildConfigPeriodo(client, periodoEvaluacionId);
-    
+      await buildConfigPeriodo(client, periodoEvaluacionId);
+
     const { rows: matriculas } = await client.query(
-  `SELECT
-     m.id          AS matricula_id,
-     e.id          AS estudiante_id,
-     e.nombres     AS nombre,
-     e.apellidos   AS apellidos
-   FROM   matricula m
-   JOIN   estudiante e ON e.id = m.estudiante_id
-   WHERE  m.paralelo_id          = $1
-     AND  m.estado               = 'activo'
-     AND  m.periodo_academico_id = $2
-     AND  m.deleted_at           IS NULL
-   ORDER  BY e.apellidos, e.nombres`,
-  [paraleloId, periodo_academico_id],
+      `SELECT
+         m.id          AS matricula_id,
+         e.id          AS estudiante_id,
+         e.nombres     AS nombre,
+         e.apellidos   AS apellidos
+       FROM   matricula m
+       JOIN   estudiante e ON e.id = m.estudiante_id
+       WHERE  m.paralelo_id          = $1
+         AND  m.estado               = 'activo'
+         AND  m.periodo_academico_id = $2
+         AND  m.deleted_at           IS NULL
+       ORDER  BY e.apellidos, e.nombres`,
+      [paraleloId, periodo_academico_id],
     );
 
-    if (matriculas.length === 0) {
-      return { estudiantes: [], total: 0 };
-    }
-    const { rows: [materia] } = await client.query(
-      Q_MATERIA, [asignacionDocenteId, periodoEvaluacionId],
-    );
+    if (matriculas.length === 0) return { estudiantes: [], total: 0 };
 
-    // Calcular estilo docente y régimen una sola vez para toda la clase
-    const [estiloDocente] = await Promise.all([
-      calcularEstiloDocente(client, asignacionDocenteId, periodoEvaluacionId),
-    ]);
+    const { rows: [materia] } = await client.query(Q_MATERIA, [asignacionDocenteId, periodoEvaluacionId]);
+    const estiloDocente = await calcularEstiloDocente(client, asignacionDocenteId, periodoEvaluacionId);
     const regimen_pond = calcularRegimenPond(anio_periodo);
 
     const estudiantesML = [];
-    const BATCH_SIZE    = 10;
+    const BATCH_SIZE = 10;
 
     for (let i = 0; i < matriculas.length; i += BATCH_SIZE) {
       const lote = matriculas.slice(i, i + BATCH_SIZE);
@@ -1077,34 +1049,30 @@ export async function analizarClase({
         const [asistResult, notasResult, historialFeatures, nivelGrado] = await Promise.all([
           client.query(Q_ASISTENCIA, [m.matricula_id, asignacionDocenteId]),
           client.query(Q_NOTAS, [m.matricula_id, asignacionDocenteId, periodoEvaluacionId]),
-          buildHistorialFeatures(
-            client, m.matricula_id, asignacionDocenteId, periodoEvaluacionId, numero_periodo,periodo_academico_id
-          ),
+          buildHistorialFeatures(client, m.matricula_id, asignacionDocenteId, periodoEvaluacionId, numero_periodo, periodo_academico_id),
           calcularNivelGrado(client, m.matricula_id),
         ]);
 
         const asist = asistResult.rows[0];
         const { notasPorDimension } = separarNotas(notasResult.rows);
-        const payloadNotas = construirPayloadNotas(
-          notasPorDimension, config_periodo.ponderaciones,
-        );
+        const payloadNotas = construirPayloadNotas(notasPorDimension, config_periodo.ponderaciones);
 
         return {
-          estudiante_id:            m.estudiante_id,
-          materia:                  materia.materia_nombre,
-          codigo_materia:           materia.materia_codigo,
-          trimestre:                numero_periodo,
+          estudiante_id: m.estudiante_id,
+          materia: materia.materia_nombre,
+          codigo_materia: materia.materia_codigo,
+          trimestre: numero_periodo,
           config_periodo,
-          semana:                   semana_actual,
+          semana: semana_actual,
           asistencia_acumulada_pct: parseFloat(asist.asistencia_pct) || 0,
-          racha_inasistencias:      parseInt(asist.racha_actual) || 0,
-          max_racha_inasistencias:  parseInt(asist.max_racha)    || 0,
+          racha_inasistencias: parseInt(asist.racha_actual) || 0,
+          max_racha_inasistencias: parseInt(asist.max_racha) || 0,
           ...payloadNotas,
           ...historialFeatures,
           nivel_educativo: nivelGrado.nivel_educativo,
-          horas_grado:     nivelGrado.horas_grado,
+          horas_grado: nivelGrado.horas_grado,
           regimen_pond,
-          estilo_docente:  estiloDocente,
+          estilo_docente: estiloDocente,
           materiales_disponibles: [],
           _nombre: `${m.apellidos}, ${m.nombre}`,
         };
@@ -1115,17 +1083,17 @@ export async function analizarClase({
 
     const mlPayload = {
       asignacion_docente_id: asignacionDocenteId,
-      materia:               materia.materia_nombre,
+      materia: materia.materia_nombre,
       semana_actual,
       config_periodo,
-      estudiantes:           estudiantesML.map(({ _nombre, ...resto }) => resto),
+      estudiantes: estudiantesML.map(({ _nombre, ...resto }) => resto),
     };
 
-    const params   = new URLSearchParams({ incluir_gemini: incluirGemini });
+    const params = new URLSearchParams({ incluir_gemini: incluirGemini });
     const response = await fetch(`${ML_BASE_URL}/predecir/clase?${params}`, {
-      method:  'POST',
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(mlPayload),
+      body: JSON.stringify(mlPayload),
     });
 
     if (!response.ok) {
@@ -1135,34 +1103,63 @@ export async function analizarClase({
 
     const resultado = await response.json();
 
+    const nombresMap = Object.fromEntries(
+      estudiantesML.map(e => [e.estudiante_id, e._nombre]),
+    );
+    const matriculasMap = Object.fromEntries(
+      matriculas.map(m => [m.estudiante_id, parseInt(m.matricula_id)]),
+    );
+
     if (incluirGemini && resultado.analisis?.alerta_institucional === true) {
+      const estudiantesCriticos = (resultado.estudiantes ?? [])
+        .filter(e => e.nivel_riesgo === 'critico' || e.nivel_riesgo === 'alto')
+        .slice(0, 5)
+        .map(e => ({
+          nombre: e.nombre_completo ?? nombresMap[e.estudiante_id] ?? `Estudiante ${e.estudiante_id}`,
+          nota_estimada: e.nota_estimada_final,
+          asistencia_pct: e.asistencia_pct,
+        }));
+
       await crearAlertaInstitucional({
         asignacionDocenteId,
-        materia:              materia.materia_nombre,
+        materia: materia.materia_nombre,
         mensajeInstitucional: resultado.analisis.mensaje_institucional,
-        totalEstudiantes:     resultado.total_estudiantes,
-        pctRiesgo:            resultado.pct_riesgo,
+        totalEstudiantes: resultado.total_estudiantes,
+        pctRiesgo: resultado.pct_riesgo,
         creadorUsuarioId,
+        estudiantesCriticos,
       });
+
+      const estudiantesParaNotificarPadres = (resultado.estudiantes ?? [])
+        .filter(e => e.nivel_riesgo === 'critico');
+
+      for (const est of estudiantesParaNotificarPadres) {
+        const matriculaId = matriculasMap[est.estudiante_id];
+        if (!matriculaId) continue;
+
+        notificacionesAcademicas.onAlertaMLPadre({
+          matricula_id: matriculaId,
+          materia_nombre: materia.materia_nombre,
+          nota_estimada: est.nota_estimada_final,
+          asistencia_pct: est.asistencia_pct,
+          recomendaciones: resultado.analisis?.recomendaciones ?? [],
+        }).catch(err =>
+          console.error(`[mlService] onAlertaMLPadre (clase, est ${est.estudiante_id}) falló:`, err.message)
+        );
+      }
     }
 
-const nombresMap    = Object.fromEntries(
-  estudiantesML.map(e => [e.estudiante_id, e._nombre]),
-);
-const matriculasMap = Object.fromEntries(
-  matriculas.map(m => [m.estudiante_id, parseInt(m.matricula_id)]),
-);
-
-return {
-  ...resultado,
-  estudiantes: resultado.estudiantes.map(est => ({
-    ...est,
-    matricula_id:    matriculasMap[est.estudiante_id] ?? null,  // ← agregar
-    nombre_completo: nombresMap[est.estudiante_id] || `Estudiante ${est.estudiante_id}`,
-  })),
-};
+    return {
+      ...resultado,
+      estudiantes: resultado.estudiantes.map(est => ({
+        ...est,
+        matricula_id: matriculasMap[est.estudiante_id] ?? null,
+        nombre_completo: nombresMap[est.estudiante_id] || `Estudiante ${est.estudiante_id}`,
+      })),
+    };
 
   } finally {
+    procesandoClase.delete(cacheKey); // FIX #1 — siempre liberar el guard
     client.release();
   }
 }
@@ -1170,30 +1167,21 @@ return {
 
 // ─────────────────────────────────────────────────────────────
 // generarPlanRecuperacion
-// FIX: antes llamaba a buildConfigPeriodo dos veces
-// Ahora usa buildPayloadCompleto que hace todo en una ronda
 // ─────────────────────────────────────────────────────────────
 
 export async function generarPlanRecuperacion({
-  estudianteId,
-  matriculaId,
-  asignacionDocenteId,
-  periodoEvaluacionId,
+  estudianteId, matriculaId, asignacionDocenteId, periodoEvaluacionId,
 }) {
   const client = await pool.connect();
-
   try {
     const { mlRequest } = await buildPayloadCompleto(client, {
-      matriculaId,
-      asignacionDocenteId,
-      periodoEvaluacionId,
-      conMateriales: true,
+      matriculaId, asignacionDocenteId, periodoEvaluacionId, conMateriales: true,
     });
 
     const response = await fetch(`${ML_BASE_URL}/predecir/plan`, {
-      method:  'POST',
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(mlRequest),
+      body: JSON.stringify(mlRequest),
     });
 
     if (!response.ok) {
@@ -1202,7 +1190,6 @@ export async function generarPlanRecuperacion({
     }
 
     return await response.json();
-
   } finally {
     client.release();
   }
@@ -1215,59 +1202,47 @@ export async function generarPlanRecuperacion({
 
 export async function verificarMLService() {
   try {
-    const response = await fetch(`${ML_BASE_URL}/health`, {
-      signal: AbortSignal.timeout(5000),
-    });
+    const response = await fetch(`${ML_BASE_URL}/health`, { signal: AbortSignal.timeout(5000) });
     if (!response.ok) return { disponible: false, error: `HTTP ${response.status}` };
     const data = await response.json();
     return {
-      disponible:       true,
+      disponible: true,
       modelos_cargados: data.modelos_cargados,
-      gemini:           data.gemini_disponible,
-      version:          data.version_modelo,
-      n_features:       data.n_features,
+      gemini: data.gemini_disponible,
+      version: data.version_modelo,
+      n_features: data.n_features,
     };
   } catch (err) {
     return { disponible: false, error: err.message };
   }
 }
+
+
 // ─────────────────────────────────────────────────────────────
 // simularEscenarios
 // ─────────────────────────────────────────────────────────────
 
 export async function simularEscenarios({
-  matriculaId,
-  asignacionDocenteId,
-  periodoEvaluacionId,
-  escenarios,
-  incluirGemini = true,
-  usarXgboost   = true,
+  matriculaId, asignacionDocenteId, periodoEvaluacionId,
+  escenarios, incluirGemini = true, usarXgboost = true,
 }) {
   const client = await pool.connect();
-
   try {
     const { mlRequest } = await buildPayloadCompleto(client, {
-      matriculaId,
-      asignacionDocenteId,
-      periodoEvaluacionId,
-      conMateriales: false,
+      matriculaId, asignacionDocenteId, periodoEvaluacionId, conMateriales: false,
     });
 
-    const params = new URLSearchParams({
-      incluir_gemini: incluirGemini,
-      usar_xgboost:   usarXgboost,
-    });
-
+    const params = new URLSearchParams({ incluir_gemini: incluirGemini, usar_xgboost: usarXgboost });
     const controller = new AbortController();
-    const timeoutId  = setTimeout(() => controller.abort(), ML_TIMEOUT);
+    const timeoutId = setTimeout(() => controller.abort(), ML_TIMEOUT);
 
     let response;
     try {
       response = await fetch(`${ML_BASE_URL}/simular?${params}`, {
-        method:  'POST',
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ datos_base: mlRequest, escenarios }),
-        signal:  controller.signal,
+        body: JSON.stringify({ datos_base: mlRequest, escenarios }),
+        signal: controller.signal,
       });
     } finally {
       clearTimeout(timeoutId);
@@ -1279,46 +1254,41 @@ export async function simularEscenarios({
     }
 
     return await response.json();
-
   } finally {
     client.release();
   }
 }
 
+
+// ─────────────────────────────────────────────────────────────
+// simularOptimo
+// ─────────────────────────────────────────────────────────────
+
 export async function simularOptimo({
-  matriculaId,
-  asignacionDocenteId,
-  periodoEvaluacionId,
-  objetivoNota = 51,
-  restricciones = {},
-  usarXgboost = true,
+  matriculaId, asignacionDocenteId, periodoEvaluacionId,
+  objetivoNota = 51, restricciones = {}, usarXgboost = true,
 }) {
   const client = await pool.connect();
- 
   try {
     const { mlRequest } = await buildPayloadCompleto(client, {
-      matriculaId,
-      asignacionDocenteId,
-      periodoEvaluacionId,
-      conMateriales: false,   // no necesitamos materiales para la optimización
+      matriculaId, asignacionDocenteId, periodoEvaluacionId, conMateriales: false,
     });
- 
+
     const params = new URLSearchParams({ usar_xgboost: usarXgboost });
- 
     const controller = new AbortController();
-    const timeoutId  = setTimeout(() => controller.abort(), ML_TIMEOUT);
- 
+    const timeoutId = setTimeout(() => controller.abort(), ML_TIMEOUT);
+
     let response;
     try {
       response = await fetch(`${ML_BASE_URL}/simular/optimo?${params}`, {
-        method:  'POST',
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          datos_base:    mlRequest,
+          datos_base: mlRequest,
           objetivo_nota: objetivoNota,
           restricciones: {
-            bloquear_practicas:  restricciones.bloquearPracticas  ?? false,
-            bloquear_examenes:   restricciones.bloquearExamenes   ?? false,
+            bloquear_practicas: restricciones.bloquearPracticas ?? false,
+            bloquear_examenes: restricciones.bloquearExamenes ?? false,
             bloquear_asistencia: restricciones.bloquearAsistencia ?? false,
           },
         }),
@@ -1327,14 +1297,66 @@ export async function simularOptimo({
     } finally {
       clearTimeout(timeoutId);
     }
- 
+
     if (!response.ok) {
       const err = await response.text().catch(() => '');
       throw new Error(`ML simular/optimo error ${response.status}: ${err}`);
     }
- 
+
     return await response.json();
- 
+  } finally {
+    client.release();
+  }
+}
+
+
+// ─────────────────────────────────────────────────────────────
+// simularOptimoV2
+// ─────────────────────────────────────────────────────────────
+
+export async function simularOptimoV2({
+  matriculaId, asignacionDocenteId, periodoEvaluacionId,
+  objetivoNota = 51, restricciones = {}, usarXgboost = true,
+  practicasRestantes, examenesRestantes,
+}) {
+  const client = await pool.connect();
+  try {
+    const { mlRequest } = await buildPayloadCompleto(client, {
+      matriculaId, asignacionDocenteId, periodoEvaluacionId, conMateriales: false,
+    });
+
+    const params = new URLSearchParams({ usar_xgboost: usarXgboost });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), ML_TIMEOUT);
+
+    let response;
+    try {
+      response = await fetch(`${ML_BASE_URL}/simular/optimo/v2?${params}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          datos_base: mlRequest,
+          objetivo_nota: objetivoNota,
+          restricciones: {
+            bloquear_practicas: restricciones.bloquearPracticas ?? false,
+            bloquear_examenes: restricciones.bloquearExamenes ?? false,
+            bloquear_asistencia: restricciones.bloquearAsistencia ?? false,
+          },
+          ...(practicasRestantes !== undefined && { practicas_restantes: practicasRestantes }),
+          ...(examenesRestantes !== undefined && { examenes_restantes: examenesRestantes }),
+        }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
+    if (!response.ok) {
+      const err = await response.text().catch(() => '');
+      throw new Error(`ML simular/optimo/v2 error ${response.status}: ${err}`);
+    }
+
+    return await response.json();
   } finally {
     client.release();
   }

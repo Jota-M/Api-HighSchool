@@ -117,7 +117,25 @@ router.post(
 router.post(
   '/simular/optimo',
   authorize('notas.leer'),
-  PrediccionController.simularOptimo   // ← método nuevo en el controller
+  PrediccionController.simularOptimo   
+);
+/**
+ * POST /api/prediccion/simular/optimo/v2
+ * Simulación óptima v2 — escenarios con desglose evaluación por evaluación
+ *
+ * Body: {
+ *   matricula_id, asignacion_docente_id, periodo_evaluacion_id,
+ *   objetivo_nota?: number,   // default 51
+ *   restricciones?: { bloquearPracticas?, bloquearExamenes? }
+ * }
+ *
+ * Responde con escenarios[] detallados, cada uno con evaluaciones[]
+ * que indica qué nota sacar en cada examen/práctica restante.
+ */
+router.post(
+  '/simular/optimo/v2',
+  authorize('notas.leer'),
+  PrediccionController.simularOptimoV2
 );
 
 // ─────────────────────────────────────────────────────────────

@@ -6,15 +6,19 @@ import { pool } from '../db/pool.js';
 // =============================================
 class BloqueHorario {
   static async findAll(filters = {}) {
-    const { turno_id, activo, incluir_recreos = true } = filters;
+    const { turno_id, nivel_academico_id, activo, incluir_recreos = true } = filters;
 
     let where = [];
     let params = [];
     let i = 1;
 
-    if (turno_id) {
+    if (turno_id !== undefined) {
       where.push(`bh.turno_id = $${i++}`);
       params.push(turno_id);
+    }
+    if (nivel_academico_id !== undefined) {
+      where.push(`bh.nivel_academico_id = $${i++}`);
+      params.push(nivel_academico_id);
     }
     if (activo !== undefined) {
       where.push(`bh.activo = $${i++}`);
@@ -27,54 +31,63 @@ class BloqueHorario {
     const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
     const result = await pool.query(`
-      SELECT bh.*, t.nombre AS turno_nombre
-      FROM bloque_horario bh
-      INNER JOIN turno t ON bh.turno_id = t.id
-      ${whereClause}
-      ORDER BY bh.turno_id, bh.numero
-    `, params);
+    SELECT
+      bh.*,
+      t.nombre AS turno_nombre,
+      n.nombre AS nivel_nombre
+    FROM bloque_horario bh
+    INNER JOIN turno t            ON bh.turno_id = t.id
+    LEFT  JOIN nivel_academico n  ON bh.nivel_academico_id = n.id
+    ${whereClause}
+    ORDER BY bh.turno_id, bh.nivel_academico_id, bh.numero
+  `, params);
 
     return result.rows;
   }
 
-  static async findById(id) {
-    const result = await pool.query(`
-      SELECT bh.*, t.nombre AS turno_nombre
-      FROM bloque_horario bh
-      INNER JOIN turno t ON bh.turno_id = t.id
-      WHERE bh.id = $1
-    `, [id]);
-    return result.rows[0];
-  }
-
   static async create(data) {
-    const { turno_id, nombre, codigo, numero, hora_inicio, hora_fin, es_recreo } = data;
+    const { turno_id, nivel_academico_id, nombre, codigo, numero, hora_inicio, hora_fin, es_recreo } = data;
 
     const result = await pool.query(`
-      INSERT INTO bloque_horario (turno_id, nombre, codigo, numero, hora_inicio, hora_fin, es_recreo)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      INSERT INTO bloque_horario (turno_id, nivel_academico_id, nombre, codigo, numero, hora_inicio, hora_fin, es_recreo)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       RETURNING *
-    `, [turno_id, nombre, codigo || null, numero, hora_inicio, hora_fin, es_recreo ?? false]);
+    `, [turno_id, nivel_academico_id || null, nombre, codigo || null, numero, hora_inicio, hora_fin, es_recreo ?? false]);
 
     return result.rows[0];
   }
 
   static async update(id, data) {
-    const { nombre, codigo, numero, hora_inicio, hora_fin, es_recreo, activo } = data;
+    const { nivel_academico_id, nombre, codigo, numero, hora_inicio, hora_fin, es_recreo, activo } = data;
+
+    const tieneNivel = 'nivel_academico_id' in data;
+    const nivelIdVal = tieneNivel ? (nivel_academico_id || null) : undefined;
 
     const result = await pool.query(`
       UPDATE bloque_horario
-      SET nombre      = COALESCE($1, nombre),
-          codigo      = COALESCE($2, codigo),
-          numero      = COALESCE($3, numero),
-          hora_inicio = COALESCE($4, hora_inicio),
-          hora_fin    = COALESCE($5, hora_fin),
-          es_recreo   = COALESCE($6, es_recreo),
-          activo      = COALESCE($7, activo),
-          updated_at  = CURRENT_TIMESTAMP
-      WHERE id = $8
+      SET nombre             = COALESCE($1, nombre),
+          codigo             = COALESCE($2, codigo),
+          numero             = COALESCE($3, numero),
+          hora_inicio        = COALESCE($4, hora_inicio),
+          hora_fin           = COALESCE($5, hora_fin),
+          es_recreo          = COALESCE($6, es_recreo),
+          activo             = COALESCE($7, activo),
+          nivel_academico_id = CASE WHEN $8::boolean THEN $9::integer ELSE nivel_academico_id END,
+          updated_at         = CURRENT_TIMESTAMP
+      WHERE id = $10
       RETURNING *
-    `, [nombre, codigo, numero, hora_inicio, hora_fin, es_recreo, activo, id]);
+    `, [
+      nombre,
+      codigo,
+      numero,
+      hora_inicio,
+      hora_fin,
+      es_recreo,
+      activo,
+      tieneNivel,
+      nivelIdVal,
+      id
+    ]);
 
     return result.rows[0];
   }
@@ -100,10 +113,10 @@ class Horario {
     let i = 1;
 
     if (periodo_academico_id) { where.push(`h.periodo_academico_id = $${i++}`); params.push(periodo_academico_id); }
-    if (paralelo_id)          { where.push(`h.paralelo_id = $${i++}`);          params.push(paralelo_id); }
-    if (estado)               { where.push(`h.estado = $${i++}`);               params.push(estado); }
-    if (grado_id)             { where.push(`p.grado_id = $${i++}`);             params.push(grado_id); }
-    if (nivel_academico_id)   { where.push(`g.nivel_academico_id = $${i++}`);   params.push(nivel_academico_id); }
+    if (paralelo_id) { where.push(`h.paralelo_id = $${i++}`); params.push(paralelo_id); }
+    if (estado) { where.push(`h.estado = $${i++}`); params.push(estado); }
+    if (grado_id) { where.push(`p.grado_id = $${i++}`); params.push(grado_id); }
+    if (nivel_academico_id) { where.push(`g.nivel_academico_id = $${i++}`); params.push(nivel_academico_id); }
 
     const result = await pool.query(`
       SELECT
@@ -111,6 +124,7 @@ class Horario {
         p.nombre          AS paralelo_nombre,
         p.aula            AS paralelo_aula,
         g.nombre          AS grado_nombre,
+        g.nivel_academico_id AS nivel_academico_id,
         n.nombre          AS nivel_nombre,
         t.nombre          AS turno_nombre,
         pa.nombre         AS periodo_nombre,
@@ -139,6 +153,7 @@ class Horario {
         p.aula            AS paralelo_aula,
         g.id              AS grado_id,
         g.nombre          AS grado_nombre,
+        g.nivel_academico_id AS nivel_academico_id,
         n.nombre          AS nivel_nombre,
         t.id              AS turno_id,
         t.nombre          AS turno_nombre,

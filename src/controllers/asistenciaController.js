@@ -3,7 +3,7 @@ import { SolicitudPermiso, Asistencia } from '../models/Asistencia.js';
 import ActividadLog from '../models/actividadLog.js';
 import RequestInfo from '../utils/requestInfo.js';
 import UploadFile from '../utils/uploadFile.js';
-import whatsappService from '../utils/whatsappService.js';
+import notificacionesAcademicas from '../utils/notificacionesAcademicas.js';
 
 // =============================================
 // SOLICITUD PERMISO
@@ -21,8 +21,8 @@ class SolicitudPermisoController {
       const result = await SolicitudPermiso.findAll({
         page: parseInt(page) || 1,
         limit: parseInt(limit) || 10,
-        estudiante_id:         estudiante_id         ? parseInt(estudiante_id)         : undefined,
-        padre_familia_id:      padre_familia_id      ? parseInt(padre_familia_id)      : undefined,
+        estudiante_id: estudiante_id ? parseInt(estudiante_id) : undefined,
+        padre_familia_id: padre_familia_id ? parseInt(padre_familia_id) : undefined,
         asignacion_docente_id: asignacion_docente_id ? parseInt(asignacion_docente_id) : undefined,
         estado,
         fecha_inicio,
@@ -48,7 +48,6 @@ class SolicitudPermisoController {
       }
 
       const historial = await SolicitudPermiso.getHistorial(req.params.id);
-
       res.json({ success: true, data: { solicitud, historial } });
     } catch (error) {
       console.error('Error al obtener solicitud:', error);
@@ -61,69 +60,67 @@ class SolicitudPermisoController {
 
   // POST /api/permisos
   static async crear(req, res) {
-  try {
-    const {
-      estudiante_id, padre_familia_id, asignacion_docente_id,
-      fecha_ausencia, es_dia_completo, hora_inicio, hora_fin,
-      motivo, descripcion
-    } = req.body;
+    try {
+      const {
+        estudiante_id, padre_familia_id, asignacion_docente_id,
+        fecha_ausencia, es_dia_completo, hora_inicio, hora_fin,
+        motivo, descripcion
+      } = req.body;
 
-    if (!estudiante_id || !fecha_ausencia || !motivo) {
-      return res.status(400).json({
-        success: false,
-        message: 'estudiante_id, fecha_ausencia y motivo son requeridos'
-      });
-    }
+      if (!estudiante_id || !fecha_ausencia || !motivo) {
+        return res.status(400).json({
+          success: false,
+          message: 'estudiante_id, fecha_ausencia y motivo son requeridos'
+        });
+      }
 
-    const duplicada = await SolicitudPermiso.existeParaFecha(
-      estudiante_id, fecha_ausencia, asignacion_docente_id
-    );
-    if (duplicada) {
-      return res.status(409).json({
-        success: false,
-        message: 'Ya existe una solicitud de permiso activa para esa fecha'
-      });
-    }
-
-    // ✅ Subir archivo a Cloudinary si viene adjunto
-    let archivo_adjunto_url = req.body.archivo_adjunto_url || null;
-
-    if (req.file) {
-      const ext = req.file.originalname.split('.').pop();
-      const uploadResult = await UploadFile.uploadFromBuffer(
-        req.file.buffer,
-        'permisos_adjuntos',
-        `permiso_${Date.now()}.${ext}`,
-        'raw'
+      const duplicada = await SolicitudPermiso.existeParaFecha(
+        estudiante_id, fecha_ausencia, asignacion_docente_id
       );
-      archivo_adjunto_url = uploadResult.url;
-    }
+      if (duplicada) {
+        return res.status(409).json({
+          success: false,
+          message: 'Ya existe una solicitud de permiso activa para esa fecha'
+        });
+      }
 
-    const solicitud = await SolicitudPermiso.create({
-      estudiante_id,
-      padre_familia_id:      padre_familia_id      || null,
-      asignacion_docente_id: asignacion_docente_id || null,
-      fecha_ausencia,
-      es_dia_completo:       es_dia_completo ?? true,
-      hora_inicio:           hora_inicio || null,
-      hora_fin:              hora_fin    || null,
-      motivo,
-      descripcion:           descripcion || null,
-      archivo_adjunto_url
-    });
+      let archivo_adjunto_url = req.body.archivo_adjunto_url || null;
+      if (req.file) {
+        const ext = req.file.originalname.split('.').pop();
+        const uploadResult = await UploadFile.uploadFromBuffer(
+          req.file.buffer,
+          'permisos_adjuntos',
+          `permiso_${Date.now()}.${ext}`,
+          'raw'
+        );
+        archivo_adjunto_url = uploadResult.url;
+      }
+
+      const solicitud = await SolicitudPermiso.create({
+        estudiante_id,
+        padre_familia_id: padre_familia_id || null,
+        asignacion_docente_id: asignacion_docente_id || null,
+        fecha_ausencia,
+        es_dia_completo: es_dia_completo ?? true,
+        hora_inicio: hora_inicio || null,
+        hora_fin: hora_fin || null,
+        motivo,
+        descripcion: descripcion || null,
+        archivo_adjunto_url
+      });
 
       const reqInfo = RequestInfo.extract(req);
       await ActividadLog.create({
-        usuario_id:      req.user.id,
-        accion:          'crear',
-        modulo:          'solicitud_permiso',
-        tabla_afectada:  'solicitud_permiso',
-        registro_id:     solicitud.id,
-        datos_nuevos:    solicitud,
-        ip_address:      reqInfo.ip,
-        user_agent:      reqInfo.userAgent,
-        resultado:       'exitoso',
-        mensaje:         `Solicitud de permiso creada: ${solicitud.codigo_solicitud}`
+        usuario_id: req.user.id,
+        accion: 'crear',
+        modulo: 'solicitud_permiso',
+        tabla_afectada: 'solicitud_permiso',
+        registro_id: solicitud.id,
+        datos_nuevos: solicitud,
+        ip_address: reqInfo.ip,
+        user_agent: reqInfo.userAgent,
+        resultado: 'exitoso',
+        mensaje: `Solicitud de permiso creada: ${solicitud.codigo_solicitud}`
       });
 
       res.status(201).json({
@@ -169,23 +166,23 @@ class SolicitudPermisoController {
       const solicitud = await SolicitudPermiso.cambiarEstado(id, {
         estado,
         revisado_por: req.user.id,
-        motivo_rechazo:        motivo_rechazo        || null,
+        motivo_rechazo: motivo_rechazo || null,
         observaciones_revisor: observaciones_revisor || null
       });
 
       const reqInfo = RequestInfo.extract(req);
       await ActividadLog.create({
-        usuario_id:      req.user.id,
-        accion:          'cambiar_estado',
-        modulo:          'solicitud_permiso',
-        tabla_afectada:  'solicitud_permiso',
-        registro_id:     solicitud.id,
-        datos_anteriores:{ estado: solicitudAnterior.estado },
-        datos_nuevos:    { estado: solicitud.estado },
-        ip_address:      reqInfo.ip,
-        user_agent:      reqInfo.userAgent,
-        resultado:       'exitoso',
-        mensaje:         `Permiso ${solicitud.codigo_solicitud} → ${estado}`
+        usuario_id: req.user.id,
+        accion: 'cambiar_estado',
+        modulo: 'solicitud_permiso',
+        tabla_afectada: 'solicitud_permiso',
+        registro_id: solicitud.id,
+        datos_anteriores: { estado: solicitudAnterior.estado },
+        datos_nuevos: { estado: solicitud.estado },
+        ip_address: reqInfo.ip,
+        user_agent: reqInfo.userAgent,
+        resultado: 'exitoso',
+        mensaje: `Permiso ${solicitud.codigo_solicitud} → ${estado}`
       });
 
       res.json({
@@ -233,7 +230,7 @@ class AsistenciaController {
       const result = await Asistencia.findAll({
         page: parseInt(page) || 1,
         limit: parseInt(limit) || 20,
-        matricula_id:          matricula_id          ? parseInt(matricula_id)          : undefined,
+        matricula_id: matricula_id ? parseInt(matricula_id) : undefined,
         asignacion_docente_id: asignacion_docente_id ? parseInt(asignacion_docente_id) : undefined,
         fecha,
         fecha_inicio,
@@ -268,8 +265,6 @@ class AsistenciaController {
   }
 
   // GET /api/asistencia/mis-asignaciones
-  // El docente ve SUS materias con el resumen de asistencia del día
-  // Query: ?fecha=YYYY-MM-DD (opcional, default: hoy)
   static async getMisAsignaciones(req, res) {
     try {
       const fecha = req.query.fecha || new Date().toISOString().split('T')[0];
@@ -304,7 +299,7 @@ class AsistenciaController {
     }
   }
 
-
+  // GET /api/asistencia/lista-dia
   // Query: ?asignacion_docente_id=X&fecha=YYYY-MM-DD
   static async getListaDia(req, res) {
     try {
@@ -326,9 +321,9 @@ class AsistenciaController {
         success: true,
         data: {
           lista,
-          total:             lista.length,
-          ya_marcados:       lista.filter(r => r.estado).length,
-          pendientes:        lista.filter(r => !r.estado).length
+          total: lista.length,
+          ya_marcados: lista.filter(r => r.estado).length,
+          pendientes: lista.filter(r => !r.estado).length
         }
       });
     } catch (error) {
@@ -341,131 +336,131 @@ class AsistenciaController {
   }
 
   // POST /api/asistencia
+  // ✅ Reemplazado whatsappService.notificarAsistencia → notificacionesAcademicas.onAsistencia
   static async registrar(req, res) {
-  try {
-    const {
-      matricula_id, asignacion_docente_id, fecha, estado,
-      solicitud_permiso_id, justificacion, dispositivo, observaciones
-    } = req.body;
- 
-    if (!matricula_id || !asignacion_docente_id || !fecha || !estado) {
-      return res.status(400).json({
+    try {
+      const {
+        matricula_id, asignacion_docente_id, fecha, estado,
+        solicitud_permiso_id, justificacion, dispositivo, observaciones
+      } = req.body;
+
+      if (!matricula_id || !asignacion_docente_id || !fecha || !estado) {
+        return res.status(400).json({
+          success: false,
+          message: 'matricula_id, asignacion_docente_id, fecha y estado son requeridos'
+        });
+      }
+
+      const estadosValidos = ['presente', 'ausente', 'tardanza', 'justificado', 'falta_parcial'];
+      if (!estadosValidos.includes(estado)) {
+        return res.status(400).json({
+          success: false,
+          message: `Estado inválido. Debe ser: ${estadosValidos.join(', ')}`
+        });
+      }
+
+      const asistencia = await Asistencia.create({
+        matricula_id, asignacion_docente_id, fecha, estado,
+        solicitud_permiso_id: solicitud_permiso_id || null,
+        justificacion: justificacion || null,
+        marcado_por: req.user.id,
+        dispositivo: dispositivo || 'web',
+        observaciones: observaciones || null
+      });
+
+      const reqInfo = RequestInfo.extract(req);
+      await ActividadLog.create({
+        usuario_id: req.user.id,
+        accion: 'crear',
+        modulo: 'asistencia',
+        tabla_afectada: 'asistencia',
+        registro_id: asistencia.id,
+        datos_nuevos: asistencia,
+        ip_address: reqInfo.ip,
+        user_agent: reqInfo.userAgent,
+        resultado: 'exitoso',
+        mensaje: `Asistencia registrada: matrícula ${matricula_id} → ${estado}`
+      });
+
+      // ✅ Notificación automática multicanal (solo dispara si es ausente o tardanza)
+      if (['ausente', 'tardanza'].includes(estado)) {
+        notificacionesAcademicas.onAsistencia({
+          matricula_id: parseInt(matricula_id),
+          estado,
+          materia_nombre: req.body.materia_nombre || null,
+          fecha,
+          asignacion_docente_id: parseInt(asignacion_docente_id),
+        }).catch(err => console.error('⚠️ Error notificación asistencia:', err.message));
+      }
+
+      res.status(201).json({
+        success: true,
+        message: 'Asistencia registrada exitosamente',
+        data: { asistencia }
+      });
+    } catch (error) {
+      console.error('Error al registrar asistencia:', error);
+      res.status(500).json({
         success: false,
-        message: 'matricula_id, asignacion_docente_id, fecha y estado son requeridos'
+        message: 'Error al registrar asistencia: ' + error.message
       });
     }
- 
-    const estadosValidos = ['presente', 'ausente', 'tardanza', 'justificado', 'falta_parcial'];
-    if (!estadosValidos.includes(estado)) {
-      return res.status(400).json({
-        success: false,
-        message: `Estado inválido. Debe ser: ${estadosValidos.join(', ')}`
-      });
-    }
- 
-    const asistencia = await Asistencia.create({
-      matricula_id, asignacion_docente_id, fecha, estado,
-      solicitud_permiso_id: solicitud_permiso_id || null,
-      justificacion:        justificacion        || null,
-      marcado_por:          req.user.id,
-      dispositivo:          dispositivo          || 'web',
-      observaciones:        observaciones        || null
-    });
- 
-    const reqInfo = RequestInfo.extract(req);
-    await ActividadLog.create({
-      usuario_id:     req.user.id,
-      accion:         'crear',
-      modulo:         'asistencia',
-      tabla_afectada: 'asistencia',
-      registro_id:    asistencia.id,
-      datos_nuevos:   asistencia,
-      ip_address:     reqInfo.ip,
-      user_agent:     reqInfo.userAgent,
-      resultado:      'exitoso',
-      mensaje:        `Asistencia registrada: matrícula ${matricula_id} → ${estado}`
-    });
- 
-    // ← NUEVO: notificar al padre si es ausente o tardanza
-    // No await → no bloquea la respuesta al docente
-    if (['ausente', 'tardanza'].includes(estado)) {
-      whatsappService.notificarAsistencia({
-        matricula_id,
-        estado,
-        materia_nombre: req.body.materia_nombre || null, // opcional, se puede omitir
-        fecha,
-        asignacion_docente_id,
-      }).catch(err => console.error('⚠️ Error notificación WhatsApp:', err.message));
-    }
- 
-    res.status(201).json({
-      success: true,
-      message: 'Asistencia registrada exitosamente',
-      data: { asistencia }
-    });
-  } catch (error) {
-    console.error('Error al registrar asistencia:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error al registrar asistencia: ' + error.message
-    });
   }
-}
 
   // POST /api/asistencia/masivo
+  // ✅ Reemplazado whatsappService.notificarAsistenciaMasiva → notificacionesAcademicas.onAsistenciaMasiva
   static async registrarMasivo(req, res) {
-  try {
-    const { asignacion_docente_id, fecha, dispositivo, registros } = req.body;
- 
-    if (!asignacion_docente_id || !fecha || !Array.isArray(registros) || registros.length === 0) {
-      return res.status(400).json({
+    try {
+      const { asignacion_docente_id, fecha, dispositivo, registros } = req.body;
+
+      if (!asignacion_docente_id || !fecha || !Array.isArray(registros) || registros.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'asignacion_docente_id, fecha y registros[] son requeridos'
+        });
+      }
+
+      const resultado = await Asistencia.registrarMasivo({
+        asignacion_docente_id: parseInt(asignacion_docente_id),
+        fecha,
+        marcado_por: req.user.id,
+        dispositivo: dispositivo || 'web',
+        registros
+      });
+
+      const reqInfo = RequestInfo.extract(req);
+      await ActividadLog.create({
+        usuario_id: req.user.id,
+        accion: 'registrar_masivo',
+        modulo: 'asistencia',
+        tabla_afectada: 'asistencia',
+        datos_nuevos: { asignacion_docente_id, fecha, total: resultado.length },
+        ip_address: reqInfo.ip,
+        user_agent: reqInfo.userAgent,
+        resultado: 'exitoso',
+        mensaje: `Asistencia masiva: ${resultado.length} registros para asignación ${asignacion_docente_id}`
+      });
+
+      // ✅ Notificaciones masivas multicanal
+      notificacionesAcademicas.onAsistenciaMasiva(resultado, {
+        asignacion_docente_id: parseInt(asignacion_docente_id),
+        fecha,
+        materia_nombre: req.body.materia_nombre || null,
+      }).catch(err => console.error('⚠️ Error notificaciones masivas asistencia:', err.message));
+
+      res.status(201).json({
+        success: true,
+        message: `${resultado.length} registros de asistencia guardados`,
+        data: { total: resultado.length, asistencias: resultado }
+      });
+    } catch (error) {
+      console.error('Error en registro masivo:', error);
+      res.status(500).json({
         success: false,
-        message: 'asignacion_docente_id, fecha y registros[] son requeridos'
+        message: 'Error en registro masivo: ' + error.message
       });
     }
- 
-    const resultado = await Asistencia.registrarMasivo({
-      asignacion_docente_id: parseInt(asignacion_docente_id),
-      fecha,
-      marcado_por: req.user.id,
-      dispositivo: dispositivo || 'web',
-      registros
-    });
- 
-    const reqInfo = RequestInfo.extract(req);
-    await ActividadLog.create({
-      usuario_id:     req.user.id,
-      accion:         'registrar_masivo',
-      modulo:         'asistencia',
-      tabla_afectada: 'asistencia',
-      datos_nuevos:   { asignacion_docente_id, fecha, total: resultado.length },
-      ip_address:     reqInfo.ip,
-      user_agent:     reqInfo.userAgent,
-      resultado:      'exitoso',
-      mensaje:        `Asistencia masiva: ${resultado.length} registros para asignación ${asignacion_docente_id}`
-    });
- 
-    // ← NUEVO: notificar padres de ausentes y tardanzas en paralelo
-    // req.body.materia_nombre es opcional — el frontend puede enviarlo
-    whatsappService.notificarAsistenciaMasiva(resultado, {
-      asignacion_docente_id: parseInt(asignacion_docente_id),
-      fecha,
-      materia_nombre: req.body.materia_nombre || null,
-    }).catch(err => console.error('⚠️ Error notificaciones masivas WhatsApp:', err.message));
- 
-    res.status(201).json({
-      success: true,
-      message: `${resultado.length} registros de asistencia guardados`,
-      data: { total: resultado.length, asistencias: resultado }
-    });
-  } catch (error) {
-    console.error('Error en registro masivo:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error en registro masivo: ' + error.message
-    });
   }
-}
 
   // PATCH /api/asistencia/:id
   static async actualizar(req, res) {
@@ -484,17 +479,17 @@ class AsistenciaController {
 
       const reqInfo = RequestInfo.extract(req);
       await ActividadLog.create({
-        usuario_id:      req.user.id,
-        accion:          'actualizar',
-        modulo:          'asistencia',
-        tabla_afectada:  'asistencia',
-        registro_id:     parseInt(id),
-        datos_anteriores:{ estado: anterior.estado },
-        datos_nuevos:    { estado: asistencia.estado },
-        ip_address:      reqInfo.ip,
-        user_agent:      reqInfo.userAgent,
-        resultado:       'exitoso',
-        mensaje:         `Asistencia actualizada: ${anterior.estado} → ${asistencia.estado}`
+        usuario_id: req.user.id,
+        accion: 'actualizar',
+        modulo: 'asistencia',
+        tabla_afectada: 'asistencia',
+        registro_id: parseInt(id),
+        datos_anteriores: { estado: anterior.estado },
+        datos_nuevos: { estado: asistencia.estado },
+        ip_address: reqInfo.ip,
+        user_agent: reqInfo.userAgent,
+        resultado: 'exitoso',
+        mensaje: `Asistencia actualizada: ${anterior.estado} → ${asistencia.estado}`
       });
 
       res.json({
@@ -512,7 +507,6 @@ class AsistenciaController {
   }
 
   // GET /api/asistencia/reporte
-  // Query: ?matricula_id=X&asignacion_docente_id=Y&fecha_inicio=Z&fecha_fin=W
   static async getReporte(req, res) {
     try {
       const { matricula_id, asignacion_docente_id, fecha_inicio, fecha_fin } = req.query;
@@ -525,10 +519,10 @@ class AsistenciaController {
       }
 
       const reporte = await Asistencia.getReporte({
-        matricula_id:          parseInt(matricula_id),
+        matricula_id: parseInt(matricula_id),
         asignacion_docente_id: asignacion_docente_id ? parseInt(asignacion_docente_id) : null,
-        fecha_inicio:          fecha_inicio || null,
-        fecha_fin:             fecha_fin    || null
+        fecha_inicio: fecha_inicio || null,
+        fecha_fin: fecha_fin || null
       });
 
       res.json({ success: true, data: { reporte } });
@@ -540,38 +534,35 @@ class AsistenciaController {
       });
     }
   }
-    // GET /api/asistencia/reporte-clase
-  // Query: ?asignacion_docente_id=X&fecha_inicio=YYYY-MM-DD&fecha_fin=YYYY-MM-DD
+
+  // GET /api/asistencia/reporte-clase
   static async getReporteClase(req, res) {
     try {
       const { asignacion_docente_id, fecha_inicio, fecha_fin } = req.query;
- 
+
       if (!asignacion_docente_id) {
         return res.status(400).json({
           success: false,
           message: 'asignacion_docente_id es requerido',
         });
       }
- 
+
       const [estudiantes, resumen] = await Promise.all([
         Asistencia.getReporteClase({
           asignacion_docente_id: parseInt(asignacion_docente_id),
           fecha_inicio: fecha_inicio || null,
-          fecha_fin:    fecha_fin    || null,
+          fecha_fin: fecha_fin || null,
         }),
         Asistencia.getResumenClase({
           asignacion_docente_id: parseInt(asignacion_docente_id),
           fecha_inicio: fecha_inicio || null,
-          fecha_fin:    fecha_fin    || null,
+          fecha_fin: fecha_fin || null,
         }),
       ]);
- 
+
       res.json({
         success: true,
-        data: {
-          resumen,
-          estudiantes,
-        },
+        data: { resumen, estudiantes },
       });
     } catch (error) {
       console.error('Error al generar reporte de clase:', error);
@@ -581,21 +572,20 @@ class AsistenciaController {
       });
     }
   }
- 
+
   // PATCH /api/asistencia/:id/corregir
-  // Permite al docente corregir un registro ya guardado
   static async corregir(req, res) {
     try {
       const { id } = req.params;
       const { estado, justificacion, observaciones, solicitud_permiso_id } = req.body;
- 
+
       if (!estado) {
         return res.status(400).json({
           success: false,
           message: 'El campo estado es requerido',
         });
       }
- 
+
       const estadosValidos = ['presente', 'ausente', 'tardanza', 'justificado', 'falta_parcial'];
       if (!estadosValidos.includes(estado)) {
         return res.status(400).json({
@@ -603,12 +593,12 @@ class AsistenciaController {
           message: `Estado inválido. Debe ser: ${estadosValidos.join(', ')}`,
         });
       }
- 
+
       const anterior = await Asistencia.findById(id);
       if (!anterior) {
         return res.status(404).json({ success: false, message: 'Registro no encontrado' });
       }
- 
+
       const asistencia = await Asistencia.corregir(id, {
         estado,
         justificacion,
@@ -616,22 +606,22 @@ class AsistenciaController {
         solicitud_permiso_id,
         corregido_por: req.user.id,
       });
- 
+
       const reqInfo = RequestInfo.extract(req);
       await ActividadLog.create({
-        usuario_id:       req.user.id,
-        accion:           'corregir',
-        modulo:           'asistencia',
-        tabla_afectada:   'asistencia',
-        registro_id:      parseInt(id),
+        usuario_id: req.user.id,
+        accion: 'corregir',
+        modulo: 'asistencia',
+        tabla_afectada: 'asistencia',
+        registro_id: parseInt(id),
         datos_anteriores: { estado: anterior.estado },
-        datos_nuevos:     { estado: asistencia.estado },
-        ip_address:       reqInfo.ip,
-        user_agent:       reqInfo.userAgent,
-        resultado:        'exitoso',
-        mensaje:          `Asistencia corregida: ${anterior.estado} → ${asistencia.estado}`,
+        datos_nuevos: { estado: asistencia.estado },
+        ip_address: reqInfo.ip,
+        user_agent: reqInfo.userAgent,
+        resultado: 'exitoso',
+        mensaje: `Asistencia corregida: ${anterior.estado} → ${asistencia.estado}`,
       });
- 
+
       res.json({
         success: true,
         message: 'Asistencia corregida exitosamente',

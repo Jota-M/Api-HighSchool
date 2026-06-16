@@ -16,7 +16,7 @@ router.use(authenticate);
 // GET /api/reportes/matricula/paralelo?paralelo_id=X&periodo_id=Y&formato=pdf
 router.get(
   '/matricula/paralelo',
-  authorize('reportes.generar'),
+  authorize('reportes.leer'),
   logActivity('generar_reporte_paralelo', 'reportes'),
   ReportesMatriculaController.reporteParalelo
 );
@@ -24,7 +24,7 @@ router.get(
 // GET /api/reportes/matricula/estudiante?estudiante_id=X&formato=pdf
 router.get(
   '/matricula/estudiante',
-  authorize('reportes.generar'),
+  authorize('reportes.leer'),
   logActivity('generar_reporte_estudiante', 'reportes'),
   ReportesMatriculaController.reporteEstudiante
 );
@@ -32,7 +32,7 @@ router.get(
 // GET /api/reportes/matricula/estadistico?periodo_id=X&nivel_id=Y&formato=excel
 router.get(
   '/matricula/estadistico',
-  authorize('reportes.generar'),
+  authorize('reportes.leer'),
   logActivity('generar_reporte_estadistico', 'reportes'),
   ReportesMatriculaController.reporteEstadistico
 );
@@ -44,7 +44,7 @@ router.get(
 // GET /api/reportes/preinscripcion/individual?id=X&formato=pdf
 router.get(
   '/preinscripcion/individual',
-  authorize('reportes.generar'),
+  authorize('reportes.leer'),
   logActivity('generar_reporte_preinscripcion_individual', 'reportes'),
   ReportesPreInscripcionController.reporteIndividual
 );
@@ -52,7 +52,7 @@ router.get(
 // GET /api/reportes/preinscripcion/listado?estado=X&fecha_inicio=Y&formato=excel
 router.get(
   '/preinscripcion/listado',
-  authorize('reportes.generar'),
+  authorize('reportes.leer'),
   logActivity('generar_reporte_preinscripcion_listado', 'reportes'),
   ReportesPreInscripcionController.reporteListado
 );
@@ -60,7 +60,7 @@ router.get(
 // GET /api/reportes/preinscripcion/estadistico?fecha_inicio=X&fecha_fin=Y&formato=pdf
 router.get(
   '/preinscripcion/estadistico',
-  authorize('reportes.generar'),
+  authorize('reportes.leer'),
   logActivity('generar_reporte_preinscripcion_estadistico', 'reportes'),
   ReportesPreInscripcionController.reporteEstadistico
 );

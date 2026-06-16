@@ -19,7 +19,7 @@ router.use(authenticate);
  */
 router.get(
   '/:id/pdf',
-  authorize('matricula.leer'),
+  authorize('matriculacion.leer'),
   MatriculaPDFController.generarPDF
 );
 
@@ -29,7 +29,7 @@ router.get(
  */
 router.get(
   '/:id/pdf/preview',
-  authorize('matricula.leer'),
+  authorize('matriculacion.leer'),
   MatriculaPDFController.verPDFPreview
 );
 
@@ -40,14 +40,14 @@ router.get(
 // GET /api/matricula
 router.get(
   '/',
-  authorize('matricula.leer'),
+  authorize('matriculacion.leer'),
   MatriculaController.listar
 );
 
 // GET /api/matricula/estadisticas
 router.get(
   '/estadisticas',
-  authorize('matricula.leer'),
+  authorize('matriculacion.leer'),
   MatriculaController.obtenerEstadisticas
 );
 
@@ -55,21 +55,21 @@ router.get(
 // GET /api/matricula/capacidad
 router.get(
   '/capacidad',
-  authorize('matricula.leer'),
+  authorize('matriculacion.leer'),
   MatriculaController.verificarCapacidad
 );
 
 // GET /api/matricula/paralelo/:paralelo_id
 router.get(
   '/paralelo/:paralelo_id',
-  authorize('matricula.leer'),
+  authorize('matriculacion.leer'),
   MatriculaController.listarPorParalelo
 );
 
 // POST /api/matricula
 router.post(
   '/',
-  authorize('matricula.crear'),
+  authorize('matriculacion.crear'),
   logActivity('crear', 'matricula'),
   MatriculaController.crear
 );
@@ -77,32 +77,32 @@ router.post(
 // PUT /api/matricula/:id
 router.put(
   '/:id',
-  authorize('matricula.actualizar'),
-  logActivity('actualizar', 'matricula'),
+  authorize('matriculacion.actualizar'),
+  logActivity('actualizar', 'matriculacion'),
   MatriculaController.actualizar
 );
 
 // PATCH /api/matricula/:id/estado
 router.patch(
   '/:id/estado',
-  authorize('matricula.actualizar'),
-  logActivity('cambiar_estado', 'matricula'),
+  authorize('matriculacion.actualizar'),
+  logActivity('cambiar_estado', 'matriculacion'),
   MatriculaController.cambiarEstado
 );
 
 // POST /api/matricula/:id/transferir
 router.post(
   '/:id/transferir',
-  authorize('matricula.transferir'),
-  logActivity('transferir_paralelo', 'matricula'),
+  authorize('matriculacion.actualizar'),
+  logActivity('transferir_paralelo', 'matriculacion'),
   MatriculaController.transferirParalelo
 );
 
 // DELETE /api/matricula/:id
 router.delete(
   '/:id',
-  authorize('matricula.eliminar'),
-  logActivity('eliminar', 'matricula'),
+  authorize('matriculacion.eliminar'),
+  logActivity('eliminar', 'matriculacion'),
   MatriculaController.eliminar
 );
 
@@ -111,40 +111,40 @@ router.delete(
 // POST /api/matricula/:id/documentos
 router.post(
   '/:id/documentos',
-  authorize('matricula.actualizar'),
+  authorize('matriculacion.actualizar'),
   upload.single('documento'),
   handleMulterError,
-  logActivity('subir_documento', 'matricula'),
+  logActivity('subir_documento', 'matriculacion'),
   MatriculaController.subirDocumento
 );
 
 // GET /api/matricula/:id/documentos
 router.get(
   '/:id/documentos',
-  authorize('matricula.leer'),
+  authorize('matriculacion.leer'),
   MatriculaController.listarDocumentos
 );
 
 // PATCH /api/matricula/:id/documentos/:documento_id/verificar
 router.patch(
   '/:id/documentos/:documento_id/verificar',
-  authorize('matricula.verificar_documentos'),
-  logActivity('verificar_documento', 'matricula'),
+  authorize('matriculacion.actualizar'),
+  logActivity('verificar_documento', 'matriculacion'),
   MatriculaController.verificarDocumento
 );
 
 // DELETE /api/matricula/:id/documentos/:documento_id
 router.delete(
   '/:id/documentos/:documento_id',
-  authorize('matricula.actualizar'),
-  logActivity('eliminar_documento', 'matricula'),
+  authorize('matriculacion.actualizar'),
+  logActivity('eliminar_documento', 'matriculacion'),
   MatriculaController.eliminarDocumento
 );
 
 // GET /api/matricula/:id (DEBE IR AL FINAL)
 router.get(
   '/:id',
-  authorize('matricula.leer'),
+  authorize('matriculacion.leer'),
   MatriculaController.obtenerPorId
 );
 

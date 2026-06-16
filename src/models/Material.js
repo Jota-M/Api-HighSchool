@@ -789,9 +789,190 @@ class ProgresoEstudiante {
     `, [matricula_id, tema_id, estado || null, porcentaje_avance || null, tiempo_dedicado || 0]);
     return result.rows[0];
   }
+  static async getResumenPorTema(tema_id, paralelo_id, periodo_academico_id) {
+    const result = await pool.query(`
+    SELECT
+      COUNT(DISTINCT m.id)                                              AS total_estudiantes,
+      COUNT(DISTINCT pe.matricula_id) FILTER (WHERE pe.estado = 'completado')  AS completados,
+      COUNT(DISTINCT pe.matricula_id) FILTER (WHERE pe.estado = 'en_progreso') AS en_progreso,
+      COUNT(DISTINCT pe.matricula_id) FILTER (WHERE pe.estado = 'revisando')   AS revisando
+    FROM matricula m
+    LEFT JOIN progreso_estudiante pe
+      ON pe.matricula_id = m.id AND pe.tema_id = $1
+    WHERE m.paralelo_id = $2
+      AND m.periodo_academico_id = $3
+      AND m.estado = 'activo'
+      AND m.deleted_at IS NULL
+  `, [tema_id, paralelo_id, periodo_academico_id]);
+
+    const row = result.rows[0];
+    const total = parseInt(row.total_estudiantes);
+    const completados = parseInt(row.completados);
+    const en_progreso = parseInt(row.en_progreso);
+    const revisando = parseInt(row.revisando);
+
+    return {
+      tema_id: parseInt(tema_id),
+      total_estudiantes: total,
+      completados,
+      en_progreso,
+      revisando,
+      no_iniciado: total - completados - en_progreso - revisando,
+    };
+  }
+}
+// =============================================
+// TEMA QUIZ
+// =============================================
+class TemaQuiz {
+
+  // Lista de preguntas con respuesta correcta (uso docente / generación)
+  static async findByTema(tema_id) {
+    const result = await pool.query(`
+      SELECT * FROM tema_quiz
+      WHERE tema_id = $1 AND activo = true
+      ORDER BY orden, id
+    `, [tema_id]);
+    return result.rows;
+  }
+
+  // Versión "segura" para el estudiante: sin respuesta_correcta ni explicación
+  static async findByTemaParaEstudiante(tema_id) {
+    const result = await pool.query(`
+      SELECT id, tema_id, pregunta, opciones, orden
+      FROM tema_quiz
+      WHERE tema_id = $1 AND activo = true
+      ORDER BY orden, id
+    `, [tema_id]);
+    return result.rows;
+  }
+
+  static async countByTema(tema_id) {
+    const result = await pool.query(`
+      SELECT COUNT(*) FROM tema_quiz WHERE tema_id = $1 AND activo = true
+    `, [tema_id]);
+    return parseInt(result.rows[0].count);
+  }
+
+  // Inserta un set de preguntas generadas por IA, reemplazando las anteriores
+  static async reemplazarQuiz(tema_id, preguntas) {
+    await pool.query('BEGIN');
+    try {
+      // Desactivar preguntas anteriores (en vez de borrar, para no romper intento_quiz históricos)
+      await pool.query(`
+        UPDATE tema_quiz SET activo = false, updated_at = CURRENT_TIMESTAMP
+        WHERE tema_id = $1 AND activo = true
+      `, [tema_id]);
+
+      const inserted = [];
+      for (let i = 0; i < preguntas.length; i++) {
+        const p = preguntas[i];
+        const result = await pool.query(`
+          INSERT INTO tema_quiz (tema_id, pregunta, opciones, respuesta_correcta, explicacion, orden, generado_por_ia)
+          VALUES ($1, $2, $3, $4, $5, $6, true)
+          RETURNING *
+        `, [
+          tema_id, p.pregunta, JSON.stringify(p.opciones),
+          p.respuesta_correcta, p.explicacion ?? null, i + 1
+        ]);
+        inserted.push(result.rows[0]);
+      }
+
+      await pool.query('COMMIT');
+      return inserted;
+    } catch (error) {
+      await pool.query('ROLLBACK');
+      throw error;
+    }
+  }
+
+  static async findById(id) {
+    const result = await pool.query(`SELECT * FROM tema_quiz WHERE id = $1`, [id]);
+    return result.rows[0];
+  }
+}
+
+// =============================================
+// INTENTO QUIZ
+// =============================================
+class IntentoQuiz {
+
+  static async create(data) {
+    const { tema_id, matricula_id, respuestas, total_preguntas, correctas, puntaje } = data;
+
+    const result = await pool.query(`
+      INSERT INTO intento_quiz (tema_id, matricula_id, respuestas, total_preguntas, correctas, puntaje)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING *
+    `, [
+      tema_id, matricula_id, JSON.stringify(respuestas),
+      total_preguntas, correctas, puntaje
+    ]);
+    return result.rows[0];
+  }
+
+  // Último intento de un estudiante para un tema
+  static async findUltimoIntento(tema_id, matricula_id) {
+    const result = await pool.query(`
+      SELECT * FROM intento_quiz
+      WHERE tema_id = $1 AND matricula_id = $2
+      ORDER BY created_at DESC
+      LIMIT 1
+    `, [tema_id, matricula_id]);
+    return result.rows[0];
+  }
+
+  // Historial de intentos de un estudiante para un tema
+  static async findByEstudiante(tema_id, matricula_id) {
+    const result = await pool.query(`
+      SELECT * FROM intento_quiz
+      WHERE tema_id = $1 AND matricula_id = $2
+      ORDER BY created_at DESC
+    `, [tema_id, matricula_id]);
+    return result.rows;
+  }
+
+  // Resumen agregado para el docente: cuántos estudiantes de un paralelo
+  // han hecho el quiz, y el promedio de su MEJOR intento.
+  static async getResumenPorTema(tema_id, paralelo_id, periodo_academico_id) {
+    const result = await pool.query(`
+      WITH mejores AS (
+        SELECT
+          iq.matricula_id,
+          MAX(iq.puntaje) AS mejor_puntaje
+        FROM intento_quiz iq
+        INNER JOIN matricula m ON iq.matricula_id = m.id
+        WHERE iq.tema_id = $1
+          AND m.paralelo_id = $2
+          AND m.periodo_academico_id = $3
+          AND m.estado = 'activo'
+          AND m.deleted_at IS NULL
+        GROUP BY iq.matricula_id
+      )
+      SELECT
+        (SELECT COUNT(*) FROM matricula
+          WHERE paralelo_id = $2 AND periodo_academico_id = $3
+            AND estado = 'activo' AND deleted_at IS NULL)  AS total_estudiantes,
+        COUNT(mejores.matricula_id)                         AS total_intentaron,
+        COALESCE(ROUND(AVG(mejores.mejor_puntaje), 1), 0)   AS promedio_puntaje,
+        COUNT(*) FILTER (WHERE mejores.mejor_puntaje >= 51) AS aprobados
+      FROM mejores
+    `, [tema_id, paralelo_id, periodo_academico_id]);
+
+    const row = result.rows[0];
+    return {
+      tema_id: parseInt(tema_id),
+      total_estudiantes: parseInt(row.total_estudiantes),
+      total_intentaron: parseInt(row.total_intentaron),
+      promedio_puntaje: parseFloat(row.promedio_puntaje),
+      aprobados: parseInt(row.aprobados),
+    };
+  }
 }
 
 export {
+  TemaQuiz,
+  IntentoQuiz,
   UnidadTematica,
   Tema,
   TipoMaterial,

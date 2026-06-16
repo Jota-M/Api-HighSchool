@@ -1,12 +1,12 @@
 // controllers/materialController.js
 import {
   UnidadTematica, Tema, TipoMaterial, MaterialAcademico,
-  AccesoMaterial, ComentarioMaterial, FavoritoMaterial, ProgresoEstudiante
+  AccesoMaterial, ComentarioMaterial, FavoritoMaterial, ProgresoEstudiante, TemaQuiz, IntentoQuiz
 } from '../models/Material.js';
 import ActividadLog from '../models/actividadLog.js';
 import RequestInfo from '../utils/requestInfo.js';
 import UploadFile from '../utils/uploadFile.js';
-
+import { generarContenidoTema, generarQuizTema } from '../utils/geminiClient.js';
 // =============================================
 // TIPOS DE MATERIAL (catálogo)
 // =============================================
@@ -34,10 +34,10 @@ class UnidadTematicaController {
       const { grado_materia_id, periodo_evaluacion_id, activo, page, limit } = req.query;
 
       const result = await UnidadTematica.findAll({
-        grado_materia_id:      grado_materia_id      ? parseInt(grado_materia_id)      : undefined,
+        grado_materia_id: grado_materia_id ? parseInt(grado_materia_id) : undefined,
         periodo_evaluacion_id: periodo_evaluacion_id ? parseInt(periodo_evaluacion_id) : undefined,
-        activo:                activo !== undefined   ? activo === 'true'              : undefined,
-        page:  parseInt(page)  || 1,
+        activo: activo !== undefined ? activo === 'true' : undefined,
+        page: parseInt(page) || 1,
         limit: parseInt(limit) || 50
       });
 
@@ -93,16 +93,16 @@ class UnidadTematicaController {
 
       const reqInfo = RequestInfo.extract(req);
       await ActividadLog.create({
-        usuario_id:     req.user.id,
-        accion:         'crear',
-        modulo:         'unidad_tematica',
+        usuario_id: req.user.id,
+        accion: 'crear',
+        modulo: 'unidad_tematica',
         tabla_afectada: 'unidad_tematica',
-        registro_id:    unidad.id,
-        datos_nuevos:   unidad,
-        ip_address:     reqInfo.ip,
-        user_agent:     reqInfo.userAgent,
-        resultado:      'exitoso',
-        mensaje:        `Unidad temática creada: ${unidad.titulo}`
+        registro_id: unidad.id,
+        datos_nuevos: unidad,
+        ip_address: reqInfo.ip,
+        user_agent: reqInfo.userAgent,
+        resultado: 'exitoso',
+        mensaje: `Unidad temática creada: ${unidad.titulo}`
       });
 
       res.status(201).json({
@@ -135,17 +135,17 @@ class UnidadTematicaController {
 
       const reqInfo = RequestInfo.extract(req);
       await ActividadLog.create({
-        usuario_id:       req.user.id,
-        accion:           'actualizar',
-        modulo:           'unidad_tematica',
-        tabla_afectada:   'unidad_tematica',
-        registro_id:      parseInt(id),
+        usuario_id: req.user.id,
+        accion: 'actualizar',
+        modulo: 'unidad_tematica',
+        tabla_afectada: 'unidad_tematica',
+        registro_id: parseInt(id),
         datos_anteriores: existente,
-        datos_nuevos:     unidad,
-        ip_address:       reqInfo.ip,
-        user_agent:       reqInfo.userAgent,
-        resultado:        'exitoso',
-        mensaje:          `Unidad temática actualizada: ${unidad.titulo}`
+        datos_nuevos: unidad,
+        ip_address: reqInfo.ip,
+        user_agent: reqInfo.userAgent,
+        resultado: 'exitoso',
+        mensaje: `Unidad temática actualizada: ${unidad.titulo}`
       });
 
       res.json({ success: true, message: 'Unidad temática actualizada', data: { unidad } });
@@ -168,16 +168,16 @@ class UnidadTematicaController {
 
       const reqInfo = RequestInfo.extract(req);
       await ActividadLog.create({
-        usuario_id:       req.user.id,
-        accion:           'eliminar',
-        modulo:           'unidad_tematica',
-        tabla_afectada:   'unidad_tematica',
-        registro_id:      parseInt(id),
+        usuario_id: req.user.id,
+        accion: 'eliminar',
+        modulo: 'unidad_tematica',
+        tabla_afectada: 'unidad_tematica',
+        registro_id: parseInt(id),
         datos_anteriores: existente,
-        ip_address:       reqInfo.ip,
-        user_agent:       reqInfo.userAgent,
-        resultado:        'exitoso',
-        mensaje:          `Unidad temática desactivada: ${existente.titulo}`
+        ip_address: reqInfo.ip,
+        user_agent: reqInfo.userAgent,
+        resultado: 'exitoso',
+        mensaje: `Unidad temática desactivada: ${existente.titulo}`
       });
 
       res.json({ success: true, message: 'Unidad temática eliminada exitosamente' });
@@ -199,9 +199,9 @@ class TemaController {
 
       const result = await Tema.findAll({
         unidad_tematica_id: unidad_tematica_id ? parseInt(unidad_tematica_id) : undefined,
-        activo:             activo !== undefined ? activo === 'true' : undefined,
+        activo: activo !== undefined ? activo === 'true' : undefined,
         nivel_dificultad,
-        page:  parseInt(page)  || 1,
+        page: parseInt(page) || 1,
         limit: parseInt(limit) || 50
       });
 
@@ -240,16 +240,16 @@ class TemaController {
 
       const reqInfo = RequestInfo.extract(req);
       await ActividadLog.create({
-        usuario_id:     req.user.id,
-        accion:         'crear',
-        modulo:         'tema',
+        usuario_id: req.user.id,
+        accion: 'crear',
+        modulo: 'tema',
         tabla_afectada: 'tema',
-        registro_id:    tema.id,
-        datos_nuevos:   tema,
-        ip_address:     reqInfo.ip,
-        user_agent:     reqInfo.userAgent,
-        resultado:      'exitoso',
-        mensaje:        `Tema creado: ${tema.titulo}`
+        registro_id: tema.id,
+        datos_nuevos: tema,
+        ip_address: reqInfo.ip,
+        user_agent: reqInfo.userAgent,
+        resultado: 'exitoso',
+        mensaje: `Tema creado: ${tema.titulo}`
       });
 
       res.status(201).json({
@@ -282,17 +282,17 @@ class TemaController {
 
       const reqInfo = RequestInfo.extract(req);
       await ActividadLog.create({
-        usuario_id:       req.user.id,
-        accion:           'actualizar',
-        modulo:           'tema',
-        tabla_afectada:   'tema',
-        registro_id:      parseInt(id),
+        usuario_id: req.user.id,
+        accion: 'actualizar',
+        modulo: 'tema',
+        tabla_afectada: 'tema',
+        registro_id: parseInt(id),
         datos_anteriores: existente,
-        datos_nuevos:     tema,
-        ip_address:       reqInfo.ip,
-        user_agent:       reqInfo.userAgent,
-        resultado:        'exitoso',
-        mensaje:          `Tema actualizado: ${tema.titulo}`
+        datos_nuevos: tema,
+        ip_address: reqInfo.ip,
+        user_agent: reqInfo.userAgent,
+        resultado: 'exitoso',
+        mensaje: `Tema actualizado: ${tema.titulo}`
       });
 
       res.json({ success: true, message: 'Tema actualizado exitosamente', data: { tema } });
@@ -315,21 +315,84 @@ class TemaController {
 
       const reqInfo = RequestInfo.extract(req);
       await ActividadLog.create({
-        usuario_id:       req.user.id,
-        accion:           'eliminar',
-        modulo:           'tema',
-        tabla_afectada:   'tema',
-        registro_id:      parseInt(id),
+        usuario_id: req.user.id,
+        accion: 'eliminar',
+        modulo: 'tema',
+        tabla_afectada: 'tema',
+        registro_id: parseInt(id),
         datos_anteriores: existente,
-        ip_address:       reqInfo.ip,
-        user_agent:       reqInfo.userAgent,
-        resultado:        'exitoso',
-        mensaje:          `Tema desactivado: ${existente.titulo}`
+        ip_address: reqInfo.ip,
+        user_agent: reqInfo.userAgent,
+        resultado: 'exitoso',
+        mensaje: `Tema desactivado: ${existente.titulo}`
       });
 
       res.json({ success: true, message: 'Tema eliminado exitosamente' });
     } catch (error) {
       res.status(500).json({ success: false, message: 'Error al eliminar tema: ' + error.message });
+    }
+  }
+  // POST /api/materiales/temas/:id/generar-contenido
+  static async generarContenido(req, res) {
+    try {
+      const { id } = req.params;
+      const forzar = req.query.forzar === 'true';
+
+      const tema = await Tema.findById(id);
+      if (!tema) {
+        return res.status(404).json({ success: false, message: 'Tema no encontrado' });
+      }
+
+      // Si ya tiene contenido y no se forzó la regeneración, devolverlo tal cual
+      if (tema.contenido && !forzar) {
+        return res.json({
+          success: true,
+          message: 'El tema ya tiene contenido generado',
+          data: { tema, generado: false }
+        });
+      }
+
+      const unidad = await UnidadTematica.findById(tema.unidad_tematica_id);
+      if (!unidad) {
+        return res.status(404).json({ success: false, message: 'Unidad temática no encontrada' });
+      }
+
+      const contenido = await generarContenidoTema({
+        materiaNombre: unidad.materia_nombre,
+        gradoNombre: unidad.grado_nombre,
+        unidadTitulo: unidad.titulo,
+        unidadDescripcion: unidad.descripcion,
+        unidadObjetivos: unidad.objetivos,
+        temaTitulo: tema.titulo,
+        temaDescripcion: tema.descripcion,
+        palabrasClave: tema.palabras_clave,
+        nivelDificultad: tema.nivel_dificultad,
+      });
+
+      const temaActualizado = await Tema.update(id, { contenido });
+
+      const reqInfo = RequestInfo.extract(req);
+      await ActividadLog.create({
+        usuario_id: req.user.id,
+        accion: 'generar_contenido',
+        modulo: 'tema',
+        tabla_afectada: 'tema',
+        registro_id: parseInt(id),
+        datos_nuevos: { titulo: temaActualizado.titulo },
+        ip_address: reqInfo.ip,
+        user_agent: reqInfo.userAgent,
+        resultado: 'exitoso',
+        mensaje: `Contenido generado con IA para el tema: ${temaActualizado.titulo}`
+      });
+
+      res.json({
+        success: true,
+        message: 'Contenido generado exitosamente',
+        data: { tema: temaActualizado, generado: true }
+      });
+    } catch (error) {
+      console.error('Error al generar contenido con IA:', error);
+      res.status(500).json({ success: false, message: 'Error al generar contenido: ' + error.message });
     }
   }
 }
@@ -348,14 +411,14 @@ class MaterialAcademicoController {
       } = req.query;
 
       const result = await MaterialAcademico.findAll({
-        page:  parseInt(page)  || 1,
+        page: parseInt(page) || 1,
         limit: parseInt(limit) || 10,
         asignacion_docente_id: asignacion_docente_id ? parseInt(asignacion_docente_id) : undefined,
-        tipo_material_id:      tipo_material_id      ? parseInt(tipo_material_id)      : undefined,
-        tema_id:               tema_id               ? parseInt(tema_id)               : undefined,
+        tipo_material_id: tipo_material_id ? parseInt(tipo_material_id) : undefined,
+        tema_id: tema_id ? parseInt(tema_id) : undefined,
         visible_para_estudiantes: visible_para_estudiantes !== undefined
           ? visible_para_estudiantes === 'true' : undefined,
-        es_destacado:  es_destacado  !== undefined  ? es_destacado  === 'true' : undefined,
+        es_destacado: es_destacado !== undefined ? es_destacado === 'true' : undefined,
         solo_publicados: solo_publicados === 'true'
       });
 
@@ -380,7 +443,7 @@ class MaterialAcademicoController {
       const materiales = await MaterialAcademico.buscar(
         q.trim(),
         asignacion_docente_id ? parseInt(asignacion_docente_id) : null,
-        tipo_material_id      ? parseInt(tipo_material_id)      : null,
+        tipo_material_id ? parseInt(tipo_material_id) : null,
         solo_visibles !== 'false'
       );
 
@@ -483,15 +546,15 @@ class MaterialAcademicoController {
       }
 
       if (!esEnlace && !req.file) {
-  console.log('No llegó archivo');
-  console.log(req.body);
-  console.log(req.file);
+        console.log('No llegó archivo');
+        console.log(req.body);
+        console.log(req.file);
 
-  return res.status(400).json({
-    success: false,
-    message: 'Debes subir un archivo o marcar es_enlace_externo = true'
-  });
-}
+        return res.status(400).json({
+          success: false,
+          message: 'Debes subir un archivo o marcar es_enlace_externo = true'
+        });
+      }
 
       let url_archivo = null;
       let nombre_archivo = null;
@@ -522,29 +585,29 @@ class MaterialAcademicoController {
           resourceType
         );
 
-        url_archivo    = uploadResult.url;
+        url_archivo = uploadResult.url;
         nombre_archivo = req.file.originalname;
-        tamano_bytes   = req.file.size;
-        tipo_mime      = req.file.mimetype;
+        tamano_bytes = req.file.size;
+        tipo_mime = req.file.mimetype;
       }
 
       const material = await MaterialAcademico.create({
         asignacion_docente_id: parseInt(asignacion_docente_id),
-        tipo_material_id:      parseInt(tipo_material_id),
+        tipo_material_id: parseInt(tipo_material_id),
         titulo,
         descripcion: descripcion || null,
         es_enlace_externo: esEnlace,
         url_archivo,
-        url_externa:   esEnlace ? url_externa : null,
+        url_externa: esEnlace ? url_externa : null,
         nombre_archivo,
         tamano_bytes,
         tipo_mime,
-        subido_por:    req.user.id,
+        subido_por: req.user.id,
         visible_para_estudiantes: visible_para_estudiantes !== 'false',
-        fecha_publicacion:    fecha_publicacion    || null,
+        fecha_publicacion: fecha_publicacion || null,
         fecha_despublicacion: fecha_despublicacion || null,
         requiere_descarga: requiere_descarga === 'true' || requiere_descarga === true,
-        es_destacado:      es_destacado      === 'true' || es_destacado      === true,
+        es_destacado: es_destacado === 'true' || es_destacado === true,
       });
 
       // Vincular temas si se enviaron
@@ -557,16 +620,16 @@ class MaterialAcademicoController {
 
       const reqInfo = RequestInfo.extract(req);
       await ActividadLog.create({
-        usuario_id:     req.user.id,
-        accion:         'crear',
-        modulo:         'material',
+        usuario_id: req.user.id,
+        accion: 'crear',
+        modulo: 'material',
         tabla_afectada: 'material_academico',
-        registro_id:    material.id,
-        datos_nuevos:   { titulo: material.titulo, codigo: material.codigo_material },
-        ip_address:     reqInfo.ip,
-        user_agent:     reqInfo.userAgent,
-        resultado:      'exitoso',
-        mensaje:        `Material creado: ${material.codigo_material} - ${material.titulo}`
+        registro_id: material.id,
+        datos_nuevos: { titulo: material.titulo, codigo: material.codigo_material },
+        ip_address: reqInfo.ip,
+        user_agent: reqInfo.userAgent,
+        resultado: 'exitoso',
+        mensaje: `Material creado: ${material.codigo_material} - ${material.titulo}`
       });
 
       res.status(201).json({
@@ -619,27 +682,27 @@ class MaterialAcademicoController {
           resourceType
         );
 
-        updateData.url_archivo    = uploadResult.url;
+        updateData.url_archivo = uploadResult.url;
         updateData.nombre_archivo = req.file.originalname;
-        updateData.tamano_bytes   = req.file.size;
-        updateData.tipo_mime      = req.file.mimetype;
+        updateData.tamano_bytes = req.file.size;
+        updateData.tipo_mime = req.file.mimetype;
       }
 
       const material = await MaterialAcademico.update(id, updateData);
 
       const reqInfo = RequestInfo.extract(req);
       await ActividadLog.create({
-        usuario_id:       req.user.id,
-        accion:           'actualizar',
-        modulo:           'material',
-        tabla_afectada:   'material_academico',
-        registro_id:      parseInt(id),
+        usuario_id: req.user.id,
+        accion: 'actualizar',
+        modulo: 'material',
+        tabla_afectada: 'material_academico',
+        registro_id: parseInt(id),
         datos_anteriores: { titulo: existente.titulo },
-        datos_nuevos:     { titulo: material.titulo },
-        ip_address:       reqInfo.ip,
-        user_agent:       reqInfo.userAgent,
-        resultado:        'exitoso',
-        mensaje:          `Material actualizado: ${material.titulo}`
+        datos_nuevos: { titulo: material.titulo },
+        ip_address: reqInfo.ip,
+        user_agent: reqInfo.userAgent,
+        resultado: 'exitoso',
+        mensaje: `Material actualizado: ${material.titulo}`
       });
 
       res.json({ success: true, message: 'Material actualizado exitosamente', data: { material } });
@@ -673,16 +736,16 @@ class MaterialAcademicoController {
 
       const reqInfo = RequestInfo.extract(req);
       await ActividadLog.create({
-        usuario_id:       req.user.id,
-        accion:           'eliminar',
-        modulo:           'material',
-        tabla_afectada:   'material_academico',
-        registro_id:      parseInt(id),
+        usuario_id: req.user.id,
+        accion: 'eliminar',
+        modulo: 'material',
+        tabla_afectada: 'material_academico',
+        registro_id: parseInt(id),
         datos_anteriores: { titulo: existente.titulo, codigo: existente.codigo_material },
-        ip_address:       reqInfo.ip,
-        user_agent:       reqInfo.userAgent,
-        resultado:        'exitoso',
-        mensaje:          `Material eliminado: ${existente.codigo_material} - ${existente.titulo}`
+        ip_address: reqInfo.ip,
+        user_agent: reqInfo.userAgent,
+        resultado: 'exitoso',
+        mensaje: `Material eliminado: ${existente.codigo_material} - ${existente.titulo}`
       });
 
       res.json({ success: true, message: 'Material eliminado exitosamente' });
@@ -709,16 +772,16 @@ class MaterialAcademicoController {
 
       const reqInfo = RequestInfo.extract(req);
       await ActividadLog.create({
-        usuario_id:     req.user.id,
-        accion:         'publicar',
-        modulo:         'material',
+        usuario_id: req.user.id,
+        accion: 'publicar',
+        modulo: 'material',
         tabla_afectada: 'material_academico',
-        registro_id:    parseInt(id),
-        datos_nuevos:   { fecha_publicacion: material.fecha_publicacion },
-        ip_address:     reqInfo.ip,
-        user_agent:     reqInfo.userAgent,
-        resultado:      'exitoso',
-        mensaje:        `Material publicado: ${material.titulo}`
+        registro_id: parseInt(id),
+        datos_nuevos: { fecha_publicacion: material.fecha_publicacion },
+        ip_address: reqInfo.ip,
+        user_agent: reqInfo.userAgent,
+        resultado: 'exitoso',
+        mensaje: `Material publicado: ${material.titulo}`
       });
 
       res.json({ success: true, message: 'Material publicado exitosamente', data: { material } });
@@ -794,14 +857,14 @@ class AccesoMaterialController {
       const reqInfo = RequestInfo.extract(req);
       const acceso = await AccesoMaterial.registrar({
         material_academico_id: parseInt(id),
-        matricula_id:          matricula_id ? parseInt(matricula_id) : null,
-        usuario_id:            req.user.id,
+        matricula_id: matricula_id ? parseInt(matricula_id) : null,
+        usuario_id: req.user.id,
         tipo_accion,
-        ip_address:            reqInfo.ip,
-        user_agent:            reqInfo.userAgent,
-        dispositivo:           dispositivo || 'web',
-        duracion_segundos:     duracion_segundos ? parseInt(duracion_segundos) : null,
-        completado:            completado ?? false,
+        ip_address: reqInfo.ip,
+        user_agent: reqInfo.userAgent,
+        dispositivo: dispositivo || 'web',
+        duracion_segundos: duracion_segundos ? parseInt(duracion_segundos) : null,
+        completado: completado ?? false,
       });
 
       res.status(201).json({ success: true, data: { acceso } });
@@ -852,10 +915,10 @@ class ComentarioMaterialController {
 
       const comentario = await ComentarioMaterial.create({
         material_academico_id: parseInt(id),
-        usuario_id:            req.user.id,
-        comentario_padre_id:   comentario_padre_id ? parseInt(comentario_padre_id) : null,
-        contenido:             contenido.trim(),
-        es_duda:               es_duda ?? false,
+        usuario_id: req.user.id,
+        comentario_padre_id: comentario_padre_id ? parseInt(comentario_padre_id) : null,
+        contenido: contenido.trim(),
+        es_duda: es_duda ?? false,
       });
 
       res.status(201).json({
@@ -1044,9 +1107,253 @@ class ProgresoEstudianteController {
       res.status(500).json({ success: false, message: 'Error al actualizar progreso: ' + error.message });
     }
   }
+  static async getResumenPorTema(req, res) {
+    try {
+      const { id } = req.params;
+      const { paralelo_id, periodo_academico_id } = req.query;
+
+      if (!paralelo_id || !periodo_academico_id) {
+        return res.status(400).json({
+          success: false,
+          message: 'paralelo_id y periodo_academico_id son requeridos'
+        });
+      }
+
+      const resumen = await ProgresoEstudiante.getResumenPorTema(
+        parseInt(id), parseInt(paralelo_id), parseInt(periodo_academico_id)
+      );
+
+      res.json({ success: true, data: { resumen } });
+    } catch (error) {
+      res.status(500).json({ success: false, message: 'Error al obtener resumen de progreso: ' + error.message });
+    }
+  }
+}
+class TemaQuizController {
+
+  /**
+   * POST /api/materiales/temas/:id/generar-quiz
+   * Genera (o regenera) el quiz de un tema con IA, basado en tema.contenido.
+   * Body: { cantidad_preguntas?: number } (default 5)
+   */
+  static async generarQuiz(req, res) {
+    try {
+      const { id } = req.params;
+      const cantidad = parseInt(req.body?.cantidad_preguntas) || 5;
+
+      if (cantidad < 1 || cantidad > 20) {
+        return res.status(400).json({
+          success: false,
+          message: 'cantidad_preguntas debe estar entre 1 y 20'
+        });
+      }
+
+      const tema = await Tema.findById(id);
+      if (!tema) {
+        return res.status(404).json({ success: false, message: 'Tema no encontrado' });
+      }
+
+      if (!tema.contenido || tema.contenido.trim().length < 50) {
+        return res.status(400).json({
+          success: false,
+          message: 'El tema necesita contenido generado antes de poder crear un quiz'
+        });
+      }
+
+      const preguntasGeneradas = await generarQuizTema({
+        temaTitulo: tema.titulo,
+        contenido: tema.contenido,
+        nivelDificultad: tema.nivel_dificultad,
+      }, cantidad);
+
+      const preguntas = await TemaQuiz.reemplazarQuiz(id, preguntasGeneradas);
+
+      const reqInfo = RequestInfo.extract(req);
+      await ActividadLog.create({
+        usuario_id: req.user.id,
+        accion: 'generar_quiz',
+        modulo: 'tema',
+        tabla_afectada: 'tema_quiz',
+        registro_id: parseInt(id),
+        datos_nuevos: { total_preguntas: preguntas.length },
+        ip_address: reqInfo.ip,
+        user_agent: reqInfo.userAgent,
+        resultado: 'exitoso',
+        mensaje: `Quiz generado con IA para el tema: ${tema.titulo} (${preguntas.length} preguntas)`
+      });
+
+      res.json({
+        success: true,
+        message: 'Quiz generado exitosamente',
+        data: { preguntas, total: preguntas.length }
+      });
+    } catch (error) {
+      console.error('Error al generar quiz con IA:', error);
+      const httpStatus = error?.status === 503 ? 503 : 500;
+      const mensaje = error?.status === 503
+        ? 'El servicio de IA está temporalmente saturado. Intentá de nuevo en unos segundos.'
+        : 'Error al generar quiz: ' + error.message;
+      res.status(httpStatus).json({ success: false, message: mensaje });
+    }
+  }
+
+  /**
+   * GET /api/materiales/temas/:id/quiz
+   * Lista las preguntas del quiz SIN la respuesta correcta ni explicación
+   * (para que el estudiante responda).
+   */
+  static async listarParaEstudiante(req, res) {
+    try {
+      const { id } = req.params;
+
+      const preguntas = await TemaQuiz.findByTemaParaEstudiante(id);
+
+      res.json({
+        success: true,
+        data: { preguntas, total: preguntas.length }
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, message: 'Error al obtener quiz: ' + error.message });
+    }
+  }
+
+  /**
+   * GET /api/materiales/temas/:id/quiz/completo
+   * Lista las preguntas CON respuesta correcta y explicación (uso docente).
+   */
+  static async listarCompleto(req, res) {
+    try {
+      const { id } = req.params;
+
+      const preguntas = await TemaQuiz.findByTema(id);
+
+      res.json({
+        success: true,
+        data: { preguntas, total: preguntas.length }
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, message: 'Error al obtener quiz: ' + error.message });
+    }
+  }
+
+  /**
+   * POST /api/materiales/temas/:id/quiz/responder
+   * El estudiante envía sus respuestas, el backend califica y guarda el intento.
+   * Body: {
+   *   matricula_id: number,
+   *   respuestas: [{ quiz_id: number, respuesta_dada: number }]
+   * }
+   */
+  static async responder(req, res) {
+    try {
+      const { id } = req.params;
+      const { matricula_id, respuestas } = req.body;
+
+      if (!matricula_id || !Array.isArray(respuestas) || respuestas.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'matricula_id y respuestas (array) son requeridos'
+        });
+      }
+
+      const preguntas = await TemaQuiz.findByTema(id);
+      if (preguntas.length === 0) {
+        return res.status(404).json({ success: false, message: 'Este tema no tiene quiz disponible' });
+      }
+
+      // Calificar
+      const preguntasPorId = new Map(preguntas.map(p => [p.id, p]));
+      let correctas = 0;
+
+      const resultados = respuestas.map(r => {
+        const pregunta = preguntasPorId.get(r.quiz_id);
+        if (!pregunta) {
+          return { quiz_id: r.quiz_id, respuesta_dada: r.respuesta_dada, es_correcta: false, valida: false };
+        }
+        const esCorrecta = pregunta.respuesta_correcta === r.respuesta_dada;
+        if (esCorrecta) correctas++;
+        return {
+          quiz_id: r.quiz_id,
+          respuesta_dada: r.respuesta_dada,
+          es_correcta: esCorrecta,
+          respuesta_correcta: pregunta.respuesta_correcta,
+          explicacion: pregunta.explicacion,
+        };
+      });
+
+      const total = preguntas.length;
+      const puntaje = Math.round((correctas / total) * 1000) / 10; // 1 decimal
+
+      const intento = await IntentoQuiz.create({
+        tema_id: parseInt(id),
+        matricula_id: parseInt(matricula_id),
+        respuestas: resultados,
+        total_preguntas: total,
+        correctas,
+        puntaje,
+      });
+
+      res.status(201).json({
+        success: true,
+        message: 'Quiz calificado exitosamente',
+        data: { intento, resultados, correctas, total, puntaje }
+      });
+    } catch (error) {
+      console.error('Error al calificar quiz:', error);
+      res.status(500).json({ success: false, message: 'Error al calificar quiz: ' + error.message });
+    }
+  }
+
+  /**
+   * GET /api/materiales/temas/:id/quiz/mi-resultado?matricula_id=X
+   * Devuelve el último intento del estudiante para este tema (o null).
+   */
+  static async miResultado(req, res) {
+    try {
+      const { id } = req.params;
+      const { matricula_id } = req.query;
+
+      if (!matricula_id) {
+        return res.status(400).json({ success: false, message: 'matricula_id es requerido' });
+      }
+
+      const intento = await IntentoQuiz.findUltimoIntento(id, parseInt(matricula_id));
+
+      res.json({ success: true, data: { intento: intento || null } });
+    } catch (error) {
+      res.status(500).json({ success: false, message: 'Error al obtener resultado: ' + error.message });
+    }
+  }
+
+  /**
+   * GET /api/materiales/temas/:id/quiz/resumen?paralelo_id=X&periodo_academico_id=Y
+   * Resumen agregado para el docente.
+   */
+  static async getResumen(req, res) {
+    try {
+      const { id } = req.params;
+      const { paralelo_id, periodo_academico_id } = req.query;
+
+      if (!paralelo_id || !periodo_academico_id) {
+        return res.status(400).json({
+          success: false,
+          message: 'paralelo_id y periodo_academico_id son requeridos'
+        });
+      }
+
+      const resumen = await IntentoQuiz.getResumenPorTema(
+        parseInt(id), parseInt(paralelo_id), parseInt(periodo_academico_id)
+      );
+
+      res.json({ success: true, data: { resumen } });
+    } catch (error) {
+      res.status(500).json({ success: false, message: 'Error al obtener resumen del quiz: ' + error.message });
+    }
+  }
 }
 
 export {
+  TemaQuizController,
   TipoMaterialController,
   UnidadTematicaController,
   TemaController,

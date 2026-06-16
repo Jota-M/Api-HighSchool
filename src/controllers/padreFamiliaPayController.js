@@ -795,6 +795,199 @@ static async verificarEstadoQRMultiple(req, res) {
     return res.status(500).json({ success: false, message: 'Error al verificar el estado: ' + error.message });
   }
 }
+// ══════════════════════════════════════════════════════════════════════
+// 8. POST /padre-p/mensualidades/generar-qr-familiar
+// QR único para mensualidades de MÚLTIPLES hijos del mismo padre
+// ══════════════════════════════════════════════════════════════════════
+static async generarQRFamiliar(req, res) {
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const { mensualidad_ids } = req.body;
+    // mensualidad_ids: [{ estudiante_id, mensualidad_id }, ...]
+
+    if (!mensualidad_ids || !Array.isArray(mensualidad_ids) || mensualidad_ids.length < 2) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Debés seleccionar al menos 2 mensualidades de distintos hijos',
+      });
+    }
+
+    // Obtener padre_familia_id
+    const resultPadre = await client.query(
+      `SELECT id FROM padre_familia WHERE usuario_id = $1 AND deleted_at IS NULL`,
+      [req.user.id]
+    );
+
+    if (resultPadre.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Perfil de padre no encontrado' });
+    }
+
+    const padreFamiliaId = resultPadre.rows[0].id;
+    const ids = mensualidad_ids.map(item =>
+      typeof item === 'object' ? item.mensualidad_id : item
+    );
+
+    // Verificar que TODAS las mensualidades pertenecen a hijos de este padre
+    const resultMensualidades = await client.query(
+      `SELECT
+         m.id, m.estado, m.monto_final, m.mes_correspondiente,
+         m.fecha_vencimiento, m.matricula_id,
+         e.id AS estudiante_id, e.nombres, e.apellidos,
+         EXISTS (
+           SELECT 1 FROM pago_mensualidad pm
+           WHERE pm.mensualidad_id = m.id
+             AND pm.qr_estado = 'generado'
+             AND pm.qr_expiracion > CURRENT_TIMESTAMP
+             AND pm.anulado = false
+         ) AS tiene_qr_activo
+       FROM mensualidad m
+       INNER JOIN matricula mat       ON m.matricula_id      = mat.id
+       INNER JOIN estudiante e        ON mat.estudiante_id   = e.id
+       INNER JOIN estudiante_tutor et ON e.id                = et.estudiante_id
+       WHERE m.id = ANY($1)
+         AND et.padre_familia_id = $2
+         AND mat.estado = 'activo'
+         AND mat.deleted_at IS NULL`,
+      [ids, padreFamiliaId]
+    );
+
+    if (resultMensualidades.rows.length !== ids.length) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({
+        success: false,
+        message: 'Algunas mensualidades no existen o no pertenecen a tus hijos',
+      });
+    }
+
+    const mensualidades = resultMensualidades.rows;
+
+    // Validar estados
+    const noValidas = mensualidades.filter(m => !['pendiente', 'vencido'].includes(m.estado));
+    if (noValidas.length > 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: `Mensualidades no pagables: ${noValidas.map(m => `${m.nombres} - ${m.mes_correspondiente}`).join(', ')}`,
+      });
+    }
+
+    const conQRActivo = mensualidades.filter(m => m.tiene_qr_activo);
+    if (conQRActivo.length > 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: `Ya tienen QR activo: ${conQRActivo.map(m => `${m.nombres} - ${m.mes_correspondiente}`).join(', ')}. Cancelalos primero.`,
+      });
+    }
+
+    // Calcular monto total y alias familiar
+    const montoTotal = mensualidades.reduce((acc, m) => acc + parseFloat(m.monto_final), 0);
+    const alias = `familiar-${padreFamiliaId}-${Date.now()}`;
+    const glosa = truncarGlosa(`Pago familiar ${mensualidades.length} meses`);
+
+    const fechaMasProxima = mensualidades.reduce((min, m) => {
+      const fecha = new Date(m.fecha_vencimiento);
+      return fecha < min ? fecha : min;
+    }, new Date(mensualidades[0].fecha_vencimiento));
+
+    const qrExpiracion = calcularExpiracionQR(fechaMasProxima);
+    const fechaVencimientoQR = formatearFechaSIP(qrExpiracion);
+    const callbackUrl = `${CALLBACK_URL}/api/sip/callback`;
+
+    // Generar QR en SIP — un solo QR con el monto total de todos los hijos
+    let qrData;
+    try {
+      qrData = await generarQR({
+        alias,
+        monto: montoTotal,
+        moneda: 'BOB',
+        glosa,
+        fechaVencimiento: fechaVencimientoQR,
+        callbackUrl,
+      });
+    } catch (sipError) {
+      await client.query('ROLLBACK');
+      console.error('[GenerarQRFamiliar] Error de SIP:', sipError.message);
+      return res.status(502).json({
+        success: false,
+        message: 'No se pudo generar el QR. Intentá más tarde.',
+        detalle: sipError.message,
+      });
+    }
+
+    // Insertar un pago_mensualidad por cada mensualidad — mismo alias
+    // El callback los encontrará todos por alias y los marcará pagados
+    const nombresHijos = [...new Set(mensualidades.map(m => m.nombres.split(' ')[0]))].join(' y ');
+    
+    for (const mensualidad of mensualidades) {
+      const codigoPago = `QR-FAM-${Date.now()}-${mensualidad.id}`;
+      await client.query(
+        `INSERT INTO pago_mensualidad (
+           codigo_pago, mensualidad_id, monto_pagado, metodo_pago,
+           registrado_por, qr_data, qr_image_url, qr_expiracion,
+           transaccion_id, qr_estado, observaciones
+         ) VALUES ($1, $2, $3, 'qr', $4, $5, $6, $7, $8, 'generado', $9)`,
+        [
+          codigoPago,
+          mensualidad.id,
+          parseFloat(mensualidad.monto_final),
+          req.user.id,
+          alias,
+          qrData.imagenQr,
+          qrExpiracion,
+          qrData.idQr,
+          `QR familiar: ${mensualidad.nombres} ${mensualidad.mes_correspondiente} | IdQr SIP: ${qrData.idQr}`,
+        ]
+      );
+    }
+
+    await client.query('COMMIT');
+
+    // Agrupar resumen por hijo para la respuesta
+    const resumenPorHijo = mensualidades.reduce((acc, m) => {
+      const key = m.estudiante_id;
+      if (!acc[key]) {
+        acc[key] = { nombres: m.nombres, apellidos: m.apellidos, meses: [], monto: 0 };
+      }
+      acc[key].meses.push(m.mes_correspondiente);
+      acc[key].monto += parseFloat(m.monto_final);
+      return acc;
+    }, {});
+
+    console.log(
+      `[GenerarQRFamiliar] ✅ QR familiar generado. ` +
+      `Hijos: ${nombresHijos} | Alias: ${alias} | Monto: Bs ${montoTotal.toFixed(2)}`
+    );
+
+    return res.status(201).json({
+      success: true,
+      message: `QR familiar generado para ${mensualidades.length} mensualidades`,
+      data: {
+        imagenQr:       qrData.imagenQr,
+        alias,
+        monto_total:    montoTotal,
+        cantidad_meses: mensualidades.length,
+        hijos:          Object.values(resumenPorHijo),
+        bancoDestino:   qrData.bancoDestino,
+        cuentaDestino:  qrData.cuentaDestino,
+        qr_expiracion:  qrExpiracion,
+        mensualidad_ids: ids,
+      },
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error al generar QR familiar:', error);
+    return res.status(500).json({ success: false, message: 'Error al generar el QR: ' + error.message });
+  } finally {
+    client.release();
+  }
+}
 }
 
 export default PadreFamiliaPayController;

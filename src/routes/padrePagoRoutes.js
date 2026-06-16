@@ -65,5 +65,10 @@ router.get(
   '/mensualidades/estado-qr-multiple',
   PadreFamiliaPayController.verificarEstadoQRMultiple
 );
+// POST /api/padre/mensualidades/generar-qr-familiar
+router.post(
+  '/mensualidades/generar-qr-familiar',
+  PadreFamiliaPayController.generarQRFamiliar
+);
  
 export default router;

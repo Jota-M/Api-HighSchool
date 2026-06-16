@@ -60,8 +60,8 @@ import permisosRoutes from './routes/permisosRoutes.js';
 import prediccionRoutes from './routes/prediccionRoutes.js';
 import backupRoutes from './routes/backupRoutes.js';
 import whatsappRoutes from './routes/whatsappRoutes.js';
-import sipCallbackRoutes  from './routes/sipCallbackRoutes.js';
-import padrePagoRoutes    from './routes/padrePagoRoutes.js';
+import sipCallbackRoutes from './routes/sipCallbackRoutes.js';
+import padrePagoRoutes from './routes/padrePagoRoutes.js';
 
 // Modelo para limpieza de sesiones
 import Sesion from './models/Sesion.js';
@@ -225,7 +225,6 @@ app.use('/seguimiento', seguimientoRoutes);
 app.use('/docentes', docentedRoutes);
 // app.use('/reportes/notas', reportesNotasRoutes);
 app.use('/notificaciones', notificacionRoutes);
-app.use('/', permisosRoutes);
 app.use('/padre', padreRoutes);
 app.use('/prediccion', prediccionRoutes);
 app.use('/backups', backupRoutes);
@@ -240,7 +239,8 @@ app.use('/padre-p', padrePagoRoutes);
 // ------------------------------
 app.use('/preinscripcion', preinscripcionRoutes);
 app.use('/cupos', cupoPreinscripcionRoutes);
-
+// ------------------------------
+app.use('/', permisosRoutes);
 
 // ------------------------------
 // Manejo de errores / fallback 404

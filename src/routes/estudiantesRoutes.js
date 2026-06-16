@@ -10,13 +10,13 @@ router.use(authenticate);
 // GET /api/estudiante
 router.get(
   '/',
-  authorize('estudiante.leer'),
+  authorize('estudiantes.leer'),
   EstudianteController.listar
 );
 // POST /api/estudiante (con foto opcional)
 router.post(
   '/',
-  authorize('estudiante.crear'),
+  authorize('estudiantes.crear'),
   upload.single('foto'),
   handleMulterError,
   logActivity('crear', 'estudiante'),
@@ -26,7 +26,7 @@ router.post(
 // PUT /api/estudiante/:id (con foto opcional)
 router.put(
   '/:id',
-  authorize('estudiante.actualizar'),
+  authorize('estudiantes.actualizar'),
   upload.single('foto'),
   handleMulterError,
   logActivity('actualizar', 'estudiante'),
@@ -36,7 +36,7 @@ router.put(
 // DELETE /api/estudiante/:id
 router.delete(
   '/:id',
-  authorize('estudiante.eliminar'),
+  authorize('estudiantes.eliminar'),
   logActivity('eliminar', 'estudiante'),
   EstudianteController.eliminar
 );
@@ -44,7 +44,7 @@ router.delete(
 // DELETE /api/estudiante/:id/foto - Solo eliminar foto
 router.delete(
   '/:id/foto',
-  authorize('estudiante.actualizar'),
+  authorize('estudiantes.actualizar'),
   logActivity('eliminar_foto', 'estudiante'),
   EstudianteController.eliminarFoto
 );
@@ -54,14 +54,14 @@ router.delete(
 // GET /api/estudiante/:id/tutores
 router.get(
   '/:id/tutores',
-  authorize('estudiante.leer'),
+  authorize('estudiantes.leer'),
   EstudianteController.obtenerTutores
 );
 
 // POST /api/estudiante/:id/tutores
 router.post(
   '/:id/tutores',
-  authorize('estudiante.actualizar'),
+  authorize('estudiantes.actualizar'),
   logActivity('asignar_tutor', 'estudiante'),
   EstudianteController.asignarTutor
 );
@@ -69,7 +69,7 @@ router.post(
 // PUT /api/estudiante/:id/tutores/:relacion_id
 router.put(
   '/:id/tutores/:relacion_id',
-  authorize('estudiante.actualizar'),
+  authorize('estudiantes.actualizar'),
   logActivity('actualizar_tutor', 'estudiante'),
   EstudianteController.actualizarTutor
 );
@@ -77,19 +77,19 @@ router.put(
 // DELETE /api/estudiante/:id/tutores/:relacion_id
 router.delete(
   '/:id/tutores/:relacion_id',
-  authorize('estudiante.actualizar'),
+  authorize('estudiantes.actualizar'),
   logActivity('remover_tutor', 'estudiante'),
   EstudianteController.removerTutor
 );
 router.get(
   '/estadisticas',
-  authorize('estudiante.leer'),
+  authorize('estudiantes.leer'),
   EstudianteController.obtenerEstadisticas
 );
 // GET /api/estudiante/:id
 router.get(
   '/:id',
-  authorize('estudiante.leer'),
+  authorize('estudiantes.leer'),
   EstudianteController.obtenerPorId
 );
 

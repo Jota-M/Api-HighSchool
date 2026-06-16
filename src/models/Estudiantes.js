@@ -397,28 +397,35 @@ class Estudiante {
   // =============================================
   static async getTutores(estudiante_id) {
   const query = `
-    SELECT 
-      et.*,
-      pf.*,
-      et.es_tutor_principal, 
-      et.vive_con_estudiante,
-      et.autorizado_recoger, 
-      et.puede_autorizar_salidas,
-      et.recibe_notificaciones, 
-      et.prioridad_contacto,
-      
-      -- 🔥 Usuario del tutor
-      u.username,
-      u.email as user_email
-      
-    FROM estudiante_tutor et
-    INNER JOIN padre_familia pf ON et.padre_familia_id = pf.id
-    
-    -- 🔥 JOIN para obtener el usuario del tutor
-    LEFT JOIN usuarios u ON pf.usuario_id = u.id
-    
-    WHERE et.estudiante_id = $1 AND pf.deleted_at IS NULL
-    ORDER BY et.prioridad_contacto, pf.apellido_paterno
+     SELECT
+    et.id              AS relacion_id,
+    et.es_tutor_principal,
+    et.vive_con_estudiante,
+    et.autorizado_recoger,
+    et.puede_autorizar_salidas,
+    et.recibe_notificaciones,
+    et.prioridad_contacto,
+    et.observaciones   AS relacion_observaciones,
+    pf.id,
+    pf.nombres,
+    pf.apellido_paterno,
+    pf.apellido_materno,
+    pf.ci,
+    pf.telefono,
+    pf.celular,
+    pf.email,
+    pf.parentesco,
+    pf.ocupacion,
+    pf.direccion,
+    pf.fecha_nacimiento,
+    pf.estado_civil,
+    u.username,
+    u.email AS user_email
+  FROM estudiante_tutor et
+  INNER JOIN padre_familia pf ON et.padre_familia_id = pf.id
+  LEFT JOIN usuarios u ON pf.usuario_id = u.id
+  WHERE et.estudiante_id = $1 AND pf.deleted_at IS NULL
+  ORDER BY et.prioridad_contacto, pf.apellido_paterno
   `;
 
   const result = await pool.query(query, [estudiante_id]);
@@ -623,6 +630,12 @@ class EstudianteTutor {
     const result = await pool.query(query, [estudiante_id, padre_familia_id]);
     return result.rows[0];
   }
+
+  static async findById(id) {
+  const query = 'SELECT * FROM estudiante_tutor WHERE id = $1';
+  const result = await pool.query(query, [id]);
+  return result.rows[0];
+}
 
   static async update(id, data) {
     const {

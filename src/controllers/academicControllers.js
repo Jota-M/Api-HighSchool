@@ -930,7 +930,7 @@ class ParaleloController {
           n.nombre as nivel_nombre,
           t.nombre as turno_nombre,
           t.codigo as turno_codigo,
-          (SELECT COUNT(*) FROM matricula m WHERE m.paralelo_id = p.id AND m.deleted_at IS NULL) as total_estudiantes
+          (SELECT COUNT(*)::INTEGER FROM matricula m WHERE m.paralelo_id = p.id AND m.deleted_at IS NULL) as total_estudiante
         FROM paralelo p
         INNER JOIN grado g ON p.grado_id = g.id
         INNER JOIN nivel_academico n ON g.nivel_academico_id = n.id

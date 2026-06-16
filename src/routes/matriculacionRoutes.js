@@ -19,7 +19,7 @@ router.use(authenticate);
  */
 router.get(
   '/estudiantes-elegibles',
-  authorize('matricula.consultar'),
+  authorize('matriculacion.leer'),
   MatriculacionController.listarEstudiantesElegibles
 );
 
@@ -29,7 +29,7 @@ router.get(
  */
 router.get(
   '/verificar-disponibilidad',
-  authorize('matricula.consultar'),
+  authorize('matriculacion.leer'),
   MatriculacionController.verificarDisponibilidadParalelo
 );
 
@@ -39,7 +39,7 @@ router.get(
  */
 router.get(
   '/periodo/:periodo_academico_id',
-  authorize('matricula.consultar'),
+  authorize('matriculacion.leer'),
   MatriculacionController.obtenerMatriculasPorPeriodo
 );
 
@@ -49,8 +49,28 @@ router.get(
  */
 router.get(
   '/estadisticas/:periodo_academico_id',
-  authorize('matricula.consultar'),
+  authorize('matriculacion.leer'),
   MatriculacionController.obtenerEstadisticas
+);
+
+/**
+ * GET /api/matriculacion/:id
+ * Obtener detalle completo de una matrícula
+ */
+router.get(
+  '/:id',
+  authorize('matriculacion.leer'),
+  MatriculacionController.obtenerMatricula
+);
+
+/**
+ * GET /api/matriculacion/:id/documentos
+ * Listar documentos de una matrícula
+ */
+router.get(
+  '/:id/documentos',
+  authorize('matriculacion.leer'),
+  MatriculacionController.listarDocumentos
 );
 
 // ========================================
@@ -63,12 +83,10 @@ router.get(
  */
 router.post(
   '/matricular/:estudiante_id',
-  authorize('matricula.crear'),
-  upload.fields([
-    { name: 'documentos', maxCount: 10 }
-  ]),
+  authorize('matriculacion.crear'),
+  upload.fields([{ name: 'documentos', maxCount: 10 }]),
   handleMulterError,
-  logActivity('matricular_estudiante', 'matricula'),
+  logActivity('matricular_estudiante', 'matriculacion'),
   MatriculacionController.matricularEstudiante
 );
 
@@ -78,9 +96,22 @@ router.post(
  */
 router.post(
   '/rematricular/:estudiante_id',
-  authorize('matricula.crear'),
-  logActivity('rematricular_estudiante', 'matricula'),
+  authorize('matriculacion.crear'),
+  logActivity('rematricular_estudiante', 'matriculacion'),
   MatriculacionController.rematricularEstudiante
+);
+
+/**
+ * POST /api/matriculacion/:id/documentos
+ * Subir documentos a una matrícula existente
+ */
+router.post(
+  '/:id/documentos',
+  authorize('matriculacion.crear'),
+  upload.fields([{ name: 'documentos', maxCount: 10 }]),
+  handleMulterError,
+  logActivity('subir_documentos_matricula', 'matricula_documento'),
+  MatriculacionController.subirDocumentos
 );
 
 /**
@@ -89,9 +120,20 @@ router.post(
  */
 router.put(
   '/:id',
-  authorize('matricula.actualizar'),
-  logActivity('actualizar_matricula', 'matricula'),
+  authorize('matriculacion.actualizar'),
+  logActivity('actualizar_matricula', 'matriculacion'),
   MatriculacionController.actualizarMatricula
+);
+
+/**
+ * PATCH /api/matriculacion/:id/transferir
+ * Transferir estudiante a otro paralelo
+ */
+router.patch(
+  '/:id/transferir',
+  authorize('matriculacion.actualizar'),
+  logActivity('transferir_paralelo', 'matriculacion'),
+  MatriculacionController.transferirParalelo
 );
 
 /**
@@ -100,9 +142,53 @@ router.put(
  */
 router.patch(
   '/:id/retirar',
-  authorize('matricula.retirar'),
-  logActivity('retirar_matricula', 'matricula'),
+  authorize('matriculacion.retirar'),
+  logActivity('retirar_matricula', 'matriculacion'),
   MatriculacionController.retirarMatricula
+);
+
+/**
+ * PATCH /api/matriculacion/:id/estado
+ * Cambiar estado general (anular, suspender, etc.)
+ */
+router.patch(
+  '/:id/estado',
+  authorize('matriculacion.actualizar'),
+  logActivity('cambiar_estado_matricula', 'matriculacion'),
+  MatriculacionController.cambiarEstado
+);
+
+/**
+ * PATCH /api/matriculacion/documentos/:doc_id/verificar
+ * Verificar un documento de matrícula
+ */
+router.patch(
+  '/documentos/:doc_id/verificar',
+  authorize('matriculacion.verificar'),
+  logActivity('verificar_documento', 'matricula_documento'),
+  MatriculacionController.verificarDocumento
+);
+
+/**
+ * DELETE /api/matriculacion/:id
+ * Soft delete de matrícula
+ */
+router.delete(
+  '/:id',
+  authorize('matriculacion.eliminar'),
+  logActivity('eliminar_matricula', 'matriculacion'),
+  MatriculacionController.eliminarMatricula
+);
+
+/**
+ * DELETE /api/matriculacion/documentos/:doc_id
+ * Eliminar documento de matrícula
+ */
+router.delete(
+  '/documentos/:doc_id',
+  authorize('matriculacion.actualizar'),
+  logActivity('eliminar_documento_matricula', 'matricula_documento'),
+  MatriculacionController.eliminarDocumento
 );
 
 export default router;

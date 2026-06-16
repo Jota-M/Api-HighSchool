@@ -1,353 +1,361 @@
 // services/reportes/pdfGenerator.js
 import PDFDocument from 'pdfkit';
-import { pdfStyles, institutionInfo, formatearFecha } from './reportStyles.js';
+import fs          from 'fs';
+import path        from 'path';
+import { institutionInfo, formatearFecha } from './reportStyles.js';
+
+const AZUL     = '#1B3A6B';
+const DORADO   = '#D4A017';
+const ROJO     = '#C0392B';
+const GRIS     = '#6B7280';
+const NEGRO    = '#1A1A2E';
+const BG_CAMPO = '#EBF0FA';
+const BORDE    = '#D1D5DB';
+const BLANCO   = '#FFFFFF';
+
+// Espacio reservado para el footer al calcular saltos de página
+const FOOTER_H = 35;
 
 class PDFGenerator {
   constructor(options = {}) {
+    this.landscape = options.landscape ?? false;
+    this.margin    = 45;   // margen fijo, compacto pero cómodo
+
     this.doc = new PDFDocument({
-      size: options.size || 'letter',
-      margin: options.margin || pdfStyles.margins.page,
+      size:        'letter',
+      layout:      this.landscape ? 'landscape' : 'portrait',
+      margin:      this.margin,
       bufferPages: true,
-      ...options
+      info: { Title: options.title || 'Reporte', Author: institutionInfo.nombre },
     });
-    
-    this.currentY = this.doc.y;
   }
 
-  /**
-   * 🎨 ENCABEZADO INSTITUCIONAL
-   */
-  drawHeader(titulo, subtitulo = null) {
+  get _W()  { return this.doc.page.width;       }
+  get _H()  { return this.doc.page.height;      }
+  get _iW() { return this._W - this.margin * 2; }
+  get _m()  { return this.margin;               }
+  // Límite inferior antes del footer
+  get _maxY() { return this._H - this.margin - FOOTER_H; }
+
+  // ════════════════════════════════════════════════════════
+  // 🏛️  ENCABEZADO
+  // ════════════════════════════════════════════════════════
+  drawHeader(titulo, subtitulo = null, options = {}) {
     const doc = this.doc;
-    const startY = doc.y;
+    const W   = this._W;
+    const m   = this._m;
 
-    // Línea superior decorativa
-    doc.rect(50, startY, doc.page.width - 100, 3)
-       .fillColor(`#${pdfStyles.colors.primary}`)
-       .fill();
+    // Barras decorativas fijas en la parte superior absoluta de la página
+    doc.rect(0, 0, W, 7).fill(AZUL);
+    doc.rect(0, 7, W, 4).fill(DORADO);
 
-    doc.moveDown(0.5);
+    // Logo
+    const logoPath = institutionInfo.logoPath ?? '';
+    const hasLogo  = logoPath && fs.existsSync(logoPath);
+    const LOGO_SZ  = 50;
+    const LOGO_X   = m;
+    const LOGO_Y   = 16;
 
-    // Título principal
-    doc.fontSize(pdfStyles.fonts.title.size)
-       .font(pdfStyles.fonts.title.name)
-       .fillColor(`#${pdfStyles.colors.primary}`)
-       .text(titulo, { align: 'center' });
-
-    // Subtítulo (si existe)
-    if (subtitulo) {
-      doc.moveDown(0.3);
-      doc.fontSize(pdfStyles.fonts.subheading.size)
-         .font(pdfStyles.fonts.subheading.name)
-         .fillColor(`#${pdfStyles.colors.textLight}`)
-         .text(subtitulo, { align: 'center' });
+    if (hasLogo) {
+      try { doc.image(logoPath, LOGO_X, LOGO_Y, { width: LOGO_SZ, height: LOGO_SZ }); }
+      catch { /* ignorar */ }
     }
 
-    // Información institucional
-    doc.moveDown(0.5);
-    doc.fontSize(pdfStyles.fonts.small.size)
-       .font(pdfStyles.fonts.body.name)
-       .fillColor(`#${pdfStyles.colors.textLight}`)
-       .text(institutionInfo.nombre, { align: 'center' });
-    
-    doc.fontSize(pdfStyles.fonts.caption.size)
-       .text(`${institutionInfo.direccion} | ${institutionInfo.telefono}`, { align: 'center' });
+    // Nombre institución
+    const textX = hasLogo ? LOGO_X + LOGO_SZ + 10 : m;
+    doc.font('Helvetica-Bold').fontSize(13).fillColor(AZUL)
+       .text(institutionInfo.nombre, textX, 20, { lineBreak: false });
+    doc.font('Helvetica').fontSize(8.5).fillColor(GRIS)
+       .text(institutionInfo.ciudad ?? 'Bolivia', textX, 36, { lineBreak: false });
 
-    // Línea inferior
-    doc.moveDown(0.5);
-    doc.rect(50, doc.y, doc.page.width - 100, 1)
-       .fillColor(`#${pdfStyles.colors.border}`)
-       .fill();
+    // Número de documento (rojo, derecha)
+    if (options.docId) {
+      doc.font('Helvetica-Bold').fontSize(10).fillColor(ROJO)
+         .text(options.docId, m, 20, { width: this._iW, align: 'right', lineBreak: false });
+    }
+    if (options.docEstado) {
+      doc.font('Helvetica').fontSize(8.5).fillColor(NEGRO)
+         .text(options.docEstado, m, 35, { width: this._iW, align: 'right', lineBreak: false });
+    }
 
-    doc.moveDown(1);
-    this.currentY = doc.y;
+    // Separador
+    doc.moveTo(m, 72).lineTo(W - m, 72)
+       .lineWidth(0.5).strokeColor(BORDE).stroke();
+
+    // Marca de agua (no mueve doc.y)
+    this._drawWatermark();
+
+    // Título centrado
+    const tY = 80;
+    doc.font('Helvetica-Bold').fontSize(17).fillColor(AZUL)
+       .text(titulo, m, tY, { width: this._iW, align: 'center', lineBreak: false });
+
+    // Línea dorada bajo el título
+    const lineW = Math.min(this._iW * 0.5, 340);
+    const lineX = (W - lineW) / 2;
+    doc.rect(lineX, tY + 22, lineW, 3).fill(DORADO);
+
+    // Subtítulo
+    let afterHeader = tY + 34;
+    if (subtitulo) {
+      doc.font('Helvetica').fontSize(9).fillColor(GRIS)
+         .text(subtitulo, m, afterHeader, { width: this._iW, align: 'center', lineBreak: false });
+      afterHeader += 16;
+    }
+
+    // Posicionar cursor justo debajo del header, con pequeño espacio
+    doc.y = afterHeader + 10;
   }
 
-  /**
-   * 📊 CUADRO DE INFORMACIÓN
-   */
+  // ════════════════════════════════════════════════════════
+  // 💧  MARCA DE AGUA
+  // ════════════════════════════════════════════════════════
+  _drawWatermark() {
+    const logoPath = institutionInfo.logoPath ?? '';
+    if (!logoPath || !fs.existsSync(logoPath)) return;
+    try {
+      const cx = this._W / 2 - 75;
+      const cy = this._H / 2 - 75;
+      this.doc.save();
+      this.doc.image(logoPath, cx, cy, { width: 150, height: 150 });
+      this.doc.rect(cx, cy, 150, 150).fillOpacity(0.84).fill(BLANCO);
+      this.doc.restore();
+    } catch { /* ignorar */ }
+  }
+
+  // ════════════════════════════════════════════════════════
+  // 📋  FILA DE METADATOS  (Período / Fecha)
+  // ════════════════════════════════════════════════════════
+  drawMetaRow(items) {
+    const doc  = this.doc;
+    const m    = this._m;
+    const colW = this._iW / items.length;
+    const y0   = doc.y;
+
+    items.forEach((item, i) => {
+      const x = m + i * colW;
+      doc.font('Helvetica').fontSize(8.5).fillColor(GRIS)
+         .text(`${item.label}: `, x, y0, { continued: true, lineBreak: false });
+      doc.font('Helvetica-Bold').fontSize(8.5).fillColor(NEGRO)
+         .text(item.value ?? '—', { lineBreak: false });
+    });
+
+    doc.y = y0 + 16;
+  }
+
+  // ════════════════════════════════════════════════════════
+  // 🔷  TÍTULO DE SECCIÓN
+  // ════════════════════════════════════════════════════════
+  drawSection(titulo) {
+    const doc = this.doc;
+    this._checkPageBreak(24);
+
+    const y0 = doc.y + 6;
+    doc.font('Helvetica-Bold').fontSize(10).fillColor(AZUL)
+       .text(titulo, this._m, y0, { lineBreak: false });
+
+    // Línea dorada fina debajo
+    doc.moveTo(this._m, y0 + 14).lineTo(this._m + this._iW, y0 + 14)
+       .lineWidth(1).strokeColor(DORADO).stroke();
+
+    doc.y = y0 + 20;
+  }
+
+  // ════════════════════════════════════════════════════════
+  // 📊  CUADRO DE INFORMACIÓN
+  // ════════════════════════════════════════════════════════
   drawInfoBox(items, columns = 2) {
-    const doc = this.doc;
-    const boxPadding = 10;
-    const boxWidth = doc.page.width - 100;
-    const columnWidth = boxWidth / columns;
-    
+    const doc  = this.doc;
+    const m    = this._m;
+    const colW = this._iW / columns;
+    const ROW  = 17;
+
+    const rows = Math.ceil(items.length / columns);
+    this._checkPageBreak(rows * ROW + 6);
+
     const startY = doc.y;
-    const startX = 50;
+    let col = 0;
+    let row = 0;
 
-    // Fondo del cuadro
-    doc.rect(startX, startY, boxWidth, items.length * 20 / columns + boxPadding * 2)
-       .fillColor(`#${pdfStyles.colors.background}`)
-       .fill();
+    items.forEach((item) => {
+      const x = m + col * colW;
+      const y = startY + row * ROW;
 
-    // Borde del cuadro
-    doc.rect(startX, startY, boxWidth, items.length * 20 / columns + boxPadding * 2)
-       .strokeColor(`#${pdfStyles.colors.border}`)
-       .lineWidth(1)
-       .stroke();
+      doc.font('Helvetica').fontSize(8.5).fillColor(GRIS)
+         .text(`${item.label}: `, x, y, { continued: true, width: colW * 0.36, lineBreak: false });
+      doc.font('Helvetica-Bold').fontSize(8.5).fillColor(NEGRO)
+         .text(item.value ?? '—', { width: colW * 0.60, lineBreak: false });
 
-    let currentX = startX + boxPadding;
-    let currentY = startY + boxPadding;
-    let column = 0;
-
-    // Dibujar items
-    items.forEach((item, index) => {
-      doc.fontSize(pdfStyles.fonts.small.size)
-         .font(pdfStyles.fonts.body.name)
-         .fillColor(`#${pdfStyles.colors.textLight}`)
-         .text(item.label + ':', currentX, currentY, { 
-           width: columnWidth * 0.4,
-           continued: true 
-         })
-         .font(pdfStyles.fonts.subheading.name)
-         .fillColor(`#${pdfStyles.colors.text}`)
-         .text(' ' + item.value, { width: columnWidth * 0.55 });
-
-      column++;
-      if (column >= columns) {
-        column = 0;
-        currentX = startX + boxPadding;
-        currentY += 20;
-      } else {
-        currentX += columnWidth;
-      }
+      col++;
+      if (col >= columns) { col = 0; row++; }
     });
 
-    doc.y = startY + items.length * 20 / columns + boxPadding * 2 + 10;
-    this.currentY = doc.y;
+    doc.y = startY + rows * ROW + 6;
   }
 
-  /**
-   * 📋 SECCIÓN CON TÍTULO
-   */
-  drawSection(titulo, icono = null) {
-    const doc = this.doc;
-    
-    doc.moveDown(0.5);
-    
-    // Línea decorativa izquierda
-    doc.rect(50, doc.y, 4, 20)
-       .fillColor(`#${pdfStyles.colors.secondary}`)
-       .fill();
+  // ════════════════════════════════════════════════════════
+  // 📊  ESTADÍSTICAS EN TARJETAS
+  // ════════════════════════════════════════════════════════
+  drawStatsGrid(stats, columns = 4) {
+    const doc    = this.doc;
+    const m      = this._m;
+    const GAP    = 7;
+    const CARD_H = 48;
+    const cardW  = (this._iW - GAP * (columns - 1)) / columns;
+    const rows   = Math.ceil(stats.length / columns);
+    const totalH = rows * CARD_H + (rows - 1) * GAP;
 
-    // Título de sección
-    doc.fontSize(pdfStyles.fonts.heading.size)
-       .font(pdfStyles.fonts.heading.name)
-       .fillColor(`#${pdfStyles.colors.primary}`)
-       .text(titulo, 60, doc.y + 4);
+    this._checkPageBreak(totalH + 8);
 
-    doc.moveDown(0.8);
-    this.currentY = doc.y;
+    const startY = doc.y;
+
+    stats.forEach((stat, idx) => {
+      const col = idx % columns;
+      const row = Math.floor(idx / columns);
+      const x   = m + col * (cardW + GAP);
+      const y   = startY + row * (CARD_H + GAP);
+
+      // Borde
+      doc.roundedRect(x, y, cardW, CARD_H, 3)
+         .lineWidth(0.7).strokeColor(BORDE).stroke();
+      // Barra azul top
+      doc.roundedRect(x, y, cardW, 4, 2).fill(AZUL);
+
+      // Valor
+      doc.font('Helvetica-Bold').fontSize(18).fillColor(AZUL)
+         .text(String(stat.value ?? '—'), x, y + 7, { width: cardW, align: 'center', lineBreak: false });
+
+      // Label
+      doc.font('Helvetica').fontSize(7).fillColor(GRIS)
+         .text(stat.label, x, y + 30, { width: cardW, align: 'center', lineBreak: false });
+    });
+
+    // Cursor justo debajo de todas las tarjetas
+    doc.y = startY + totalH + 8;
   }
 
-  /**
-   * 📊 TABLA SIMPLE
-   */
+  // ════════════════════════════════════════════════════════
+  // 📋  TABLA
+  // ════════════════════════════════════════════════════════
   drawTable(headers, rows, options = {}) {
-    const doc = this.doc;
-    const startX = options.startX || 50;
-    const tableWidth = options.width || (doc.page.width - 100);
-    const columnWidths = options.columnWidths || this._calculateColumnWidths(headers.length, tableWidth);
-    const rowHeight = options.rowHeight || 25;
-    
-    let currentY = doc.y;
+    const doc       = this.doc;
+    const m         = this._m;
+    const tableW    = options.width || this._iW;
+    const colWidths = options.columnWidths || this._autoColW(headers.length, tableW);
+    const ROW_H     = options.rowHeight || 20;
+    const HDR_H     = 24;
 
-    // Encabezados
-    let currentX = startX;
-    
-    // Fondo de encabezados
-    doc.rect(startX, currentY, tableWidth, rowHeight)
-       .fillColor(`#${pdfStyles.colors.primary}`)
-       .fill();
+    const _pintarHeader = (y) => {
+      doc.rect(m, y, tableW, HDR_H).fill(AZUL);
+      doc.rect(m, y + HDR_H - 3, tableW, 3).fill(DORADO);
+      let x = m;
+      headers.forEach((h, i) => {
+        doc.font('Helvetica-Bold').fontSize(7.5).fillColor(BLANCO)
+           .text(h, x + 3, y + (HDR_H - 9) / 2, {
+             width: colWidths[i] - 6, align: 'center', ellipsis: true, lineBreak: false,
+           });
+        x += colWidths[i];
+      });
+      return y + HDR_H;
+    };
 
-    // Texto de encabezados
-    headers.forEach((header, i) => {
-      doc.fontSize(pdfStyles.fonts.small.size)
-         .font(pdfStyles.fonts.subheading.name)
-         .fillColor('#FFFFFF')
-         .text(
-           header, 
-           currentX + 5, 
-           currentY + (rowHeight - 10) / 2, 
-           { width: columnWidths[i] - 10, align: 'center' }
-         );
-      currentX += columnWidths[i];
-    });
+    this._checkPageBreak(HDR_H + ROW_H * 2);
+    let y = _pintarHeader(doc.y);
 
-    currentY += rowHeight;
-
-    // Filas de datos
-    rows.forEach((row, rowIndex) => {
-      // Verificar si necesitamos nueva página
-      if (currentY > doc.page.height - 100) {
+    rows.forEach((row, ri) => {
+      // Salto de página si no cabe la fila
+      if (y + ROW_H > this._maxY) {
         doc.addPage();
-        currentY = 50;
+        y = _pintarHeader(this._m);
       }
 
       // Fondo alternado
-      if (rowIndex % 2 === 0) {
-        doc.rect(startX, currentY, tableWidth, rowHeight)
-           .fillColor(`#${pdfStyles.colors.background}`)
-           .fill();
+      if (ri % 2 !== 0) {
+        doc.rect(m, y, tableW, ROW_H).fill(BG_CAMPO);
       }
 
-      // Bordes de celda
-      doc.rect(startX, currentY, tableWidth, rowHeight)
-         .strokeColor(`#${pdfStyles.colors.border}`)
-         .lineWidth(0.5)
-         .stroke();
+      // Línea inferior
+      doc.moveTo(m, y + ROW_H).lineTo(m + tableW, y + ROW_H)
+         .lineWidth(0.3).strokeColor(BORDE).stroke();
 
-      // Contenido de la fila
-      currentX = startX;
-      row.forEach((cell, i) => {
-        // Borde vertical
-        if (i > 0) {
-          doc.moveTo(currentX, currentY)
-             .lineTo(currentX, currentY + rowHeight)
-             .strokeColor(`#${pdfStyles.colors.border}`)
-             .lineWidth(0.5)
-             .stroke();
+      let cx = m;
+      row.forEach((cell, ci) => {
+        const txt = cell !== null && cell !== undefined ? String(cell) : '—';
+
+        if (ci > 0) {
+          doc.moveTo(cx, y).lineTo(cx, y + ROW_H)
+             .lineWidth(0.3).strokeColor(BORDE).stroke();
         }
 
-        doc.fontSize(pdfStyles.fonts.body.size)
-           .font(pdfStyles.fonts.body.name)
-           .fillColor(`#${pdfStyles.colors.text}`)
-           .text(
-             cell?.toString() || 'N/A', 
-             currentX + 5, 
-             currentY + (rowHeight - 10) / 2, 
-             { 
-               width: columnWidths[i] - 10, 
-               align: i === 0 ? 'left' : 'center',
-               ellipsis: true
-             }
-           );
-        currentX += columnWidths[i];
+        let color = NEGRO;
+        let font  = 'Helvetica';
+        if (txt === 'Aprobado'  || txt === 'APROBADO')  { color = '#27AE60'; font = 'Helvetica-Bold'; }
+        if (txt === 'Reprobado' || txt === 'REPROBADO') { color = ROJO;      font = 'Helvetica-Bold'; }
+        if (txt === 'AUSENTE')                           { color = '#E67E22'; font = 'Helvetica-Bold'; }
+        if (txt === 'Sin nota')                          { color = GRIS; }
+
+        doc.font(font).fontSize(8).fillColor(color)
+           .text(txt, cx + 4, y + (ROW_H - 9) / 2, {
+             width: colWidths[ci] - 8,
+             align: ci <= 2 ? 'left' : 'center',
+             ellipsis: true,
+             lineBreak: false,
+           });
+
+        cx += colWidths[ci];
       });
 
-      currentY += rowHeight;
+      y += ROW_H;
     });
 
-    doc.y = currentY + 10;
-    this.currentY = doc.y;
+    // Borde exterior
+    doc.rect(m, doc.y, tableW, y - doc.y)
+       .lineWidth(0.8).strokeColor('#CBD5E1').stroke();
+
+    doc.y = y + 8;
   }
 
-  /**
-   * 📊 ESTADÍSTICAS EN GRID
-   */
-  drawStatsGrid(stats, columns = 4) {
-    const doc = this.doc;
-    const gridPadding = 15;
-    const cardWidth = (doc.page.width - 100 - gridPadding * (columns - 1)) / columns;
-    const cardHeight = 60;
-    
-    let currentX = 50;
-    let currentY = doc.y;
-    let column = 0;
-
-    stats.forEach((stat) => {
-      // Card background
-      doc.roundedRect(currentX, currentY, cardWidth, cardHeight, 5)
-         .fillColor(`#${pdfStyles.colors.background}`)
-         .fill();
-
-      // Card border
-      doc.roundedRect(currentX, currentY, cardWidth, cardHeight, 5)
-         .strokeColor(`#${pdfStyles.colors.border}`)
-         .lineWidth(1)
-         .stroke();
-
-      // Valor (número grande)
-      doc.fontSize(22)
-         .font('Helvetica-Bold')
-         .fillColor(`#${pdfStyles.colors.primary}`)
-         .text(
-           stat.value.toString(), 
-           currentX, 
-           currentY + 10, 
-           { width: cardWidth, align: 'center' }
-         );
-
-      // Label (texto pequeño)
-      doc.fontSize(9)
-         .font('Helvetica')
-         .fillColor(`#${pdfStyles.colors.textLight}`)
-         .text(
-           stat.label, 
-           currentX, 
-           currentY + 38, 
-           { width: cardWidth, align: 'center' }
-         );
-
-      column++;
-      if (column >= columns) {
-        column = 0;
-        currentX = 50;
-        currentY += cardHeight + gridPadding;
-      } else {
-        currentX += cardWidth + gridPadding;
-      }
-    });
-
-    doc.y = currentY + (column === 0 ? 0 : cardHeight + gridPadding);
-    this.currentY = doc.y;
-  }
-
-  /**
-   * 📄 PIE DE PÁGINA
-   */
-  addPageNumbers() {
-    const doc = this.doc;
+  // ════════════════════════════════════════════════════════
+  // 📄  FOOTERS (al final, en todas las páginas)
+  // ════════════════════════════════════════════════════════
+  _drawFooters() {
+    const doc   = this.doc;
     const pages = doc.bufferedPageRange();
+    const W     = this._W;
+    const H     = this._H;
+    const m     = this._m;
 
     for (let i = 0; i < pages.count; i++) {
       doc.switchToPage(i);
 
-      // Línea superior
-      doc.moveTo(50, doc.page.height - 60)
-         .lineTo(doc.page.width - 50, doc.page.height - 60)
-         .strokeColor(`#${pdfStyles.colors.border}`)
-         .lineWidth(1)
-         .stroke();
-
-      // Fecha de generación
-      doc.fontSize(pdfStyles.fonts.caption.size)
-         .font(pdfStyles.fonts.body.name)
-         .fillColor(`#${pdfStyles.colors.textLight}`)
+      const textY = H - 30;
+      doc.font('Helvetica').fontSize(7).fillColor(GRIS)
          .text(
-           `Generado: ${formatearFecha(new Date())}`,
-           50,
-           doc.page.height - 45,
-           { align: 'left' }
+           `Generado: ${formatearFecha(new Date(), 'largo')}  ·  ${institutionInfo.nombre}  ·  Pág. ${i + 1} / ${pages.count}`,
+           m, textY, { width: this._iW, align: 'center', lineBreak: false }
          );
 
-      // Número de página
-      doc.text(
-        `Página ${i + 1} de ${pages.count}`,
-        50,
-        doc.page.height - 45,
-        { align: 'right' }
-      );
+      doc.rect(0, H - 18, W, 4).fill(DORADO);
+      doc.rect(0, H - 14, W, 14).fill(AZUL);
     }
   }
 
-  /**
-   * 🔧 HELPERS PRIVADOS
-   */
-  _calculateColumnWidths(numColumns, totalWidth) {
-    const width = totalWidth / numColumns;
-    return Array(numColumns).fill(width);
+  // ════════════════════════════════════════════════════════
+  // 🔧  HELPERS
+  // ════════════════════════════════════════════════════════
+  _autoColW(n, total) { return Array(n).fill(total / n); }
+
+  _checkPageBreak(needed) {
+    if (this.doc.y + needed > this._maxY) {
+      this.doc.addPage();
+      this.doc.y = this._m;
+    }
   }
 
-  /**
-   * ✅ FINALIZAR Y DEVOLVER STREAM
-   */
-  pipe(stream) {
-    return this.doc.pipe(stream);
-  }
+  pipe(stream) { return this.doc.pipe(stream); }
 
   end() {
-    this.addPageNumbers();
+    this._drawFooters();
     this.doc.end();
   }
 }

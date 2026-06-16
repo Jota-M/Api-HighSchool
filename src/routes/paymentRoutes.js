@@ -10,6 +10,7 @@ import {
   PagoDistribuidoController,
 } from '../controllers/paymentControllers.js';
 import PagoMensualidadPDFController from '../controllers/pagoMensualidadPDFController.js';
+import ReportesPagosControlleer from '../controllers/reportesPagosController.js';
 import { authenticate, authorize, logActivity } from '../Middlewares/auth.js';
 
 const router = express.Router();
@@ -249,4 +250,28 @@ router.post(
   PagoMensualidadPDFController.generarPDFMultiple
 );
 router.post('/pago-mensualidad/pdf-directo', PagoMensualidadPDFController.generarPDFDirecto);
+// GET /api/reportes-pagos/exportar/estado-cuenta
+// ?periodo_academico_id=X&formato=pdf|excel&grado_id=Y&paralelo_id=Z
+router.get(
+  '/reportes-pagos/exportar/estado-cuenta',
+  authorize('reportes_pagos.ver_estado_estudiante'),
+  ReportesPagosControlleer.exportarEstadoCuenta
+);
+ 
+// GET /api/reportes-pagos/exportar/morosos
+// ?periodo_academico_id=X&formato=pdf|excel&dias_mora_minimo=Y
+router.get(
+  '/reportes-pagos/exportar/morosos',
+  authorize('reportes_pagos.ver_morosos'),
+  ReportesPagosControlleer.exportarMorosos
+);
+ 
+// GET /api/reportes-pagos/exportar/ingresos
+// ?periodo_academico_id=X&formato=pdf|excel&mes_inicio=Y&mes_fin=Z
+router.get(
+  '/reportes-pagos/exportar/ingresos',
+  authorize('reportes_pagos.ver_ingresos'),
+  ReportesPagosControlleer.exportarIngresos
+);
+ 
 export default router;

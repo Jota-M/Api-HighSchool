@@ -11,7 +11,7 @@ class AsignacionDocenteController {
   // ========================================
   static async asignar(req, res) {
     const client = await pool.connect();
-    
+
     try {
       await client.query('BEGIN');
 
@@ -110,7 +110,7 @@ class AsignacionDocenteController {
   // ========================================
   static async asignarMasivo(req, res) {
     const client = await pool.connect();
-    
+
     try {
       await client.query('BEGIN');
 
@@ -210,9 +210,9 @@ class AsignacionDocenteController {
   // ========================================
   static async listar(req, res) {
     try {
-      const { 
-        page, limit, docente_id, grado_id, materia_id, 
-        paralelo_id, periodo_academico_id, activo 
+      const {
+        page, limit, docente_id, grado_id, materia_id,
+        paralelo_id, periodo_academico_id, activo
       } = req.query;
 
       const result = await AsignacionDocente.findAll({
@@ -280,7 +280,7 @@ class AsignacionDocenteController {
   static async listarPorParalelo(req, res) {
     try {
       const { paralelo_id } = req.params;
-      const { periodo_academico_id } = req.query;
+      const { periodo_academico_id, grado_materia_id } = req.query;
 
       if (!periodo_academico_id) {
         return res.status(400).json({
@@ -291,7 +291,8 @@ class AsignacionDocenteController {
 
       const asignaciones = await AsignacionDocente.findByParalelo(
         parseInt(paralelo_id),
-        parseInt(periodo_academico_id)
+        parseInt(periodo_academico_id),
+        grado_materia_id ? parseInt(grado_materia_id) : null
       );
 
       res.json({
@@ -303,6 +304,40 @@ class AsignacionDocenteController {
       res.status(500).json({
         success: false,
         message: 'Error al listar docentes: ' + error.message
+      });
+    }
+  }
+
+  // ========================================
+  // OBTENER ASIGNACIÓN TITULAR PARA UNA MATERIA/PARALELO/PERIODO
+  // (usado para autocompletar docente en el horario)
+  // ========================================
+  static async obtenerTitularPorMateria(req, res) {
+    try {
+      const { grado_materia_id, paralelo_id, periodo_academico_id } = req.query;
+
+      if (!grado_materia_id || !paralelo_id || !periodo_academico_id) {
+        return res.status(400).json({
+          success: false,
+          message: 'Se requiere grado_materia_id, paralelo_id y periodo_academico_id'
+        });
+      }
+
+      const asignacion = await AsignacionDocente.findByGradoMateria(
+        parseInt(grado_materia_id),
+        parseInt(paralelo_id),
+        parseInt(periodo_academico_id)
+      );
+
+      res.json({
+        success: true,
+        data: { asignacion } // null si no hay docente asignado a esa materia
+      });
+    } catch (error) {
+      console.error('Error al obtener asignación titular:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al obtener asignación titular: ' + error.message
       });
     }
   }

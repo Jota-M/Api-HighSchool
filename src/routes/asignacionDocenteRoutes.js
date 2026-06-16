@@ -56,7 +56,13 @@ router.get(
   authorize('asignacion_docente.leer'),
   AsignacionDocenteController.listarPorParalelo
 );
-
+// GET /asignacion-docente/titular?grado_materia_id=...&paralelo_id=...&periodo_academico_id=...
+router.get(
+  '/titular',
+  authorize('asignacion_docente.leer'),
+  logActivity('obtener_titular', 'asignacion_docente'),
+  AsignacionDocenteController.obtenerTitularPorMateria
+);
 // GET /asignacion-docente/:id - Obtener asignación por ID
 router.get(
   '/:id',
@@ -87,5 +93,4 @@ router.delete(
   logActivity('eliminar', 'asignacion_docente'),
   AsignacionDocenteController.eliminar
 );
-
 export default router;

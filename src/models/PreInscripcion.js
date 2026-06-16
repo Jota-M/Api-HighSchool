@@ -22,10 +22,10 @@ class PreInscripcion {
     `, [gradoId, turnoId, periodoAcademicoId]);
 
     if (cupoResult.rows.length === 0) {
-      return { 
-        tiene_cupo: false, 
+      return {
+        tiene_cupo: false,
         cupo_id: null,
-        mensaje: 'No hay cupos disponibles para este grado y turno' 
+        mensaje: 'No hay cupos disponibles para este grado y turno'
       };
     }
 
@@ -64,10 +64,10 @@ class PreInscripcion {
   // =============================================
   static async crear(datosEstudiante, datosTutor, documentosUrls, fotoUrl = null, options = {}) {
     const client = await pool.connect();
-    
+
     try {
       await client.query('BEGIN');
-      
+
       // 1. Generar código único
       const codigoResult = await client.query(`
         SELECT 'PRE-' || TO_CHAR(CURRENT_DATE, 'YYYY') || '-' || 
@@ -77,10 +77,10 @@ class PreInscripcion {
         WHERE codigo_inscripcion LIKE 'PRE-' || TO_CHAR(CURRENT_DATE, 'YYYY') || '-%'
       `);
       const codigoInscripcion = codigoResult.rows[0].codigo;
-      
+
       // 2. Asignar cupo (si se proporcionan los datos)
       let cupoAsignado = { tiene_cupo: false, cupo_id: null };
-      
+
       if (options.grado_id && options.turno_id && options.periodo_academico_id) {
         cupoAsignado = await this.verificarYAsignarCupo(
           options.grado_id,
@@ -89,7 +89,7 @@ class PreInscripcion {
           client
         );
       }
-      
+
       // 3. Crear pre_inscripcion
       const inscripcionResult = await client.query(`
         INSERT INTO pre_inscripcion (
@@ -113,9 +113,9 @@ class PreInscripcion {
         cupoAsignado.cupo_id,
         cupoAsignado.tiene_cupo
       ]);
-      
+
       const preInscripcionId = inscripcionResult.rows[0].id;
-      
+
       // 4. ✅ Crear pre_estudiante (CON rude, SIN telefono_emergencia)
       await client.query(`
         INSERT INTO pre_estudiante (
@@ -152,7 +152,7 @@ class PreInscripcion {
         datosEstudiante.repite_grado || false,
         datosEstudiante.turno_solicitado || null
       ]);
-      
+
       // 5. ✅ Crear pre_tutor (CON otro_parentesco, SIN lugar_trabajo/telefono_trabajo/nivel_educacion)
       await client.query(`
         INSERT INTO pre_tutor (
@@ -183,7 +183,7 @@ class PreInscripcion {
         true,
         datosTutor.vive_con_estudiante || false
       ]);
-      
+
       // 6. Crear documentos
       const tiposDocumento = [
         { tipo: 'cedula_estudiante', url: documentosUrls.cedula_estudiante, nombre: 'Cédula Estudiante' },
@@ -191,7 +191,7 @@ class PreInscripcion {
         { tipo: 'libreta_notas', url: documentosUrls.libreta_notas, nombre: 'Libreta de Notas' },
         { tipo: 'cedula_tutor', url: documentosUrls.cedula_representante, nombre: 'Cédula Representante' }
       ];
-      
+
       for (const doc of tiposDocumento) {
         if (doc.url) {
           await client.query(`
@@ -202,15 +202,15 @@ class PreInscripcion {
           `, [preInscripcionId, doc.tipo, doc.nombre, doc.url]);
         }
       }
-      
+
       await client.query('COMMIT');
-      
+
       return {
         ...inscripcionResult.rows[0],
         cupo_asignado: cupoAsignado.tiene_cupo,
         mensaje_cupo: cupoAsignado.mensaje
       };
-      
+
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
@@ -218,32 +218,32 @@ class PreInscripcion {
       client.release();
     }
   }
-  
+
   // =============================================
   // OBTENER TODAS
   // =============================================
   static async obtenerTodas(filters = {}) {
     const { estado, page = 1, limit = 10 } = filters;
     const offset = (page - 1) * limit;
-    
+
     let whereConditions = ['pi.deleted_at IS NULL'];
     let params = [];
     let paramCount = 1;
-    
+
     if (estado) {
       whereConditions.push(`pi.estado = $${paramCount}`);
       params.push(estado);
       paramCount++;
     }
-    
+
     const whereClause = whereConditions.join(' AND ');
-    
+
     const countQuery = `
       SELECT COUNT(*) FROM pre_inscripcion pi WHERE ${whereClause}
     `;
     const countResult = await pool.query(countQuery, params);
     const total = parseInt(countResult.rows[0].count);
-    
+
     const dataQuery = `
       SELECT 
         pi.*,
@@ -266,9 +266,9 @@ class PreInscripcion {
       ORDER BY pi.created_at DESC
       LIMIT $${paramCount} OFFSET $${paramCount + 1}
     `;
-    
+
     const result = await pool.query(dataQuery, [...params, limit, offset]);
-    
+
     return {
       preinscripciones: result.rows,
       paginacion: {
@@ -279,7 +279,7 @@ class PreInscripcion {
       }
     };
   }
-  
+
   // =============================================
   // OBTENER POR ID
   // =============================================
@@ -306,35 +306,35 @@ class PreInscripcion {
       WHERE pi.id = $1 AND pi.deleted_at IS NULL
       GROUP BY pi.id, pe.*, pt.*, g.nombre, t.nombre, pa.nombre, cp.cupos_totales, cp.cupos_disponibles
     `, [id]);
-    
+
     return result.rows[0];
   }
-  
+
   // =============================================
   // CONVERTIR A ESTUDIANTE
   // =============================================
   static async convertirAEstudiante(preInscripcionId, usuarioId, paraleloId, periodoAcademicoId) {
     const client = await pool.connect();
-    
+
     try {
       await client.query('BEGIN');
-      
+
       const preInscripcion = await this.obtenerPorId(preInscripcionId);
-      
+
       if (!preInscripcion) {
         throw new Error('Preinscripción no encontrada');
       }
-      
+
       if (preInscripcion.estado !== 'aprobada') {
         throw new Error('La preinscripción debe estar aprobada');
       }
-      
+
       const estudiante = preInscripcion.estudiante;
       const tutor = preInscripcion.tutor;
-      
+
       // Generar código
       const codigoEstudiante = await Estudiante.generateCodeWithLock(client);
-      
+
       // ✅ Crear estudiante (CON rude, SIN telefono_emergencia)
       const nuevoEstudiante = await Estudiante.create({
         usuario_id: null,
@@ -359,27 +359,27 @@ class PreInscripcion {
         observaciones: `Convertido desde ${preInscripcion.codigo_inscripcion}`,
         activo: true
       }, client);
-      
+
       // Crear usuario estudiante
       let estudianteUsuarioId = null;
       let estudianteUsername = null;
       let estudiantePassword = null;
-      
+
       try {
         estudianteUsername = this.generarUsername(estudiante.nombres, estudiante.apellido_paterno);
         estudiantePassword = this.generarPassword(estudiante.ci);
-        
+
         const emailEstudiante = estudiante.email || `${estudianteUsername}@estudiante.edu.bo`;
-        
+
         const usuarioExiste = await client.query(
           'SELECT id FROM usuarios WHERE username = $1',
           [estudianteUsername]
         );
-        
+
         if (usuarioExiste.rows.length > 0) {
           estudianteUsername = `${estudianteUsername}${Math.floor(Math.random() * 999)}`;
         }
-        
+
         const usuarioEstudiante = await Usuario.create({
           username: estudianteUsername,
           email: emailEstudiante,
@@ -388,9 +388,9 @@ class PreInscripcion {
           verificado: false,
           debe_cambiar_password: true
         }, client);
-        
+
         estudianteUsuarioId = usuarioEstudiante.id;
-        
+
         const rolEstudiante = await this.obtenerRolPorNombre('estudiante', client);
         if (rolEstudiante) {
           await client.query(
@@ -398,22 +398,22 @@ class PreInscripcion {
             [estudianteUsuarioId, rolEstudiante.id]
           );
         }
-        
+
         await client.query(
           'UPDATE estudiante SET usuario_id = $1, updated_at = NOW() WHERE id = $2',
           [estudianteUsuarioId, nuevoEstudiante.id]
         );
-        
+
         nuevoEstudiante.usuario_id = estudianteUsuarioId;
-        
+
       } catch (errorUsuario) {
         console.error('⚠️ Error al crear usuario estudiante:', errorUsuario.message);
       }
-      
+
       // ✅ Crear o buscar padre_familia (SIN lugar_trabajo/telefono_trabajo/nivel_educacion)
       let padreFamiliaId;
       let padreExistente = await PadreFamilia.findByCI(tutor.ci, client);
-      
+
       if (padreExistente) {
         padreFamiliaId = padreExistente.id;
       } else {
@@ -434,35 +434,35 @@ class PreInscripcion {
         }, client);
         padreFamiliaId = nuevoPadre.id;
       }
-      
+
       // Crear usuario padre
       let tutorUsuarioId = null;
       let tutorUsername = null;
       let tutorPassword = null;
-      
+
       const padreResult = await client.query(
         'SELECT * FROM padre_familia WHERE id = $1',
         [padreFamiliaId]
       );
-      
+
       const padreActualizado = padreResult.rows[0];
-      
+
       if (!padreActualizado.usuario_id) {
         try {
           tutorUsername = this.generarUsername(tutor.nombres, tutor.apellido_paterno);
           tutorPassword = this.generarPassword(tutor.ci);
-          
+
           const emailTutor = tutor.email || `${tutorUsername}@padre.edu.bo`;
-          
+
           const usuarioTutorExiste = await client.query(
             'SELECT id FROM usuarios WHERE username = $1',
             [tutorUsername]
           );
-          
+
           if (usuarioTutorExiste.rows.length > 0) {
             tutorUsername = `${tutorUsername}${Math.floor(Math.random() * 999)}`;
           }
-          
+
           const usuarioTutor = await Usuario.create({
             username: tutorUsername,
             email: emailTutor,
@@ -471,9 +471,9 @@ class PreInscripcion {
             verificado: false,
             debe_cambiar_password: true
           }, client);
-          
+
           tutorUsuarioId = usuarioTutor.id;
-          
+
           const rolPadre = await this.obtenerRolPorNombre('padre', client);
           if (rolPadre) {
             await client.query(
@@ -481,17 +481,17 @@ class PreInscripcion {
               [tutorUsuarioId, rolPadre.id]
             );
           }
-          
+
           await client.query(
             'UPDATE padre_familia SET usuario_id = $1, updated_at = NOW() WHERE id = $2',
             [tutorUsuarioId, padreFamiliaId]
           );
-          
+
         } catch (errorUsuarioTutor) {
           console.error('⚠️ Error al crear usuario tutor:', errorUsuarioTutor.message);
         }
       }
-      
+
       // Crear relación estudiante_tutor
       await EstudianteTutor.assign({
         estudiante_id: nuevoEstudiante.id,
@@ -504,10 +504,10 @@ class PreInscripcion {
         prioridad_contacto: 1,
         observaciones: null
       }, client);
-      
+
       // Crear matrícula
       const numeroMatricula = await Matricula.generateNumeroMatricula(periodoAcademicoId, client);
-      
+
       const matriculaResult = await client.query(`
         INSERT INTO matricula (
           estudiante_id, paralelo_id, periodo_academico_id,
@@ -521,18 +521,18 @@ class PreInscripcion {
         numeroMatricula,
         estudiante.repite_grado || false
       ]);
-      
+
       const matriculaId = matriculaResult.rows[0].id;
-      
+
       // Migrar documentos
       const documentosMigrados = [];
-      
+
       try {
         const documentosResult = await client.query(`
           SELECT * FROM pre_documento 
           WHERE pre_inscripcion_id = $1 AND subido = true
         `, [preInscripcionId]);
-        
+
         for (const doc of documentosResult.rows) {
           const docMigradoResult = await client.query(`
             INSERT INTO matricula_documento (
@@ -550,13 +550,13 @@ class PreInscripcion {
             doc.fecha_verificacion,
             doc.observaciones
           ]);
-          
+
           documentosMigrados.push(docMigradoResult.rows[0]);
         }
       } catch (errorDocumentos) {
         console.error('⚠️ Error al migrar documentos:', errorDocumentos.message);
       }
-      
+
       // Actualizar pre_inscripcion
       await client.query(`
         UPDATE pre_inscripcion
@@ -568,14 +568,14 @@ class PreInscripcion {
           convertida_por = $3
         WHERE id = $4
       `, [nuevoEstudiante.id, matriculaId, usuarioId, preInscripcionId]);
-      
+
       // Liberar cupo
       if (preInscripcion.cupo_preinscripcion_id) {
         await this.liberarCupo(preInscripcion.cupo_preinscripcion_id, client);
       }
-      
+
       await client.query('COMMIT');
-      
+
       return {
         estudiante: nuevoEstudiante,
         matricula: matriculaResult.rows[0],
@@ -596,7 +596,7 @@ class PreInscripcion {
         },
         documentos_migrados: documentosMigrados.length
       };
-      
+
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
@@ -604,27 +604,27 @@ class PreInscripcion {
       client.release();
     }
   }
-  
+
   // =============================================
   // CAMBIAR ESTADO
   // =============================================
   static async cambiarEstado(id, nuevoEstado, usuarioId, observaciones = null, externalClient = null) {
     const client = externalClient || await pool.connect();
     const shouldManageTransaction = !externalClient;
-    
+
     try {
       if (shouldManageTransaction) {
         await client.query('BEGIN');
       }
-      
+
       const estadoAnteriorResult = await client.query(
         'SELECT estado FROM pre_inscripcion WHERE id = $1',
         [id]
       );
       const estadoAnterior = estadoAnteriorResult.rows[0]?.estado;
-      
+
       const esAprobada = nuevoEstado === 'aprobada';
-      
+
       let result;
       if (esAprobada) {
         result = await client.query(`
@@ -657,27 +657,27 @@ class PreInscripcion {
       if (shouldManageTransaction) {
         await client.query('COMMIT');
       }
-      
+
       // Enviar email asíncronamente
       if (shouldManageTransaction) {
         setImmediate(async () => {
-  try {
-    const preinscripcionCompleta = await this.obtenerPorId(id);
+          try {
+            const preinscripcionCompleta = await this.obtenerPorId(id);
 
-    // 📧 Email
-    await EmailService.notificarCambioEstado(preinscripcionCompleta, estadoAnterior);
+            // 📧 Email
+            await EmailService.notificarCambioEstado(preinscripcionCompleta, estadoAnterior);
 
-    // 📱 WhatsApp (NUEVO)
-    await WhatsAppService.notificarCambioEstado(preinscripcionCompleta, estadoAnterior);
+            // 📱 WhatsApp (NUEVO)
+            await WhatsAppService.notificarCambioEstado(preinscripcionCompleta, estadoAnterior);
 
-  } catch (error) {
-    console.error('❌ Error notificaciones:', error);
-  }
-});
+          } catch (error) {
+            console.error('❌ Error notificaciones:', error);
+          }
+        });
       }
 
       return result.rows[0];
-      
+
     } catch (error) {
       if (shouldManageTransaction) {
         await client.query('ROLLBACK');
@@ -689,38 +689,38 @@ class PreInscripcion {
       }
     }
   }
-  
+
   // =============================================
   // ELIMINAR (SOFT DELETE)
   // =============================================
   static async eliminar(id) {
     const client = await pool.connect();
-    
+
     try {
       await client.query('BEGIN');
-      
+
       const cupoResult = await client.query(
         'SELECT cupo_preinscripcion_id FROM pre_inscripcion WHERE id = $1',
         [id]
       );
-      
+
       const cupoId = cupoResult.rows[0]?.cupo_preinscripcion_id;
-      
+
       const result = await client.query(`
         UPDATE pre_inscripcion
         SET deleted_at = NOW()
         WHERE id = $1 AND deleted_at IS NULL
         RETURNING *
       `, [id]);
-      
+
       if (cupoId) {
         await this.liberarCupo(cupoId, client);
       }
-      
+
       await client.query('COMMIT');
-      
+
       return result.rows[0];
-      
+
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
@@ -728,27 +728,27 @@ class PreInscripcion {
       client.release();
     }
   }
-  
+
   // =============================================
   // MÉTODOS AUXILIARES
   // =============================================
-  
+
   static generarUsername(nombres, apellido) {
     const nombreLimpio = nombres.split(' ')[0]
       .toLowerCase()
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-z]/g, '');
-    
+
     const apellidoLimpio = apellido
       .toLowerCase()
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-z]/g, '');
-    
+
     const nombreCapital = nombreLimpio.charAt(0).toUpperCase() + nombreLimpio.slice(1);
     const apellidoCapital = apellidoLimpio.charAt(0).toUpperCase() + apellidoLimpio.slice(1);
-    
+
     return `${nombreCapital}${apellidoCapital}`;
   }
 
