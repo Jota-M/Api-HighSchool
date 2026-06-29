@@ -16,6 +16,12 @@ router.get(
   ParaleloController.listarTodos
 );
 
+router.get(
+  '/todos-sie',
+  authorize('paralelo.leer'),
+  ParaleloController.listarTodos
+);
+
 // 2. Ruta raíz '/' con query params
 router.get(
   '/',
@@ -51,5 +57,4 @@ router.delete(
   logActivity('eliminar', 'paralelo'),
   ParaleloController.eliminar
 );
-
 export default router;

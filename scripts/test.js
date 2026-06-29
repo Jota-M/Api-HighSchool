@@ -446,124 +446,216 @@
 
 // crearPermisosAsignacionDocente();
 
+// import { pool } from '../src/db/pool.js';
+
+// async function verNotificaciones() {
+//     const client = await pool.connect();
+
+//     try {
+//         console.log('\n🔎 CONSULTANDO NOTIFICACIONES\n');
+
+//         // =============================================
+//         // 1. NOTIFICACIONES PRINCIPALES
+//         // =============================================
+//         const notifs = await client.query(`
+//       SELECT 
+//         ni.id,
+//         ni.codigo,
+//         ni.titulo,
+//         ni.mensaje,
+//         ni.tipo,
+//         ni.prioridad,
+//         ni.audiencia,
+//         ni.estado,
+//         ni.created_at,
+//         ni.enviada_en,
+
+//         ni.creada_por AS creado_por_id,
+
+//         u.username AS creado_por_username
+
+//       FROM notificacion_institucional ni
+//       LEFT JOIN usuarios u 
+//         ON u.id = ni.creada_por
+
+//       WHERE ni.codigo IN (
+//         'NOTIF-2026-000034',
+//         'NOTIF-2026-000035'
+//       )
+
+//       ORDER BY ni.codigo;
+//     `);
+
+//         console.log('\n📌 NOTIFICACIONES:');
+//         console.table(notifs.rows);
+
+//         // =============================================
+//         // 2. DESTINATARIOS
+//         // =============================================
+//         const dest = await client.query(`
+//       SELECT 
+//         ni.codigo,
+//         nd.usuario_id,
+
+//         u.username AS destinatario,
+
+//         nd.rol_destinatario,
+//         nd.canal,
+//         nd.estado_envio,
+//         nd.enviado_en,
+//         nd.leido,
+//         nd.leido_en
+
+//       FROM notificacion_institucional ni
+//       JOIN notificacion_destinatario nd 
+//         ON nd.notificacion_id = ni.id
+
+//       LEFT JOIN usuarios u 
+//         ON u.id = nd.usuario_id
+
+//       WHERE ni.codigo IN (
+//         'NOTIF-2026-000034',
+//         'NOTIF-2026-000035'
+//       )
+
+//       ORDER BY ni.codigo, nd.id;
+//     `);
+
+//         console.log('\n📬 DESTINATARIOS:');
+//         console.table(dest.rows);
+
+//         // =============================================
+//         // 3. RESUMEN GENERAL
+//         // =============================================
+//         const resumen = await client.query(`
+//       SELECT 
+//         ni.codigo,
+
+//         COUNT(*) AS total_destinatarios,
+
+//         COUNT(*) FILTER (WHERE nd.estado_envio = 'enviado') AS enviados,
+//         COUNT(*) FILTER (WHERE nd.estado_envio = 'fallido') AS fallidos,
+//         COUNT(*) FILTER (WHERE nd.estado_envio = 'pendiente') AS pendientes,
+
+//         COUNT(*) FILTER (WHERE nd.leido = true) AS leidos
+
+//       FROM notificacion_institucional ni
+//       JOIN notificacion_destinatario nd 
+//         ON nd.notificacion_id = ni.id
+
+//       WHERE ni.codigo IN (
+//         'NOTIF-2026-000034',
+//         'NOTIF-2026-000035'
+//       )
+
+//       GROUP BY ni.codigo
+//       ORDER BY ni.codigo;
+//     `);
+
+//         console.log('\n📊 RESUMEN:');
+//         console.table(resumen.rows);
+
+//         console.log('\n✅ CONSULTA FINALIZADA CORRECTAMENTE\n');
+
+//     } catch (err) {
+//         console.error('\n💥 ERROR:', err.message);
+//         console.error(err.stack);
+//     } finally {
+//         client.release();
+//         await pool.end();
+//     }
+// }
+
+// // verNotificaciones();
+
+// import { pool } from '../src/db/pool.js';
+
+// async function consultarMensualidadesEstudiante(estudianteId) {
+//   const client = await pool.connect();
+
+//   try {
+//     console.log(`\n🧾 CONSULTANDO MENSUALIDADES DEL ESTUDIANTE ${estudianteId}\n`);
+
+//     const { rows } = await client.query(
+//       `
+//             SELECT
+//                 m.id AS mensualidad_id,
+//                 m.estado,
+//                 m.mes_correspondiente,
+//                 m.numero_cuota,
+
+//                 pm.id AS pago_id,
+//                 pm.metodo_pago,
+//                 pm.qr_estado,
+//                 pm.fecha_pago,
+//                 pm.transaccion_id,
+//                 pm.monto_pagado
+
+//             FROM mensualidad m
+
+//             LEFT JOIN pago_mensualidad pm
+//                 ON pm.mensualidad_id = m.id
+
+//             WHERE m.matricula_id IN (
+//                 SELECT id
+//                 FROM matricula
+//                 WHERE estudiante_id = $1
+//             )
+
+//             ORDER BY m.numero_cuota;
+//             `,
+//       [estudianteId]
+//     );
+
+//     console.log('═══════════════════════════════════════');
+//     console.table(rows);
+//     console.log(`✅ Registros encontrados: ${rows.length}`);
+//     console.log('═══════════════════════════════════════\n');
+
+//   } catch (error) {
+//     console.error('\n💥 Error:', error.message);
+//   } finally {
+//     client.release();
+//     await pool.end();
+//   }
+// }
+
+// // Reemplazá por el ID del estudiante que quieras consultar
+// consultarMensualidadesEstudiante(12);
 import { pool } from '../src/db/pool.js';
 
-async function verNotificaciones() {
-    const client = await pool.connect();
+async function actualizarMensualidadesVencidas() {
+  const client = await pool.connect();
 
-    try {
-        console.log('\n🔎 CONSULTANDO NOTIFICACIONES\n');
+  try {
+    console.log('\n📅 ACTUALIZANDO MENSUALIDADES VENCIDAS\n');
 
-        // =============================================
-        // 1. NOTIFICACIONES PRINCIPALES
-        // =============================================
-        const notifs = await client.query(`
-      SELECT 
-        ni.id,
-        ni.codigo,
-        ni.titulo,
-        ni.mensaje,
-        ni.tipo,
-        ni.prioridad,
-        ni.audiencia,
-        ni.estado,
-        ni.created_at,
-        ni.enviada_en,
+    await client.query('BEGIN');
 
-        ni.creada_por AS creado_por_id,
+    const { rowCount } = await client.query(
+      `
+            UPDATE mensualidad
+            SET
+                estado = 'vencido',
+                updated_at = CURRENT_TIMESTAMP
+            WHERE estado = 'pendiente'
+              AND fecha_vencimiento < CURRENT_DATE;
+            `
+    );
 
-        u.username AS creado_por_username
+    await client.query('COMMIT');
 
-      FROM notificacion_institucional ni
-      LEFT JOIN usuarios u 
-        ON u.id = ni.creada_por
+    console.log('═══════════════════════════════════════');
+    console.log(`✅ Mensualidades actualizadas: ${rowCount}`);
+    console.log('═══════════════════════════════════════\n');
 
-      WHERE ni.codigo IN (
-        'NOTIF-2026-000034',
-        'NOTIF-2026-000035'
-      )
-
-      ORDER BY ni.codigo;
-    `);
-
-        console.log('\n📌 NOTIFICACIONES:');
-        console.table(notifs.rows);
-
-        // =============================================
-        // 2. DESTINATARIOS
-        // =============================================
-        const dest = await client.query(`
-      SELECT 
-        ni.codigo,
-        nd.usuario_id,
-
-        u.username AS destinatario,
-
-        nd.rol_destinatario,
-        nd.canal,
-        nd.estado_envio,
-        nd.enviado_en,
-        nd.leido,
-        nd.leido_en
-
-      FROM notificacion_institucional ni
-      JOIN notificacion_destinatario nd 
-        ON nd.notificacion_id = ni.id
-
-      LEFT JOIN usuarios u 
-        ON u.id = nd.usuario_id
-
-      WHERE ni.codigo IN (
-        'NOTIF-2026-000034',
-        'NOTIF-2026-000035'
-      )
-
-      ORDER BY ni.codigo, nd.id;
-    `);
-
-        console.log('\n📬 DESTINATARIOS:');
-        console.table(dest.rows);
-
-        // =============================================
-        // 3. RESUMEN GENERAL
-        // =============================================
-        const resumen = await client.query(`
-      SELECT 
-        ni.codigo,
-
-        COUNT(*) AS total_destinatarios,
-
-        COUNT(*) FILTER (WHERE nd.estado_envio = 'enviado') AS enviados,
-        COUNT(*) FILTER (WHERE nd.estado_envio = 'fallido') AS fallidos,
-        COUNT(*) FILTER (WHERE nd.estado_envio = 'pendiente') AS pendientes,
-
-        COUNT(*) FILTER (WHERE nd.leido = true) AS leidos
-
-      FROM notificacion_institucional ni
-      JOIN notificacion_destinatario nd 
-        ON nd.notificacion_id = ni.id
-
-      WHERE ni.codigo IN (
-        'NOTIF-2026-000034',
-        'NOTIF-2026-000035'
-      )
-
-      GROUP BY ni.codigo
-      ORDER BY ni.codigo;
-    `);
-
-        console.log('\n📊 RESUMEN:');
-        console.table(resumen.rows);
-
-        console.log('\n✅ CONSULTA FINALIZADA CORRECTAMENTE\n');
-
-    } catch (err) {
-        console.error('\n💥 ERROR:', err.message);
-        console.error(err.stack);
-    } finally {
-        client.release();
-        await pool.end();
-    }
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('\n💥 Error:', error.message);
+  } finally {
+    client.release();
+    await pool.end();
+  }
 }
 
-verNotificaciones();
+actualizarMensualidadesVencidas();

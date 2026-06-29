@@ -12,7 +12,7 @@ class CostoMensualidadController {
   static async listar(req, res) {
     try {
       const { periodo_academico_id, nivel_academico_id, activo } = req.query;
-      
+
       const costos = await CostoMensualidad.findAll({
         periodo_academico_id: periodo_academico_id ? parseInt(periodo_academico_id) : undefined,
         nivel_academico_id: nivel_academico_id ? parseInt(nivel_academico_id) : undefined,
@@ -202,7 +202,7 @@ class MensualidadController {
   static async listar(req, res) {
     try {
       const { periodo_academico_id, estado, grado_id, paralelo_id, mes_correspondiente } = req.query;
-      
+
       const mensualidades = await Mensualidad.findAll({
         periodo_academico_id: periodo_academico_id ? parseInt(periodo_academico_id) : undefined,
         estado,
@@ -213,7 +213,7 @@ class MensualidadController {
 
       res.json({
         success: true,
-        data: { 
+        data: {
           mensualidades,
           total: mensualidades.length
         }
@@ -264,7 +264,7 @@ class MensualidadController {
 
       res.json({
         success: true,
-        data: { 
+        data: {
           mensualidades,
           total: mensualidades.length
         }
@@ -383,14 +383,14 @@ class MensualidadController {
   static async listarVencidas(req, res) {
     try {
       const { periodo_academico_id } = req.query;
-      
+
       const mensualidades = await Mensualidad.findVencidas(
         periodo_academico_id ? parseInt(periodo_academico_id) : null
       );
 
       res.json({
         success: true,
-        data: { 
+        data: {
           mensualidades,
           total: mensualidades.length
         }
@@ -412,17 +412,17 @@ class PagoMensualidadController {
   // GET /api/pago-mensualidad - Listar pagos
   static async listar(req, res) {
     try {
-      const { 
-        page, 
-        limit, 
-        estudiante_id, 
+      const {
+        page,
+        limit,
+        estudiante_id,
         periodo_academico_id,
         metodo_pago,
         fecha_desde,
         fecha_hasta,
         anulado
       } = req.query;
-      
+
       const result = await PagoMensualidad.findAll({
         page: parseInt(page) || 1,
         limit: parseInt(limit) || 50,
@@ -476,7 +476,7 @@ class PagoMensualidadController {
   // POST /api/pago-mensualidad - Registrar pago
   static async crear(req, res) {
     const client = await pool.connect();
-    
+
     try {
       await client.query('BEGIN');
 
@@ -485,7 +485,7 @@ class PagoMensualidadController {
 
       // Validar que la mensualidad existe y no está pagada/anulada
       const mensualidad = await Mensualidad.findById(data.mensualidad_id);
-      
+
       if (!mensualidad) {
         await client.query('ROLLBACK');
         return res.status(404).json({
@@ -677,7 +677,7 @@ class PagoAnualCompletoController {
   // POST /api/pago-anual - Registrar pago anual
   static async registrar(req, res) {
     const client = await pool.connect();
-    
+
     try {
       await client.query('BEGIN');
 
@@ -697,7 +697,7 @@ class PagoAnualCompletoController {
       // Verificar que haya mensualidades pendientes
       const mensualidades = await Mensualidad.findByMatricula(data.matricula_id);
       const pendientes = mensualidades.filter(m => m.estado === 'pendiente' || m.estado === 'vencido');
-      
+
       if (pendientes.length === 0) {
         await client.query('ROLLBACK');
         return res.status(400).json({
@@ -745,7 +745,7 @@ class PagoAnualCompletoController {
   static async listar(req, res) {
     try {
       const { periodo_academico_id, metodo_pago } = req.query;
-      
+
       const pagos = await PagoAnualCompleto.findAll({
         periodo_academico_id: periodo_academico_id ? parseInt(periodo_academico_id) : undefined,
         metodo_pago
@@ -753,7 +753,7 @@ class PagoAnualCompletoController {
 
       res.json({
         success: true,
-        data: { 
+        data: {
           pagos,
           total: pagos.length
         }
@@ -802,7 +802,7 @@ class ReportesPagosController {
   static async estadoEstudiantes(req, res) {
     try {
       const { periodo_academico_id, grado_id, paralelo_id } = req.query;
-      
+
       // 🔧 CORREGIDO: Construir query directamente sin usar la vista problemática
       let whereConditions = ['mat.estado = \'activo\'', 'mat.deleted_at IS NULL'];
       let queryParams = [];
@@ -891,7 +891,7 @@ class ReportesPagosController {
 
       res.json({
         success: true,
-        data: { 
+        data: {
           estudiantes: result.rows,
           total: result.rows.length
         }
@@ -909,7 +909,7 @@ class ReportesPagosController {
   static async ingresos(req, res) {
     try {
       const { periodo_academico_id, mes_inicio, mes_fin } = req.query;
-      
+
       let whereConditions = ['NOT pm.anulado'];
       let queryParams = [];
       let paramCounter = 1;
@@ -962,7 +962,7 @@ class ReportesPagosController {
 
       res.json({
         success: true,
-        data: { 
+        data: {
           ingresos: result.rows,
           totales,
           total_registros: result.rows.length
@@ -979,37 +979,37 @@ class ReportesPagosController {
 
   // GET /api/reportes-pagos/morosos - Lista de morosos
   static async morosos(req, res) {
-  try {
-    const { grado_id, paralelo_id, dias_mora_minimo, periodo_academico_id } = req.query;
-    
-    let whereConditions = [
-      'm.estado IN (\'pendiente\', \'vencido\')',
-      'm.fecha_vencimiento < CURRENT_DATE',
-      'mat.estado = \'activo\'',
-      'mat.deleted_at IS NULL'
-    ];
-    let queryParams = [];
-    let paramCounter = 1;
+    try {
+      const { grado_id, paralelo_id, dias_mora_minimo, periodo_academico_id } = req.query;
 
-    if (periodo_academico_id) {
-      whereConditions.push(`mat.periodo_academico_id = $${paramCounter}`);
-      queryParams.push(parseInt(periodo_academico_id));
-      paramCounter++;
-    }
+      let whereConditions = [
+        'm.estado IN (\'pendiente\', \'vencido\')',
+        'm.fecha_vencimiento < CURRENT_DATE',
+        'mat.estado = \'activo\'',
+        'mat.deleted_at IS NULL'
+      ];
+      let queryParams = [];
+      let paramCounter = 1;
 
-    if (grado_id) {
-      whereConditions.push(`g.id = $${paramCounter}`);
-      queryParams.push(parseInt(grado_id));
-      paramCounter++;
-    }
+      if (periodo_academico_id) {
+        whereConditions.push(`mat.periodo_academico_id = $${paramCounter}`);
+        queryParams.push(parseInt(periodo_academico_id));
+        paramCounter++;
+      }
 
-    if (paralelo_id) {
-      whereConditions.push(`p.id = $${paramCounter}`);
-      queryParams.push(parseInt(paralelo_id));
-      paramCounter++;
-    }
+      if (grado_id) {
+        whereConditions.push(`g.id = $${paramCounter}`);
+        queryParams.push(parseInt(grado_id));
+        paramCounter++;
+      }
 
-    const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
+      if (paralelo_id) {
+        whereConditions.push(`p.id = $${paramCounter}`);
+        queryParams.push(parseInt(paralelo_id));
+        paramCounter++;
+      }
+
+      const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
       // 🔧 QUERY CORREGIDA: Calcular días de mora directamente
       const query = `
@@ -1061,7 +1061,7 @@ class ReportesPagosController {
 
       res.json({
         success: true,
-        data: { 
+        data: {
           morosos: result.rows,
           total_morosos: result.rows.length,
           deuda_total: deudaTotal
@@ -1106,7 +1106,7 @@ class ReportesPagosController {
             AND mat.estado = 'activo'
             AND mat.deleted_at IS NULL
         `, [periodo_academico_id]),
-        
+
         pool.query(`
           SELECT COUNT(*) as total, COALESCE(SUM(monto_final), 0) as monto_total
           FROM mensualidad m
@@ -1114,7 +1114,7 @@ class ReportesPagosController {
           WHERE mat.periodo_academico_id = $1
             AND mat.deleted_at IS NULL
         `, [periodo_academico_id]),
-        
+
         pool.query(`
           SELECT COUNT(*) as total, COALESCE(SUM(monto_final), 0) as monto_total
           FROM mensualidad m
@@ -1123,7 +1123,7 @@ class ReportesPagosController {
             AND m.estado = 'pagado'
             AND mat.deleted_at IS NULL
         `, [periodo_academico_id]),
-        
+
         pool.query(`
           SELECT COUNT(*) as total, COALESCE(SUM(monto_final), 0) as monto_total
           FROM mensualidad m
@@ -1132,7 +1132,7 @@ class ReportesPagosController {
             AND m.estado = 'pendiente'
             AND mat.deleted_at IS NULL
         `, [periodo_academico_id]),
-        
+
         pool.query(`
           SELECT COUNT(*) as total, COALESCE(SUM(monto_final), 0) as monto_total
           FROM mensualidad m
@@ -1142,7 +1142,7 @@ class ReportesPagosController {
             AND m.fecha_vencimiento < CURRENT_DATE
             AND mat.deleted_at IS NULL
         `, [periodo_academico_id]),
-        
+
         pool.query(`
           SELECT COALESCE(SUM(pm.monto_pagado), 0) as total
           FROM pago_mensualidad pm
@@ -1151,7 +1151,7 @@ class ReportesPagosController {
           WHERE mat.periodo_academico_id = $1
             AND NOT pm.anulado
         `, [periodo_academico_id]),
-        
+
         pool.query(`
           SELECT pm.metodo_pago, COUNT(*) as cantidad, COALESCE(SUM(pm.monto_pagado), 0) as total
           FROM pago_mensualidad pm
@@ -1161,7 +1161,7 @@ class ReportesPagosController {
             AND NOT pm.anulado
           GROUP BY pm.metodo_pago
         `, [periodo_academico_id]),
-        
+
         pool.query(`
           SELECT COUNT(*) as total, COALESCE(SUM(monto_pagado), 0) as monto_total
           FROM pago_anual_completo pac
@@ -1193,7 +1193,7 @@ class ReportesPagosController {
           monto_total: parseFloat(pagosAnuales.rows[0].monto_total)
         },
         porcentajes: {
-          mensualidades_pagadas: totalMensualidades.rows[0].total > 0 
+          mensualidades_pagadas: totalMensualidades.rows[0].total > 0
             ? (mensualidadesPagadas.rows[0].total / totalMensualidades.rows[0].total * 100).toFixed(2)
             : 0,
           mensualidades_pendientes: totalMensualidades.rows[0].total > 0
@@ -1242,7 +1242,7 @@ class PagoMultipleController {
    */
   static async registrarMultiple(req, res) {
     const client = await pool.connect();
-    
+
     try {
       await client.query('BEGIN');
 
@@ -1291,7 +1291,7 @@ class PagoMultipleController {
 
         // Obtener mensualidad
         const mensualidad = await Mensualidad.findById(mensualidad_id);
-        
+
         if (!mensualidad) {
           await client.query('ROLLBACK');
           return res.status(404).json({
@@ -1340,7 +1340,7 @@ class PagoMultipleController {
 
       // Registrar pagos
       const pagosRegistrados = [];
-      
+
       for (const item of mensualidadesValidadas) {
         const pago = await PagoMensualidad.create({
           mensualidad_id: item.mensualidad_id,
@@ -1415,7 +1415,7 @@ class PagoMultipleController {
   static async obtenerResumenPendientes(req, res) {
     try {
       const { matricula_ids } = req.query; // Array de IDs separados por coma
-      
+
       if (!matricula_ids) {
         return res.status(400).json({
           success: false,
@@ -1424,7 +1424,7 @@ class PagoMultipleController {
       }
 
       const idsArray = matricula_ids.split(',').map(id => parseInt(id));
-      
+
       const query = `
         SELECT 
           m.id as mensualidad_id,
@@ -1533,7 +1533,7 @@ class PagoDistribuidoController {
    */
   static async registrarPagoDistribuido(req, res) {
     const client = await pool.connect();
-    
+
     try {
       await client.query('BEGIN');
 
@@ -1584,7 +1584,7 @@ class PagoDistribuidoController {
           AND m.estado IN ('pendiente', 'vencido', 'pagado_parcial')
         ORDER BY m.numero_cuota ASC
       `;
-      
+
       const resultMens = await client.query(queryMensualidades, [matricula_id]);
       const mensualidades = resultMens.rows;
 
@@ -1655,7 +1655,7 @@ class PagoDistribuidoController {
           RETURNING *
         `;
 
-        const observacionesPago = observaciones 
+        const observacionesPago = observaciones
           ? `${observaciones} | ${item.es_pago_completo ? 'Pago completo' : 'Pago parcial'} - ${item.mes_correspondiente}`
           : `${item.es_pago_completo ? 'Pago completo' : 'Pago parcial'} - ${item.mes_correspondiente}`;
 
@@ -1779,7 +1779,7 @@ class PagoDistribuidoController {
           AND m.estado IN ('pendiente', 'vencido', 'pagado_parcial')
         ORDER BY m.numero_cuota ASC
       `;
-      
+
       const result = await pool.query(query, [matricula_id]);
       const mensualidades = result.rows;
 
@@ -1852,13 +1852,168 @@ class PagoDistribuidoController {
     }
   }
 }
+class AjusteCostoMensualidadController {
+  // POST /api/ajuste-costo/previsualizar
+  static async previsualizar(req, res) {
+    try {
+      const { periodo_academico_id, nivel_academico_id, nuevo_monto_base, fecha_corte, grado_id, paralelo_id } = req.body;
 
-export { 
+      if (!periodo_academico_id || !nivel_academico_id || !nuevo_monto_base) {
+        return res.status(400).json({
+          success: false,
+          message: 'periodo_academico_id, nivel_academico_id y nuevo_monto_base son requeridos'
+        });
+      }
+
+      const resultado = await AjusteCostoMensualidad.previsualizar({
+        periodo_academico_id,
+        nivel_academico_id,
+        nuevo_monto_base,
+        fecha_corte: fecha_corte || new Date().toISOString().slice(0, 10),
+        grado_id,
+        paralelo_id
+      });
+
+      res.json({ success: true, data: resultado });
+    } catch (error) {
+      console.error('Error al previsualizar ajuste de costo:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al previsualizar ajuste de costo: ' + error.message
+      });
+    }
+  }
+
+  // POST /api/ajuste-costo/aplicar
+  static async aplicar(req, res) {
+    const client = await pool.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      const { periodo_academico_id, nivel_academico_id, nuevo_monto_base, fecha_corte, grado_id, paralelo_id } = req.body;
+
+      if (!periodo_academico_id || !nivel_academico_id || !nuevo_monto_base) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'periodo_academico_id, nivel_academico_id y nuevo_monto_base son requeridos'
+        });
+      }
+
+      const fechaCorte = fecha_corte || new Date().toISOString().slice(0, 10);
+
+      let whereConditions = [
+        `mat.periodo_academico_id = $1`,
+        `g.nivel_academico_id = $2`,
+        `mat.estado = 'activo'`,
+        `mat.deleted_at IS NULL`,
+        `m.estado IN ('pendiente', 'pagado_parcial')`,
+        `m.fecha_vencimiento >= $3::date`
+      ];
+      let queryParams = [periodo_academico_id, nivel_academico_id, fechaCorte];
+      let paramCounter = 4;
+
+      if (grado_id) {
+        whereConditions.push(`g.id = $${paramCounter}`);
+        queryParams.push(grado_id);
+        paramCounter++;
+      }
+
+      if (paralelo_id) {
+        whereConditions.push(`p.id = $${paramCounter}`);
+        queryParams.push(paralelo_id);
+        paramCounter++;
+      }
+
+      const whereClause = whereConditions.join(' AND ');
+
+      // 1. Bloquear y traer exactamente las filas que se van a tocar (evita carreras con pagos simultáneos)
+      const selectQuery = `
+        SELECT m.id, m.monto_final as monto_anterior, mat.porcentaje_beca
+        FROM mensualidad m
+        INNER JOIN matricula mat ON m.matricula_id = mat.id
+        INNER JOIN paralelo p ON mat.paralelo_id = p.id
+        INNER JOIN grado g ON p.grado_id = g.id
+        WHERE ${whereClause}
+        FOR UPDATE OF m
+      `;
+
+      const selectResult = await client.query(selectQuery, queryParams);
+
+      if (selectResult.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({
+          success: false,
+          message: 'No hay cuotas no vencidas que cumplan los filtros para ajustar'
+        });
+      }
+
+      const ids = selectResult.rows.map(r => r.id);
+
+      // 2. Actualizar solo esas filas, recalculando con la beca de cada matrícula
+      const updateQuery = `
+        UPDATE mensualidad m
+        SET monto_final = ROUND($1::numeric * (1 - COALESCE(mat.porcentaje_beca, 0) / 100), 2),
+            updated_at = CURRENT_TIMESTAMP
+        FROM matricula mat
+        WHERE m.matricula_id = mat.id
+          AND m.id = ANY($2::int[])
+        RETURNING m.id, m.numero_cuota, m.mes_correspondiente, m.monto_final
+      `;
+
+      const updateResult = await client.query(updateQuery, [nuevo_monto_base, ids]);
+
+      const montoAnteriorTotal = selectResult.rows.reduce((acc, r) => acc + parseFloat(r.monto_anterior), 0);
+      const montoNuevoTotal = updateResult.rows.reduce((acc, r) => acc + parseFloat(r.monto_final), 0);
+
+      const reqInfo = RequestInfo.extract(req);
+      await ActividadLog.create({
+        usuario_id: req.user.id,
+        accion: 'actualizar',
+        modulo: 'ajuste_costo_mensualidad',
+        tabla_afectada: 'mensualidad',
+        registro_id: null,
+        datos_anteriores: { monto_total: montoAnteriorTotal, cantidad: selectResult.rows.length },
+        datos_nuevos: { monto_total: montoNuevoTotal, cantidad: updateResult.rows.length, nuevo_monto_base, fecha_corte: fechaCorte },
+        ip_address: reqInfo.ip,
+        user_agent: reqInfo.userAgent,
+        resultado: 'exitoso',
+        mensaje: `Ajuste de costo aplicado a ${updateResult.rows.length} cuota(s) no vencidas: Bs ${montoAnteriorTotal.toFixed(2)} → Bs ${montoNuevoTotal.toFixed(2)}`
+      });
+
+      await client.query('COMMIT');
+
+      res.json({
+        success: true,
+        message: `Ajuste aplicado a ${updateResult.rows.length} cuota(s)`,
+        data: {
+          total_cuotas: updateResult.rows.length,
+          monto_anterior_total: montoAnteriorTotal,
+          monto_nuevo_total: montoNuevoTotal,
+          cuotas: updateResult.rows
+        }
+      });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      console.error('Error al aplicar ajuste de costo:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al aplicar ajuste de costo: ' + error.message
+      });
+    } finally {
+      client.release();
+    }
+  }
+}
+
+export {
   CostoMensualidadController,
-  MensualidadController, 
+  MensualidadController,
   PagoMensualidadController,
   PagoAnualCompletoController,
   ReportesPagosController,
   PagoMultipleController,
-  PagoDistribuidoController  
+  PagoDistribuidoController,
+  AjusteCostoMensualidadController
 }

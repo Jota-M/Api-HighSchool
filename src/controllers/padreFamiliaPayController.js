@@ -145,7 +145,7 @@ class PadreFamiliaPayController {
          SET estado = 'vencido', updated_at = CURRENT_TIMESTAMP
          WHERE estado = 'pendiente'
            AND fecha_vencimiento < CURRENT_DATE
-           AND CURRENT_DATE > DATE_TRUNC('month', fecha_vencimiento) + INTERVAL '1 month' + INTERVAL '14 days'
+           AND fecha_vencimiento < CURRENT_DATE
            AND matricula_id IN (
              SELECT id FROM matricula
              WHERE estudiante_id = $1
@@ -193,10 +193,10 @@ class PadreFamiliaPayController {
 
       const mensualidades = result.rows;
       const resumen = {
-        total:      mensualidades.length,
-        pagadas:    mensualidades.filter(m => m.estado === 'pagado').length,
+        total: mensualidades.length,
+        pagadas: mensualidades.filter(m => m.estado === 'pagado').length,
         pendientes: mensualidades.filter(m => m.estado === 'pendiente').length,
-        vencidas:   mensualidades.filter(m => m.estado === 'vencido').length,
+        vencidas: mensualidades.filter(m => m.estado === 'vencido').length,
         monto_pendiente: mensualidades
           .filter(m => m.estado !== 'pagado')
           .reduce((acc, m) => acc + parseFloat(m.monto_final), 0),
@@ -276,32 +276,32 @@ class PadreFamiliaPayController {
         const p = resultQRExistente.rows[0];
         await client.query('ROLLBACK');
         return res.json({
-          success:      true,
+          success: true,
           qr_existente: true,
-          message:      'Ya existe un QR activo para esta mensualidad',
+          message: 'Ya existe un QR activo para esta mensualidad',
           data: {
-            imagenQr:      p.qr_image_url,
-            alias:         p.qr_data,
+            imagenQr: p.qr_image_url,
+            alias: p.qr_data,
             qr_expiracion: p.qr_expiracion,
-            monto:         p.monto_pagado,
-            mes:           mensualidad.mes_correspondiente,
-            estudiante:    `${mensualidad.nombres} ${mensualidad.apellidos}`,
+            monto: p.monto_pagado,
+            mes: mensualidad.mes_correspondiente,
+            estudiante: `${mensualidad.nombres} ${mensualidad.apellidos}`,
           },
         });
       }
 
       // ── Preparar y llamar a SIP ──
-      const alias            = generarAlias(mensualidad_id);
-      const qrExpiracion     = calcularExpiracionQR(mensualidad.fecha_vencimiento);
+      const alias = generarAlias(mensualidad_id);
+      const qrExpiracion = calcularExpiracionQR(mensualidad.fecha_vencimiento);
       const fechaVencimiento = formatearFechaSIP(qrExpiracion);
-      const glosa            = truncarGlosa(`Mens ${mensualidad.mes_correspondiente} ${mensualidad.apellidos}`);
-      const callbackUrl      = `${CALLBACK_URL}/api/sip/callback`;
+      const glosa = truncarGlosa(`Mens ${mensualidad.mes_correspondiente} ${mensualidad.apellidos}`);
+      const callbackUrl = `${CALLBACK_URL}/api/sip/callback`;
 
       let qrData;
       try {
         qrData = await generarQR({
           alias,
-          monto:  parseFloat(mensualidad.monto_final),
+          monto: parseFloat(mensualidad.monto_final),
           moneda: 'BOB',
           glosa,
           fechaVencimiento,
@@ -350,14 +350,14 @@ class PadreFamiliaPayController {
         success: true,
         message: 'QR generado exitosamente',
         data: {
-          imagenQr:        qrData.imagenQr,
+          imagenQr: qrData.imagenQr,
           alias,
-          monto:           mensualidad.monto_final,
-          mes:             mensualidad.mes_correspondiente,
-          estudiante:      `${mensualidad.nombres} ${mensualidad.apellidos}`,
-          bancoDestino:    qrData.bancoDestino,
-          cuentaDestino:   qrData.cuentaDestino,
-          qr_expiracion:   qrExpiracion,
+          monto: mensualidad.monto_final,
+          mes: mensualidad.mes_correspondiente,
+          estudiante: `${mensualidad.nombres} ${mensualidad.apellidos}`,
+          bancoDestino: qrData.bancoDestino,
+          cuentaDestino: qrData.cuentaDestino,
+          qr_expiracion: qrExpiracion,
           fechaVencimiento: qrData.fechaVencimiento,
         },
       });
@@ -375,15 +375,15 @@ class PadreFamiliaPayController {
   // 4. GET /padre-p/mensualidad/:mensualidad_id/estado-qr
   // ══════════════════════════════════════════════════════════════════════
   // ══════════════════════════════════════════════════════════════════════
-// 4. GET /padre-p/mensualidad/:mensualidad_id/estado-qr
-// CORREGIDO: solo lectura, no sincroniza con SIP
-// ══════════════════════════════════════════════════════════════════════
-static async verificarEstadoQR(req, res) {
-  try {
-    const { mensualidad_id } = req.params;
+  // 4. GET /padre-p/mensualidad/:mensualidad_id/estado-qr
+  // CORREGIDO: solo lectura, no sincroniza con SIP
+  // ══════════════════════════════════════════════════════════════════════
+  static async verificarEstadoQR(req, res) {
+    try {
+      const { mensualidad_id } = req.params;
 
-    const resultVerif = await pool.query(
-      `SELECT m.id, m.estado
+      const resultVerif = await pool.query(
+        `SELECT m.id, m.estado
        FROM mensualidad m
        INNER JOIN matricula mat      ON m.matricula_id      = mat.id
        INNER JOIN estudiante e       ON mat.estudiante_id   = e.id
@@ -391,62 +391,62 @@ static async verificarEstadoQR(req, res) {
        INNER JOIN padre_familia pf   ON et.padre_familia_id = pf.id
        WHERE m.id          = $1
          AND pf.usuario_id = $2`,
-      [mensualidad_id, req.user.id]
-    );
+        [mensualidad_id, req.user.id]
+      );
 
-    if (resultVerif.rows.length === 0) {
-      return res.status(403).json({ success: false, message: 'No tenés acceso a esta mensualidad' });
-    }
+      if (resultVerif.rows.length === 0) {
+        return res.status(403).json({ success: false, message: 'No tenés acceso a esta mensualidad' });
+      }
 
-    // Si ya está pagada en BD (el callback ya llegó), responder directo
-    if (resultVerif.rows[0].estado === 'pagado') {
-      return res.json({
-        success:  true,
-        estado:   'PAGADO',
-        message:  '¡Pago confirmado! Tu mensualidad está al día.',
-      });
-    }
+      // Si ya está pagada en BD (el callback ya llegó), responder directo
+      if (resultVerif.rows[0].estado === 'pagado') {
+        return res.json({
+          success: true,
+          estado: 'PAGADO',
+          message: '¡Pago confirmado! Tu mensualidad está al día.',
+        });
+      }
 
-    // Leer el QR activo desde BD local, sin consultar SIP
-    const resultPago = await pool.query(
-      `SELECT qr_data, qr_estado, qr_expiracion
+      // Leer el QR activo desde BD local, sin consultar SIP
+      const resultPago = await pool.query(
+        `SELECT qr_data, qr_estado, qr_expiracion
        FROM pago_mensualidad
        WHERE mensualidad_id = $1
          AND qr_estado      IS NOT NULL
          AND anulado        = false
        ORDER BY created_at DESC
        LIMIT 1`,
-      [mensualidad_id]
-    );
+        [mensualidad_id]
+      );
 
-    if (resultPago.rows.length === 0) {
-      return res.json({ success: true, estado: 'SIN_QR', message: 'No hay un QR generado para esta mensualidad' });
-    }
+      if (resultPago.rows.length === 0) {
+        return res.json({ success: true, estado: 'SIN_QR', message: 'No hay un QR generado para esta mensualidad' });
+      }
 
-    const { qr_estado, qr_expiracion } = resultPago.rows[0];
+      const { qr_estado, qr_expiracion } = resultPago.rows[0];
 
-    // QR expirado
-    if (new Date(qr_expiracion) < new Date()) {
+      // QR expirado
+      if (new Date(qr_expiracion) < new Date()) {
+        return res.json({
+          success: true,
+          estado: 'EXPIRADO',
+          qr_expiracion,
+          message: 'El QR expiró. Cancelalo y generá uno nuevo.',
+        });
+      }
+
       return res.json({
-        success:       true,
-        estado:        'EXPIRADO',
+        success: true,
+        estado: qr_estado.toUpperCase(), // 'GENERADO' → el frontend sigue mostrando el QR
         qr_expiracion,
-        message:       'El QR expiró. Cancelalo y generá uno nuevo.',
+        message: 'Pago pendiente. Escaneá el QR con la app de tu banco.',
       });
+
+    } catch (error) {
+      console.error('Error al verificar estado QR:', error);
+      return res.status(500).json({ success: false, message: 'Error al verificar el estado: ' + error.message });
     }
-
-    return res.json({
-      success:       true,
-      estado:        qr_estado.toUpperCase(), // 'GENERADO' → el frontend sigue mostrando el QR
-      qr_expiracion,
-      message:       'Pago pendiente. Escaneá el QR con la app de tu banco.',
-    });
-
-  } catch (error) {
-    console.error('Error al verificar estado QR:', error);
-    return res.status(500).json({ success: false, message: 'Error al verificar el estado: ' + error.message });
   }
-}
 
   // ══════════════════════════════════════════════════════════════════════
   // 5. DELETE /padre-p/mensualidad/:mensualidad_id/cancelar-qr
@@ -619,26 +619,26 @@ static async verificarEstadoQR(req, res) {
         });
       }
 
-      const montoTotal   = mensualidades.reduce((acc, m) => acc + parseFloat(m.monto_final), 0);
-      const matriculaId  = mensualidades[0].matricula_id;
-      const alias        = `multi-${matriculaId}-${Date.now()}`;
+      const montoTotal = mensualidades.reduce((acc, m) => acc + parseFloat(m.monto_final), 0);
+      const matriculaId = mensualidades[0].matricula_id;
+      const alias = `multi-${matriculaId}-${Date.now()}`;
       const mesesNombres = mensualidades.map(m => m.mes_correspondiente).join(', ');
-      const glosa        = truncarGlosa(`Pago ${mensualidades.length} meses`);
+      const glosa = truncarGlosa(`Pago ${mensualidades.length} meses`);
 
       const fechaMasProxima = mensualidades.reduce((min, m) => {
         const fecha = new Date(m.fecha_vencimiento);
         return fecha < min ? fecha : min;
       }, new Date(mensualidades[0].fecha_vencimiento));
 
-      const qrExpiracion      = calcularExpiracionQR(fechaMasProxima);
+      const qrExpiracion = calcularExpiracionQR(fechaMasProxima);
       const fechaVencimientoQR = formatearFechaSIP(qrExpiracion);
-      const callbackUrl        = `${CALLBACK_URL}/api/sip/callback`;
+      const callbackUrl = `${CALLBACK_URL}/api/sip/callback`;
 
       let qrData;
       try {
         qrData = await generarQR({
           alias,
-          monto:  montoTotal,
+          monto: montoTotal,
           moneda: 'BOB',
           glosa,
           fechaVencimiento: fechaVencimientoQR,
@@ -690,15 +690,15 @@ static async verificarEstadoQR(req, res) {
         success: true,
         message: `QR generado para ${mensualidades.length} mensualidades`,
         data: {
-          imagenQr:         qrData.imagenQr,
+          imagenQr: qrData.imagenQr,
           alias,
-          monto_total:      montoTotal,
-          meses:            mesesNombres,
-          cantidad_meses:   mensualidades.length,
-          estudiante:       `${mensualidades[0].nombres} ${mensualidades[0].apellidos}`,
-          bancoDestino:     qrData.bancoDestino,
-          cuentaDestino:    qrData.cuentaDestino,
-          qr_expiracion:    qrExpiracion,
+          monto_total: montoTotal,
+          meses: mesesNombres,
+          cantidad_meses: mensualidades.length,
+          estudiante: `${mensualidades[0].nombres} ${mensualidades[0].apellidos}`,
+          bancoDestino: qrData.bancoDestino,
+          cuentaDestino: qrData.cuentaDestino,
+          qr_expiracion: qrExpiracion,
           fechaVencimiento: qrData.fechaVencimiento,
           mensualidad_ids,
         },
@@ -717,19 +717,19 @@ static async verificarEstadoQR(req, res) {
   // 7. GET /padre-p/mensualidades/estado-qr-multiple
   // ══════════════════════════════════════════════════════════════════════
   // ══════════════════════════════════════════════════════════════════════
-// 7. GET /padre-p/mensualidades/estado-qr-multiple
-// CORREGIDO: solo lectura, no sincroniza con SIP
-// ══════════════════════════════════════════════════════════════════════
-static async verificarEstadoQRMultiple(req, res) {
-  try {
-    const { alias } = req.query;
+  // 7. GET /padre-p/mensualidades/estado-qr-multiple
+  // CORREGIDO: solo lectura, no sincroniza con SIP
+  // ══════════════════════════════════════════════════════════════════════
+  static async verificarEstadoQRMultiple(req, res) {
+    try {
+      const { alias } = req.query;
 
-    if (!alias) {
-      return res.status(400).json({ success: false, message: 'El alias es requerido' });
-    }
+      if (!alias) {
+        return res.status(400).json({ success: false, message: 'El alias es requerido' });
+      }
 
-    const resultPagos = await pool.query(
-      `SELECT
+      const resultPagos = await pool.query(
+        `SELECT
          pm.mensualidad_id,
          pm.qr_estado,
          pm.qr_expiracion,
@@ -741,100 +741,100 @@ static async verificarEstadoQRMultiple(req, res) {
        WHERE pm.qr_data = $1
          AND pm.anulado  = false
        ORDER BY pm.id ASC`,
-      [alias]
-    );
+        [alias]
+      );
 
-    if (resultPagos.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'No se encontró ningún QR con ese alias' });
-    }
+      if (resultPagos.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'No se encontró ningún QR con ese alias' });
+      }
 
-    const pagos = resultPagos.rows;
-    const mensualidades = pagos.map(p => ({
-      mensualidad_id: p.mensualidad_id,
-      mes:            p.mes_correspondiente,
-      monto:          p.monto_pagado,
-      estado:         p.mensualidad_estado,
-    }));
+      const pagos = resultPagos.rows;
+      const mensualidades = pagos.map(p => ({
+        mensualidad_id: p.mensualidad_id,
+        mes: p.mes_correspondiente,
+        monto: p.monto_pagado,
+        estado: p.mensualidad_estado,
+      }));
 
-    // El callback ya actualizó la BD — solo leer el estado real
-    const todosPagados = pagos.every(
-      p => p.qr_estado === 'pagado' || p.mensualidad_estado === 'pagado'
-    );
+      // El callback ya actualizó la BD — solo leer el estado real
+      const todosPagados = pagos.every(
+        p => p.qr_estado === 'pagado' || p.mensualidad_estado === 'pagado'
+      );
 
-    if (todosPagados) {
-      return res.json({
-        success:       true,
-        estado:        'PAGADO',
-        message:       `¡${pagos.length} mensualidades pagadas! Tu cuenta está al día.`,
-        mensualidades,
-      });
-    }
+      if (todosPagados) {
+        return res.json({
+          success: true,
+          estado: 'PAGADO',
+          message: `¡${pagos.length} mensualidades pagadas! Tu cuenta está al día.`,
+          mensualidades,
+        });
+      }
 
-    const qr_expiracion = pagos[0].qr_expiracion;
+      const qr_expiracion = pagos[0].qr_expiracion;
 
-    if (new Date(qr_expiracion) < new Date()) {
+      if (new Date(qr_expiracion) < new Date()) {
+        return res.json({
+          success: true,
+          estado: 'EXPIRADO',
+          qr_expiracion,
+          message: 'El QR expiró. Cancelalo y generá uno nuevo.',
+          mensualidades,
+        });
+      }
+
       return res.json({
         success: true,
-        estado:  'EXPIRADO',
+        estado: 'PENDIENTE',
         qr_expiracion,
-        message: 'El QR expiró. Cancelalo y generá uno nuevo.',
+        message: 'Pago pendiente. Escaneá el QR con la app de tu banco.',
         mensualidades,
       });
+
+    } catch (error) {
+      console.error('Error al verificar estado QR múltiple:', error);
+      return res.status(500).json({ success: false, message: 'Error al verificar el estado: ' + error.message });
     }
-
-    return res.json({
-      success:       true,
-      estado:        'PENDIENTE',
-      qr_expiracion,
-      message:       'Pago pendiente. Escaneá el QR con la app de tu banco.',
-      mensualidades,
-    });
-
-  } catch (error) {
-    console.error('Error al verificar estado QR múltiple:', error);
-    return res.status(500).json({ success: false, message: 'Error al verificar el estado: ' + error.message });
   }
-}
-// ══════════════════════════════════════════════════════════════════════
-// 8. POST /padre-p/mensualidades/generar-qr-familiar
-// QR único para mensualidades de MÚLTIPLES hijos del mismo padre
-// ══════════════════════════════════════════════════════════════════════
-static async generarQRFamiliar(req, res) {
-  const client = await pool.connect();
+  // ══════════════════════════════════════════════════════════════════════
+  // 8. POST /padre-p/mensualidades/generar-qr-familiar
+  // QR único para mensualidades de MÚLTIPLES hijos del mismo padre
+  // ══════════════════════════════════════════════════════════════════════
+  static async generarQRFamiliar(req, res) {
+    const client = await pool.connect();
 
-  try {
-    await client.query('BEGIN');
+    try {
+      await client.query('BEGIN');
 
-    const { mensualidad_ids } = req.body;
-    // mensualidad_ids: [{ estudiante_id, mensualidad_id }, ...]
+      const { mensualidad_ids } = req.body;
+      // mensualidad_ids: [{ estudiante_id, mensualidad_id }, ...]
 
-    if (!mensualidad_ids || !Array.isArray(mensualidad_ids) || mensualidad_ids.length < 2) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({
-        success: false,
-        message: 'Debés seleccionar al menos 2 mensualidades de distintos hijos',
-      });
-    }
+      if (!mensualidad_ids || !Array.isArray(mensualidad_ids) || mensualidad_ids.length < 2) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Debés seleccionar al menos 2 mensualidades de distintos hijos',
+        });
+      }
 
-    // Obtener padre_familia_id
-    const resultPadre = await client.query(
-      `SELECT id FROM padre_familia WHERE usuario_id = $1 AND deleted_at IS NULL`,
-      [req.user.id]
-    );
+      // Obtener padre_familia_id
+      const resultPadre = await client.query(
+        `SELECT id FROM padre_familia WHERE usuario_id = $1 AND deleted_at IS NULL`,
+        [req.user.id]
+      );
 
-    if (resultPadre.rows.length === 0) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ success: false, message: 'Perfil de padre no encontrado' });
-    }
+      if (resultPadre.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ success: false, message: 'Perfil de padre no encontrado' });
+      }
 
-    const padreFamiliaId = resultPadre.rows[0].id;
-    const ids = mensualidad_ids.map(item =>
-      typeof item === 'object' ? item.mensualidad_id : item
-    );
+      const padreFamiliaId = resultPadre.rows[0].id;
+      const ids = mensualidad_ids.map(item =>
+        typeof item === 'object' ? item.mensualidad_id : item
+      );
 
-    // Verificar que TODAS las mensualidades pertenecen a hijos de este padre
-    const resultMensualidades = await client.query(
-      `SELECT
+      // Verificar que TODAS las mensualidades pertenecen a hijos de este padre
+      const resultMensualidades = await client.query(
+        `SELECT
          m.id, m.estado, m.monto_final, m.mes_correspondiente,
          m.fecha_vencimiento, m.matricula_id,
          e.id AS estudiante_id, e.nombres, e.apellidos,
@@ -853,141 +853,141 @@ static async generarQRFamiliar(req, res) {
          AND et.padre_familia_id = $2
          AND mat.estado = 'activo'
          AND mat.deleted_at IS NULL`,
-      [ids, padreFamiliaId]
-    );
+        [ids, padreFamiliaId]
+      );
 
-    if (resultMensualidades.rows.length !== ids.length) {
-      await client.query('ROLLBACK');
-      return res.status(403).json({
-        success: false,
-        message: 'Algunas mensualidades no existen o no pertenecen a tus hijos',
-      });
-    }
+      if (resultMensualidades.rows.length !== ids.length) {
+        await client.query('ROLLBACK');
+        return res.status(403).json({
+          success: false,
+          message: 'Algunas mensualidades no existen o no pertenecen a tus hijos',
+        });
+      }
 
-    const mensualidades = resultMensualidades.rows;
+      const mensualidades = resultMensualidades.rows;
 
-    // Validar estados
-    const noValidas = mensualidades.filter(m => !['pendiente', 'vencido'].includes(m.estado));
-    if (noValidas.length > 0) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({
-        success: false,
-        message: `Mensualidades no pagables: ${noValidas.map(m => `${m.nombres} - ${m.mes_correspondiente}`).join(', ')}`,
-      });
-    }
+      // Validar estados
+      const noValidas = mensualidades.filter(m => !['pendiente', 'vencido'].includes(m.estado));
+      if (noValidas.length > 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `Mensualidades no pagables: ${noValidas.map(m => `${m.nombres} - ${m.mes_correspondiente}`).join(', ')}`,
+        });
+      }
 
-    const conQRActivo = mensualidades.filter(m => m.tiene_qr_activo);
-    if (conQRActivo.length > 0) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({
-        success: false,
-        message: `Ya tienen QR activo: ${conQRActivo.map(m => `${m.nombres} - ${m.mes_correspondiente}`).join(', ')}. Cancelalos primero.`,
-      });
-    }
+      const conQRActivo = mensualidades.filter(m => m.tiene_qr_activo);
+      if (conQRActivo.length > 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `Ya tienen QR activo: ${conQRActivo.map(m => `${m.nombres} - ${m.mes_correspondiente}`).join(', ')}. Cancelalos primero.`,
+        });
+      }
 
-    // Calcular monto total y alias familiar
-    const montoTotal = mensualidades.reduce((acc, m) => acc + parseFloat(m.monto_final), 0);
-    const alias = `familiar-${padreFamiliaId}-${Date.now()}`;
-    const glosa = truncarGlosa(`Pago familiar ${mensualidades.length} meses`);
+      // Calcular monto total y alias familiar
+      const montoTotal = mensualidades.reduce((acc, m) => acc + parseFloat(m.monto_final), 0);
+      const alias = `familiar-${padreFamiliaId}-${Date.now()}`;
+      const glosa = truncarGlosa(`Pago familiar ${mensualidades.length} meses`);
 
-    const fechaMasProxima = mensualidades.reduce((min, m) => {
-      const fecha = new Date(m.fecha_vencimiento);
-      return fecha < min ? fecha : min;
-    }, new Date(mensualidades[0].fecha_vencimiento));
+      const fechaMasProxima = mensualidades.reduce((min, m) => {
+        const fecha = new Date(m.fecha_vencimiento);
+        return fecha < min ? fecha : min;
+      }, new Date(mensualidades[0].fecha_vencimiento));
 
-    const qrExpiracion = calcularExpiracionQR(fechaMasProxima);
-    const fechaVencimientoQR = formatearFechaSIP(qrExpiracion);
-    const callbackUrl = `${CALLBACK_URL}/api/sip/callback`;
+      const qrExpiracion = calcularExpiracionQR(fechaMasProxima);
+      const fechaVencimientoQR = formatearFechaSIP(qrExpiracion);
+      const callbackUrl = `${CALLBACK_URL}/api/sip/callback`;
 
-    // Generar QR en SIP — un solo QR con el monto total de todos los hijos
-    let qrData;
-    try {
-      qrData = await generarQR({
-        alias,
-        monto: montoTotal,
-        moneda: 'BOB',
-        glosa,
-        fechaVencimiento: fechaVencimientoQR,
-        callbackUrl,
-      });
-    } catch (sipError) {
-      await client.query('ROLLBACK');
-      console.error('[GenerarQRFamiliar] Error de SIP:', sipError.message);
-      return res.status(502).json({
-        success: false,
-        message: 'No se pudo generar el QR. Intentá más tarde.',
-        detalle: sipError.message,
-      });
-    }
+      // Generar QR en SIP — un solo QR con el monto total de todos los hijos
+      let qrData;
+      try {
+        qrData = await generarQR({
+          alias,
+          monto: montoTotal,
+          moneda: 'BOB',
+          glosa,
+          fechaVencimiento: fechaVencimientoQR,
+          callbackUrl,
+        });
+      } catch (sipError) {
+        await client.query('ROLLBACK');
+        console.error('[GenerarQRFamiliar] Error de SIP:', sipError.message);
+        return res.status(502).json({
+          success: false,
+          message: 'No se pudo generar el QR. Intentá más tarde.',
+          detalle: sipError.message,
+        });
+      }
 
-    // Insertar un pago_mensualidad por cada mensualidad — mismo alias
-    // El callback los encontrará todos por alias y los marcará pagados
-    const nombresHijos = [...new Set(mensualidades.map(m => m.nombres.split(' ')[0]))].join(' y ');
-    
-    for (const mensualidad of mensualidades) {
-      const codigoPago = `QR-FAM-${Date.now()}-${mensualidad.id}`;
-      await client.query(
-        `INSERT INTO pago_mensualidad (
+      // Insertar un pago_mensualidad por cada mensualidad — mismo alias
+      // El callback los encontrará todos por alias y los marcará pagados
+      const nombresHijos = [...new Set(mensualidades.map(m => m.nombres.split(' ')[0]))].join(' y ');
+
+      for (const mensualidad of mensualidades) {
+        const codigoPago = `QR-FAM-${Date.now()}-${mensualidad.id}`;
+        await client.query(
+          `INSERT INTO pago_mensualidad (
            codigo_pago, mensualidad_id, monto_pagado, metodo_pago,
            registrado_por, qr_data, qr_image_url, qr_expiracion,
            transaccion_id, qr_estado, observaciones
          ) VALUES ($1, $2, $3, 'qr', $4, $5, $6, $7, $8, 'generado', $9)`,
-        [
-          codigoPago,
-          mensualidad.id,
-          parseFloat(mensualidad.monto_final),
-          req.user.id,
-          alias,
-          qrData.imagenQr,
-          qrExpiracion,
-          qrData.idQr,
-          `QR familiar: ${mensualidad.nombres} ${mensualidad.mes_correspondiente} | IdQr SIP: ${qrData.idQr}`,
-        ]
-      );
-    }
-
-    await client.query('COMMIT');
-
-    // Agrupar resumen por hijo para la respuesta
-    const resumenPorHijo = mensualidades.reduce((acc, m) => {
-      const key = m.estudiante_id;
-      if (!acc[key]) {
-        acc[key] = { nombres: m.nombres, apellidos: m.apellidos, meses: [], monto: 0 };
+          [
+            codigoPago,
+            mensualidad.id,
+            parseFloat(mensualidad.monto_final),
+            req.user.id,
+            alias,
+            qrData.imagenQr,
+            qrExpiracion,
+            qrData.idQr,
+            `QR familiar: ${mensualidad.nombres} ${mensualidad.mes_correspondiente} | IdQr SIP: ${qrData.idQr}`,
+          ]
+        );
       }
-      acc[key].meses.push(m.mes_correspondiente);
-      acc[key].monto += parseFloat(m.monto_final);
-      return acc;
-    }, {});
 
-    console.log(
-      `[GenerarQRFamiliar] ✅ QR familiar generado. ` +
-      `Hijos: ${nombresHijos} | Alias: ${alias} | Monto: Bs ${montoTotal.toFixed(2)}`
-    );
+      await client.query('COMMIT');
 
-    return res.status(201).json({
-      success: true,
-      message: `QR familiar generado para ${mensualidades.length} mensualidades`,
-      data: {
-        imagenQr:       qrData.imagenQr,
-        alias,
-        monto_total:    montoTotal,
-        cantidad_meses: mensualidades.length,
-        hijos:          Object.values(resumenPorHijo),
-        bancoDestino:   qrData.bancoDestino,
-        cuentaDestino:  qrData.cuentaDestino,
-        qr_expiracion:  qrExpiracion,
-        mensualidad_ids: ids,
-      },
-    });
+      // Agrupar resumen por hijo para la respuesta
+      const resumenPorHijo = mensualidades.reduce((acc, m) => {
+        const key = m.estudiante_id;
+        if (!acc[key]) {
+          acc[key] = { nombres: m.nombres, apellidos: m.apellidos, meses: [], monto: 0 };
+        }
+        acc[key].meses.push(m.mes_correspondiente);
+        acc[key].monto += parseFloat(m.monto_final);
+        return acc;
+      }, {});
 
-  } catch (error) {
-    await client.query('ROLLBACK');
-    console.error('Error al generar QR familiar:', error);
-    return res.status(500).json({ success: false, message: 'Error al generar el QR: ' + error.message });
-  } finally {
-    client.release();
+      console.log(
+        `[GenerarQRFamiliar] ✅ QR familiar generado. ` +
+        `Hijos: ${nombresHijos} | Alias: ${alias} | Monto: Bs ${montoTotal.toFixed(2)}`
+      );
+
+      return res.status(201).json({
+        success: true,
+        message: `QR familiar generado para ${mensualidades.length} mensualidades`,
+        data: {
+          imagenQr: qrData.imagenQr,
+          alias,
+          monto_total: montoTotal,
+          cantidad_meses: mensualidades.length,
+          hijos: Object.values(resumenPorHijo),
+          bancoDestino: qrData.bancoDestino,
+          cuentaDestino: qrData.cuentaDestino,
+          qr_expiracion: qrExpiracion,
+          mensualidad_ids: ids,
+        },
+      });
+
+    } catch (error) {
+      await client.query('ROLLBACK');
+      console.error('Error al generar QR familiar:', error);
+      return res.status(500).json({ success: false, message: 'Error al generar el QR: ' + error.message });
+    } finally {
+      client.release();
+    }
   }
-}
 }
 
 export default PadreFamiliaPayController;

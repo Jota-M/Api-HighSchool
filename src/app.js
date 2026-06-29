@@ -62,6 +62,7 @@ import backupRoutes from './routes/backupRoutes.js';
 import whatsappRoutes from './routes/whatsappRoutes.js';
 import sipCallbackRoutes from './routes/sipCallbackRoutes.js';
 import padrePagoRoutes from './routes/padrePagoRoutes.js';
+import solicitudFacturaRoutes from './routes/solicitudFacturaRoutes.js';
 
 // Modelo para limpieza de sesiones
 import Sesion from './models/Sesion.js';
@@ -88,16 +89,22 @@ app.use(morgan('dev'));
 // ------------------------------
 // CORS configurado para frontend (DEBE IR ANTES DE TODO)
 // ------------------------------
+// ------------------------------
+// CORS configurado para frontend (DEBE IR ANTES DE TODO)
+// ------------------------------
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', 'https://uepclavozdecristo.site');
+  const origin = req.headers.origin;
+  const allowed = ['http://localhost:3001', 'http://localhost:3000', 'https://uepclavozdecristo.site', 'https://www.uepclavozdecristo.site'];
+
+  if (!origin || allowed.includes(origin) || origin.startsWith('chrome-extension://')) {
+    res.header('Access-Control-Allow-Origin', origin || '*');
+  }
+
   res.header('Access-Control-Allow-Credentials', 'true');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
 
-  // Manejar preflight requests
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(204);
-  }
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
 
@@ -181,6 +188,7 @@ app.use('/periodo-academico', periodoAcademicoRoutes);
 app.use('/turno', turnoRoutes);
 app.use('/nivel-academico', nivelAcademicoRoutes);
 app.use('/grado', gradoRoutes);
+
 app.use('/paralelo', paraleloRoutes);
 app.use('/area-conocimiento', areaConocimientoRoutes);
 app.use('/materias', materiasRoutes);
@@ -233,6 +241,7 @@ app.use('/whatsapp', whatsappRoutes);
 // PADRE PAGOS
 // ------------------------------
 app.use('/padre-p', padrePagoRoutes);
+app.use('/solicitudes-factura', solicitudFacturaRoutes);
 
 // ------------------------------
 // Rutas API antiguas

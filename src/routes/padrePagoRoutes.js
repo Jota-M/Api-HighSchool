@@ -5,6 +5,8 @@
 import express from 'express';
 import PadreFamiliaPayController from '../controllers/padreFamiliaPayController.js';
 import { authenticate } from '../Middlewares/auth.js';
+import SolicitudFacturaController from '../controllers/solicitudFacturaController.js';
+import PagoMensualidadPDFPadreController from '../controllers/pagoMensualidadPDFPadreController.js';
 
 const router = express.Router();
 
@@ -70,5 +72,22 @@ router.post(
   '/mensualidades/generar-qr-familiar',
   PadreFamiliaPayController.generarQRFamiliar
 );
- 
+// ── Solicitar factura ─────────────────────────────────────────────────────────
+// POST /api/padre/pago/:pago_id/solicitar-factura
+router.post(
+  '/pago/:pago_id/solicitar-factura',
+  SolicitudFacturaController.solicitarFactura
+);
+
+// ── Ver mis solicitudes ───────────────────────────────────────────────────────
+// GET /api/padre/solicitudes-factura
+router.get(
+  '/solicitudes-factura',
+  SolicitudFacturaController.listarSolicitudesPadre
+);
+router.get(
+  '/pago/:id/recibo-pdf',
+  authenticate,
+  PagoMensualidadPDFPadreController.generarReciboPadre
+);
 export default router;

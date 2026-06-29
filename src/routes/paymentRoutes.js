@@ -1,6 +1,6 @@
 // routes/paymentRoutes.js
 import express from 'express';
-import { 
+import {
   CostoMensualidadController,
   MensualidadController,
   PagoMensualidadController,
@@ -8,6 +8,7 @@ import {
   ReportesPagosController,
   PagoMultipleController,
   PagoDistribuidoController,
+  AjusteCostoMensualidadController
 } from '../controllers/paymentControllers.js';
 import PagoMensualidadPDFController from '../controllers/pagoMensualidadPDFController.js';
 import ReportesPagosControlleer from '../controllers/reportesPagosController.js';
@@ -59,6 +60,27 @@ router.delete(
   logActivity('eliminar', 'costo_mensualidad'),
   CostoMensualidadController.eliminar
 );
+
+// =============================================
+// RUTAS: AJUSTE COSTO MENSUALIDAD
+// =============================================
+
+// POST /api/ajuste-costo/previsualizar - Previsualizar ajuste de costo
+router.post(
+  '/ajuste-costo/previsualizar',
+  authorize('costo_mensualidad.actualizar'),
+  logActivity('previsualizar', 'ajuste_costo_mensualidad'),
+  AjusteCostoMensualidadController.previsualizar
+);
+
+// POST /api/ajuste-costo/aplicar - Aplicar ajuste de costo
+router.post(
+  '/ajuste-costo/aplicar',
+  authorize('costo_mensualidad.actualizar'),
+  logActivity('actualizar', 'ajuste_costo_mensualidad'),
+  AjusteCostoMensualidadController.aplicar
+);
+
 
 // =============================================
 // RUTAS: MENSUALIDAD
@@ -257,7 +279,7 @@ router.get(
   authorize('reportes_pagos.ver_estado_estudiante'),
   ReportesPagosControlleer.exportarEstadoCuenta
 );
- 
+
 // GET /api/reportes-pagos/exportar/morosos
 // ?periodo_academico_id=X&formato=pdf|excel&dias_mora_minimo=Y
 router.get(
@@ -265,7 +287,7 @@ router.get(
   authorize('reportes_pagos.ver_morosos'),
   ReportesPagosControlleer.exportarMorosos
 );
- 
+
 // GET /api/reportes-pagos/exportar/ingresos
 // ?periodo_academico_id=X&formato=pdf|excel&mes_inicio=Y&mes_fin=Z
 router.get(
@@ -273,5 +295,5 @@ router.get(
   authorize('reportes_pagos.ver_ingresos'),
   ReportesPagosControlleer.exportarIngresos
 );
- 
+
 export default router;

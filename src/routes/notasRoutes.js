@@ -15,6 +15,9 @@ import { authenticate, authorize, logActivity } from '../Middlewares/auth.js';
 
 const router = express.Router();
 
+router.get('/sie/ping', authenticate, (req, res) => {
+  res.json({ success: true, docente: req.user?.username || 'activo' });
+});
 router.use(authenticate);
 
 // Montar rutas de adjuntos y rúbrica (foto, PDF, publicar, rúbrica, vista pública)
@@ -309,6 +312,13 @@ router.patch(
   authorize('notas.cerrar'),
   logActivity('cerrar_periodo', 'notas'),
   NotasCalculoController.cerrarPeriodo
+);
+
+// Exportar notas para subir al SIE
+router.get(
+  '/exportar-sie',
+  authorize('notas.boletin'),
+  NotasCalculoController.exportarParaSIE
 );
 
 /**
