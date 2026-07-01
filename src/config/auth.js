@@ -31,8 +31,8 @@ const config = {
     'refresh-secret-cambiar',
 
   // ⏱️ DURACIÓN DE TOKENS
-  jwtExpiration: '5h',        // ✅ Access Token dura 5 horas
-  jwtRefreshExpiration: '30d', // Refresh Token dura 30 días
+  jwtExpiration: '15m',
+  jwtRefreshExpiration: '8h',
 
   // Seguridad de contraseñas
   bcryptRounds: 12,

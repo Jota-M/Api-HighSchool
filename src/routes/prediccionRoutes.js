@@ -29,7 +29,9 @@ router.get(
  *   - nota_estimada_final (0-100)
  *   - factores_riesgo y factores_positivos
  *   - analisis Gemini con explicacion + recomendaciones + recursos_sugeridos
- *   - notificacion_alerta (si Gemini detectó urgencia)
+ *   - notificacion_alerta (si Gemini detectó urgencia, alerta interna al docente)
+ *   - candidato_notificacion_padre (si nivel_riesgo === 'critico'; el envío al
+ *     padre NO es automático, requiere confirmación vía POST /notificar-padre)
  */
 router.post(
   '/estudiante',
@@ -49,11 +51,34 @@ router.post(
  *   - promedio_clase, asistencia_promedio, pct_riesgo
  *   - estudiantes[]: detalle individual con nombre_completo
  *   - analisis Gemini con diagnostico + acciones grupales + alerta_institucional
+ *   - candidatos_notificacion_padre[] (estudiantes críticos; igual que en
+ *     /estudiante, el envío requiere confirmación vía POST /notificar-padre)
  */
 router.post(
   '/clase',
   authorize('notas.leer'),
   PrediccionController.predecirClase
+);
+
+/**
+ * POST /api/prediccion/notificar-padre
+ * Dispara la notificación de riesgo al padre/madre — SOLO cuando el docente
+ * confirma desde el modal. No se llama automáticamente desde /estudiante ni /clase.
+ *
+ * Body: {
+ *   matricula_id, materia_nombre, nota_estimada, asistencia_pct,
+ *   recomendaciones?: string[],
+ *   asignacion_docente_id?  // opcional, habilita verificación de pertenencia
+ * }
+ *
+ * TODO: si tenés un permiso más específico tipo 'notificaciones.crear',
+ * cambiá el authorize() de acá — por ahora reusa 'notas.leer' igual que
+ * /estudiante y /clase.
+ */
+router.post(
+  '/notificar-padre',
+  authorize('notas.leer'),
+  PrediccionController.notificarPadre
 );
 
 /**
@@ -117,7 +142,7 @@ router.post(
 router.post(
   '/simular/optimo',
   authorize('notas.leer'),
-  PrediccionController.simularOptimo   
+  PrediccionController.simularOptimo
 );
 /**
  * POST /api/prediccion/simular/optimo/v2

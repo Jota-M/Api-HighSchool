@@ -1,8 +1,9 @@
-// controllers/prediccionController.js — v8.4
+// controllers/prediccionController.js — v8.5
 //
-// Cambios respecto a v8.3:
-//   - predecirClase: catch detecta error del guard anti-duplicados y devuelve 409
-//     en lugar de 500, para que el frontend lo distinga de un error real.
+// Cambios respecto a v8.4:
+//   - Nuevo método notificarPadre: dispara la notificación al padre SOLO
+//     cuando el docente confirma desde el modal (POST /api/prediccion/notificar-padre).
+//     Antes este envío era automático dentro de mlService al detectar riesgo crítico.
 
 import ActividadLog from '../models/actividadLog.js';
 import RequestInfo from '../utils/requestInfo.js';
@@ -13,6 +14,7 @@ import {
   simularEscenarios as mlSimularEscenarios,
   simularOptimo as mlSimularOptimo,
   simularOptimoV2 as simularOptimoV2,
+  notificarPadreManual as mlNotificarPadre,
   verificarMLService,
 } from '../services/ml-service.js';
 import { pool } from '../db/pool.js';
@@ -163,6 +165,87 @@ class PrediccionController {
       }
 
       return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+
+
+  /**
+   * POST /api/prediccion/notificar-padre
+   *
+   * Dispara el envío de la alerta de riesgo al padre/madre. Pensado para
+   * usarse SOLO cuando el docente confirma desde el modal — no se llama
+   * automáticamente desde predecirEstudiante / predecirClase.
+   *
+   * Body: {
+   *   matricula_id, materia_nombre, nota_estimada, asistencia_pct,
+   *   recomendaciones?: string[],
+   *   asignacion_docente_id?  // opcional, habilita la verificación de pertenencia
+   * }
+   */
+  static async notificarPadre(req, res) {
+    try {
+      const {
+        matricula_id, materia_nombre, nota_estimada, asistencia_pct,
+        recomendaciones, asignacion_docente_id,
+      } = req.body;
+
+      if (!matricula_id || !materia_nombre) {
+        return res.status(400).json({
+          success: false,
+          message: 'Se requieren: matricula_id, materia_nombre',
+        });
+      }
+
+      // Verificación de pertenencia — si mandan asignacion_docente_id, confirmamos
+      // que la matrícula corresponde a un estudiante de ese paralelo/asignación
+      // antes de notificar. Evita que se notifique a un padre fuera del contexto
+      // del docente que confirmó el modal.
+      if (asignacion_docente_id) {
+        const { rows } = await pool.query(
+          `SELECT 1
+           FROM matricula m
+           JOIN asignacion_docente ad ON ad.paralelo_id = m.paralelo_id
+           WHERE m.id = $1 AND ad.id = $2
+           LIMIT 1`,
+          [parseInt(matricula_id), parseInt(asignacion_docente_id)]
+        );
+        if (rows.length === 0) {
+          return res.status(403).json({
+            success: false,
+            message: 'La matrícula no corresponde a esta asignación docente',
+          });
+        }
+      }
+
+      const resultado = await mlNotificarPadre({
+        matriculaId: parseInt(matricula_id),
+        materiaNombre: materia_nombre,
+        notaEstimada: nota_estimada != null ? parseFloat(nota_estimada) : null,
+        asistenciaPct: asistencia_pct != null ? parseFloat(asistencia_pct) : null,
+        recomendaciones: Array.isArray(recomendaciones) ? recomendaciones : [],
+      });
+
+      const reqInfo = RequestInfo.extract(req);
+      await ActividadLog.create({
+        usuario_id: req.user?.id,
+        accion: 'notificar_padre_ml',
+        modulo: 'prediccion',
+        tabla_afectada: null,
+        datos_nuevos: { matricula_id, materia_nombre, nota_estimada, asistencia_pct },
+        ip_address: reqInfo.ip,
+        user_agent: reqInfo.userAgent,
+        resultado: 'exitoso',
+        mensaje: `Notificación manual al padre — matrícula ${matricula_id}`,
+      }).catch(err => console.warn('[prediccionController] ActividadLog falló:', err.message));
+
+      return res.json({ success: true, data: resultado });
+
+    } catch (err) {
+      console.error('[prediccionController] notificarPadre:', err.message);
+      return res.status(500).json({
+        success: false,
+        message: err.message || 'No se pudo enviar la notificación al padre',
+      });
     }
   }
 

@@ -59,14 +59,14 @@ class AuthController {
       });
     } catch (error) {
       console.error('Error en registro:', error);
-      
+
       if (error.constraint === 'usuarios_username_key') {
         return res.status(409).json({
           success: false,
           message: 'El nombre de usuario ya está en uso.'
         });
       }
-      
+
       if (error.constraint === 'usuarios_email_key') {
         return res.status(409).json({
           success: false,
@@ -116,7 +116,7 @@ class AuthController {
 
       if (!passwordValida) {
         await Usuario.incrementFailedAttempts(usuario.id);
-        
+
         const reqInfo = RequestInfo.extract(req);
         await ActividadLog.create({
           usuario_id: usuario.id,
@@ -149,7 +149,7 @@ class AuthController {
 
       // Crear sesión
       const reqInfo = RequestInfo.extract(req);
-      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 días
+      const expiresAt = new Date(Date.now() + 8 * 60 * 60 * 1000);
 
       await Sesion.create({
         usuario_id: usuario.id,
@@ -181,7 +181,7 @@ class AuthController {
       res.cookie('access_token', accessToken, authConfig.cookieOptions);
       res.cookie('refresh_token', refreshToken, {
         ...authConfig.cookieOptions,
-        maxAge: 7 * 24 * 60 * 60 * 1000 // 7 días
+        maxAge: 8 * 60 * 60 * 1000 // 8 horas
       });
 
       res.json({
@@ -213,7 +213,7 @@ class AuthController {
 
       if (token) {
         await Sesion.delete(token);
-        
+
         if (req.user) {
           const reqInfo = RequestInfo.extract(req);
           await ActividadLog.create({
@@ -272,7 +272,7 @@ class AuthController {
         username: decoded.username
       });
 
-      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      const expiresAt = new Date(Date.now() + 8 * 60 * 60 * 1000);
       await Sesion.updateToken(sesion.id, newAccessToken, expiresAt);
 
       res.cookie('access_token', newAccessToken, authConfig.cookieOptions);
@@ -284,7 +284,7 @@ class AuthController {
     } catch (error) {
       res.clearCookie('access_token');
       res.clearCookie('refresh_token');
-      
+
       res.status(401).json({
         success: false,
         message: 'Error al renovar token: ' + error.message

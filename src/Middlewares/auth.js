@@ -3,6 +3,7 @@ import Sesion from '../models/Sesion.js';
 import Usuario from '../models/Usuario.js';
 import ActividadLog from '../models/actividadLog.js';
 import RequestInfo from '../utils/requestInfo.js';
+import authConfig from '../config/auth.js';
 
 
 // Middleware para verificar autenticación
@@ -85,11 +86,10 @@ const handleTokenRefresh = async (req, res, next) => {
     });
 
     // Actualizar sesión con nuevo token
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const expiresAt = new Date(Date.now() + 8 * 60 * 60 * 1000);
     await Sesion.updateToken(sesion.id, newAccessToken, expiresAt);
 
     // Establecer nueva cookie
-    const authConfig = require('../config/auth');
     res.cookie('access_token', newAccessToken, authConfig.cookieOptions);
 
     // Cargar usuario y continuar

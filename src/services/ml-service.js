@@ -933,6 +933,11 @@ export async function predecirEstudiante({
     const resultado = await response.json();
 
     let notificacion_alerta = null;
+    // candidato_notificacion_padre — antes acá se disparaba automáticamente
+    // onAlertaMLPadre. Ahora solo arma el candidato; el envío real lo hace
+    // notificarPadreManual() cuando el docente confirma desde el modal.
+    let candidato_notificacion_padre = null;
+
     if (incluirGemini && resultado.analisis?.alerta_urgente === true) {
       const nivelRiesgo = resultado.modelo?.nivel_riesgo || 'alto';
       const notaEstimada = resultado.modelo?.nota_estimada_final ?? 0;
@@ -968,6 +973,7 @@ export async function predecirEstudiante({
         `${encabezado} (${meta.periodo_nombre}).\n\n` +
         `${lineasDetalle}${contextoGemini}\n\nSe recomienda intervención inmediata.`;
 
+      // Alerta interna al docente: esta sigue siendo automática, no involucra al padre.
       notificacion_alerta = await crearAlertaDocente({
         asignacionDocenteId, estudianteId,
         materia: materia.materia_nombre,
@@ -976,19 +982,23 @@ export async function predecirEstudiante({
       });
 
       if (nivelRiesgo === 'critico') {
-        notificacionesAcademicas.onAlertaMLPadre({
+        candidato_notificacion_padre = {
           matricula_id: matriculaId,
+          estudiante_id: estudianteId,
+          nombre_estudiante: nombreEstudiante,
           materia_nombre: materia.materia_nombre,
+          nivel_riesgo: nivelRiesgo,
           nota_estimada: notaEstimada,
           asistencia_pct: asistenciaPct,
           recomendaciones: resultado.analisis?.recomendaciones ?? [],
-        }).catch(err =>
-          console.error('[mlService] onAlertaMLPadre (estudiante) falló:', err.message)
-        );
+          mensaje_sugerido: contextoGemini
+            ? resultado.analisis.mensaje_alerta
+            : null,
+        };
       }
     }
 
-    return { ...resultado, _meta: meta, notificacion_alerta };
+    return { ...resultado, _meta: meta, notificacion_alerta, candidato_notificacion_padre };
 
   } finally {
     client.release();
@@ -1110,6 +1120,12 @@ export async function analizarClase({
       matriculas.map(m => [m.estudiante_id, parseInt(m.matricula_id)]),
     );
 
+    // candidatos_notificacion_padre — antes acá se disparaba automáticamente
+    // onAlertaMLPadre por cada estudiante crítico. Ahora solo se arma la
+    // lista de candidatos para que el frontend muestre el modal de selección
+    // y el docente decida a quién notificar (vía notificarPadreManual()).
+    let candidatos_notificacion_padre = [];
+
     if (incluirGemini && resultado.analisis?.alerta_institucional === true) {
       const estudiantesCriticos = (resultado.estudiantes ?? [])
         .filter(e => e.nivel_riesgo === 'critico' || e.nivel_riesgo === 'alto')
@@ -1120,6 +1136,7 @@ export async function analizarClase({
           asistencia_pct: e.asistencia_pct,
         }));
 
+      // Alerta interna al docente/institución: sigue siendo automática.
       await crearAlertaInstitucional({
         asignacionDocenteId,
         materia: materia.materia_nombre,
@@ -1130,23 +1147,23 @@ export async function analizarClase({
         estudiantesCriticos,
       });
 
-      const estudiantesParaNotificarPadres = (resultado.estudiantes ?? [])
-        .filter(e => e.nivel_riesgo === 'critico');
-
-      for (const est of estudiantesParaNotificarPadres) {
-        const matriculaId = matriculasMap[est.estudiante_id];
-        if (!matriculaId) continue;
-
-        notificacionesAcademicas.onAlertaMLPadre({
-          matricula_id: matriculaId,
-          materia_nombre: materia.materia_nombre,
-          nota_estimada: est.nota_estimada_final,
-          asistencia_pct: est.asistencia_pct,
-          recomendaciones: resultado.analisis?.recomendaciones ?? [],
-        }).catch(err =>
-          console.error(`[mlService] onAlertaMLPadre (clase, est ${est.estudiante_id}) falló:`, err.message)
-        );
-      }
+      candidatos_notificacion_padre = (resultado.estudiantes ?? [])
+        .filter(e => e.nivel_riesgo === 'critico')
+        .map(est => {
+          const matriculaId = matriculasMap[est.estudiante_id];
+          if (!matriculaId) return null;
+          return {
+            matricula_id: matriculaId,
+            estudiante_id: est.estudiante_id,
+            nombre_completo: est.nombre_completo ?? nombresMap[est.estudiante_id] ?? `Estudiante ${est.estudiante_id}`,
+            materia_nombre: materia.materia_nombre,
+            nivel_riesgo: est.nivel_riesgo,
+            nota_estimada: est.nota_estimada_final,
+            asistencia_pct: est.asistencia_pct,
+            recomendaciones: resultado.analisis?.recomendaciones ?? [],
+          };
+        })
+        .filter(Boolean);
     }
 
     return {
@@ -1156,12 +1173,37 @@ export async function analizarClase({
         matricula_id: matriculasMap[est.estudiante_id] ?? null,
         nombre_completo: nombresMap[est.estudiante_id] || `Estudiante ${est.estudiante_id}`,
       })),
+      candidatos_notificacion_padre,
     };
 
   } finally {
     procesandoClase.delete(cacheKey); // FIX #1 — siempre liberar el guard
     client.release();
   }
+}
+
+
+// ─────────────────────────────────────────────────────────────
+// notificarPadreManual — dispara el envío al padre SOLO cuando
+// el docente confirma desde el modal (botón "Notificar al padre").
+// Recibe el candidato tal cual lo devolvió predecirEstudiante /
+// analizarClase en candidato(s)_notificacion_padre.
+// ─────────────────────────────────────────────────────────────
+
+export async function notificarPadreManual({
+  matriculaId, materiaNombre, notaEstimada, asistenciaPct, recomendaciones = [],
+}) {
+  if (!matriculaId || !materiaNombre) {
+    throw new Error('notificarPadreManual: matriculaId y materiaNombre son obligatorios');
+  }
+
+  return notificacionesAcademicas.onAlertaMLPadre({
+    matricula_id: matriculaId,
+    materia_nombre: materiaNombre,
+    nota_estimada: notaEstimada,
+    asistencia_pct: asistenciaPct,
+    recomendaciones,
+  });
 }
 
 

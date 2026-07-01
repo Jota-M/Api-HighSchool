@@ -243,6 +243,10 @@ class WhatsAppService {
 
   // ─── Enviar texto plano ───────────────────────────────────────
   async _enviarTexto(numero, texto) {
+    if (!process.env.EVOLUTION_API_URL || !process.env.EVOLUTION_INSTANCE_TOKEN) {
+      throw new Error('Variables EVOLUTION_API_URL o EVOLUTION_INSTANCE_TOKEN no configuradas');
+    }
+
     const response = await fetch(`${process.env.EVOLUTION_API_URL}/send/text`, {
       method: 'POST',
       headers: {
@@ -256,7 +260,12 @@ class WhatsAppService {
     });
 
     const text = await response.text();
-    const data = JSON.parse(text);
+    let data = {};
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      data = { raw: text };
+    }
     if (!response.ok) {
       throw new Error(data.message || data.error || `HTTP ${response.status}`);
     }
@@ -265,6 +274,10 @@ class WhatsAppService {
 
   // ─── Enviar imagen con caption ────────────────────────────────
   async _enviarImagen(numero, imageUrl, caption = '') {
+    if (!process.env.EVOLUTION_API_URL || !process.env.EVOLUTION_INSTANCE_TOKEN) {
+      throw new Error('Variables EVOLUTION_API_URL o EVOLUTION_INSTANCE_TOKEN no configuradas');
+    }
+
     const response = await fetch(`${process.env.EVOLUTION_API_URL}/send/media`, {
       method: 'POST',
       headers: {
@@ -280,7 +293,12 @@ class WhatsAppService {
     });
 
     const text = await response.text();
-    const data = JSON.parse(text);
+    let data = {};
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      data = { raw: text };
+    }
     if (!response.ok) {
       throw new Error(data.message || data.error || `HTTP ${response.status}`);
     }

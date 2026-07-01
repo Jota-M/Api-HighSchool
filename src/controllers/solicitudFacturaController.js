@@ -5,6 +5,7 @@ import UploadFile from '../utils/uploadFile.js';
 import ActividadLog from '../models/actividadLog.js';
 import RequestInfo from '../utils/requestInfo.js';
 import { getAdminUser, getAdminWhatsapp } from '../utils/getAdminUser.js';
+import whatsappService from '../utils/whatsappService.js';
 
 // ─── helper: notificación interna ────────────────────────────────────────────
 // Usa la tabla notificacion_institucional + notificacion_destinatario
@@ -19,7 +20,7 @@ async function crearNotificacionInterna({ usuario_id, titulo, mensaje, referenci
          enviar_whatsapp, enviar_email, enviar_interno,
          estado, creada_por
        ) VALUES (
-         $1, $2, $3, 'solicitud_factura', 'alta',
+         $1, $2, $3, 'notificacion_individual', 'alta',
          'individual', $4,
          false, false, true,
          'enviada', $5
@@ -54,43 +55,11 @@ async function crearNotificacionInterna({ usuario_id, titulo, mensaje, referenci
 
 // ─── helper: WhatsApp vía Evolution API ──────────────────────────────────────
 async function enviarWhatsApp(numero, mensaje) {
-    try {
-        const EVOLUTION_URL = process.env.EVOLUTION_API_URL;
-        const EVOLUTION_KEY = process.env.EVOLUTION_API_KEY;
-        const EVOLUTION_INSTANCE = process.env.EVOLUTION_INSTANCE;
-
-        if (!EVOLUTION_URL || !EVOLUTION_KEY || !EVOLUTION_INSTANCE) {
-            console.warn('[WhatsApp] Variables de Evolution API no configuradas');
-            return false;
-        }
-
-        const response = await fetch(
-            `${EVOLUTION_URL}/message/sendText/${EVOLUTION_INSTANCE}`,
-            {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'apikey': EVOLUTION_KEY
-                },
-                body: JSON.stringify({
-                    number: numero,
-                    options: { delay: 1000 },
-                    textMessage: { text: mensaje }
-                })
-            }
-        );
-
-        if (!response.ok) {
-            const err = await response.text();
-            console.error('[WhatsApp] Error de Evolution API:', err);
-            return false;
-        }
-
-        return true;
-    } catch (error) {
-        console.error('[WhatsApp] Error al enviar mensaje:', error.message);
-        return false;
-    }
+    const resultado = await whatsappService.enviarMensaje({
+        to: numero,
+        body: mensaje
+    });
+    return resultado.success;
 }
 
 // ─── Controller ──────────────────────────────────────────────────────────────
