@@ -723,6 +723,407 @@ class ReportesPagosController {
     await excel.write(res);
     res.end();
   }
+
+  // ══════════════════════════════════════════════
+  // 4️⃣  REPORTE POR CURSOS
+  //     GET /api/reportes-pagos/exportar/cursos
+  //     ?periodo_academico_id=X&formato=pdf|excel
+  // ══════════════════════════════════════════════
+  static async exportarCursos(req, res) {
+    try {
+      const { periodo_academico_id, formato = 'pdf' } = req.query;
+      if (!periodo_academico_id)
+        return res.status(400).json({ success: false, message: 'Se requiere periodo_academico_id' });
+
+      const periodo = await ReportesPagosController._getPeriodo(periodo_academico_id);
+      if (!periodo)
+        return res.status(404).json({ success: false, message: 'Período no encontrado' });
+
+      const result = await pool.query(`
+        SELECT
+          g.id as grado_id,
+          g.nombre as grado,
+          p.id as paralelo_id,
+          p.nombre as paralelo,
+          COUNT(DISTINCT mat.id) as total_estudiantes,
+          COUNT(m.id) as total_mensualidades,
+          COUNT(CASE WHEN m.estado = 'pagado' THEN 1 END) as mensualidades_pagadas,
+          COUNT(CASE WHEN m.estado IN ('pendiente', 'vencido') THEN 1 END) as mensualidades_pendientes,
+          COUNT(CASE WHEN m.estado = 'vencido' THEN 1 END) as mensualidades_vencidas,
+          COALESCE(SUM(m.monto_final), 0) as monto_total,
+          COALESCE(SUM(CASE WHEN m.estado = 'pagado' THEN m.monto_final ELSE 0 END), 0) as monto_pagado,
+          COALESCE(SUM(CASE WHEN m.estado IN ('pendiente', 'vencido') THEN m.monto_final ELSE 0 END), 0) as monto_pendiente
+        FROM matricula mat
+        INNER JOIN paralelo p ON mat.paralelo_id = p.id
+        INNER JOIN grado g ON p.grado_id = g.id
+        LEFT JOIN mensualidad m ON mat.id = m.matricula_id AND m.estado != 'anulado'
+        WHERE mat.periodo_academico_id = $1
+          AND mat.estado = 'activo'
+          AND mat.deleted_at IS NULL
+        GROUP BY g.id, g.nombre, p.id, p.nombre
+        ORDER BY g.nombre ASC, p.nombre ASC
+      `, [parseInt(periodo_academico_id)]);
+
+      const cursos = result.rows;
+
+      const totales = cursos.reduce(
+        (acc, cur) => ({
+          estudiantes: acc.estudiantes + parseInt(cur.total_estudiantes),
+          pagado:      acc.pagado      + parseFloat(cur.monto_pagado),
+          pendiente:   acc.pendiente   + parseFloat(cur.monto_pendiente),
+          total:       acc.total       + parseFloat(cur.monto_total),
+        }),
+        { estudiantes: 0, pagado: 0, pendiente: 0, total: 0 }
+      );
+
+      const data = { periodo, cursos, totales };
+
+      return formato === 'excel'
+        ? ReportesPagosController._excelCursos(res, data)
+        : ReportesPagosController._pdfCursos(res, data);
+
+    } catch (error) {
+      console.error('Error exportar cursos:', error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  // ══════════════════════════════════════════════
+  // 5️⃣  REPORTE DE FACTURAS
+  //     GET /api/reportes-pagos/exportar/facturas
+  //     ?periodo_academico_id=X&formato=pdf|excel&fecha_inicio=Y&fecha_fin=Z&metodo_pago=W
+  // ══════════════════════════════════════════════
+  static async exportarFacturas(req, res) {
+    try {
+      const { periodo_academico_id, formato = 'pdf', fecha_inicio, fecha_fin, metodo_pago } = req.query;
+      if (!periodo_academico_id)
+        return res.status(400).json({ success: false, message: 'Se requiere periodo_academico_id' });
+
+      const periodo = await ReportesPagosController._getPeriodo(periodo_academico_id);
+      if (!periodo)
+        return res.status(404).json({ success: false, message: 'Período no encontrado' });
+
+      let whereConditions = [
+        'mat.periodo_academico_id = $1',
+        'pm.anulado = false',
+        'pm.entrego_factura = true'
+      ];
+      let queryParams = [parseInt(periodo_academico_id)];
+      let paramCounter = 2;
+
+      if (fecha_inicio) {
+        whereConditions.push(`pm.fecha_pago >= $${paramCounter}::date`);
+        queryParams.push(fecha_inicio);
+        paramCounter++;
+      }
+      if (fecha_fin) {
+        whereConditions.push(`pm.fecha_pago <= $${paramCounter}::date`);
+        queryParams.push(fecha_fin);
+        paramCounter++;
+      }
+      if (metodo_pago) {
+        whereConditions.push(`pm.metodo_pago = $${paramCounter}`);
+        queryParams.push(metodo_pago);
+        paramCounter++;
+      }
+
+      const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
+
+      // Detalle de pagos facturados
+      const detalle = await pool.query(`
+        SELECT
+          pm.codigo_pago,
+          pm.fecha_pago,
+          pm.monto_pagado,
+          pm.metodo_pago,
+          pm.numero_comprobante,
+          pm.entrego_factura,
+          pm.numero_factura,
+          m.mes_correspondiente,
+          m.numero_cuota,
+          e.codigo as estudiante_codigo,
+          e.nombres,
+          e.apellidos,
+          g.nombre as grado,
+          p.nombre as paralelo
+        FROM pago_mensualidad pm
+        INNER JOIN mensualidad m ON pm.mensualidad_id = m.id
+        INNER JOIN matricula mat ON m.matricula_id = mat.id
+        INNER JOIN estudiante e ON mat.estudiante_id = e.id
+        INNER JOIN paralelo p ON mat.paralelo_id = p.id
+        INNER JOIN grado g ON p.grado_id = g.id
+        ${whereClause}
+        ORDER BY pm.fecha_pago DESC, e.apellidos ASC
+      `, queryParams);
+
+      // Agrupado por método
+      const metodos = await pool.query(`
+        SELECT
+          COALESCE(pm.metodo_pago, 'sin_metodo') as metodo_pago,
+          COUNT(pm.id) as cantidad,
+          SUM(pm.monto_pagado) as total
+        FROM pago_mensualidad pm
+        INNER JOIN mensualidad m ON pm.mensualidad_id = m.id
+        INNER JOIN matricula mat ON m.matricula_id = mat.id
+        ${whereClause}
+        GROUP BY pm.metodo_pago
+        ORDER BY total DESC
+      `, queryParams);
+
+      const totalFacturado = detalle.rows.reduce((sum, r) => sum + parseFloat(r.monto_pagado), 0);
+      const stats = {
+        totalFacturado,
+        cantidadFacturas: detalle.rows.length,
+      };
+
+      const data = {
+        periodo,
+        detalle: detalle.rows,
+        metodos: metodos.rows,
+        stats
+      };
+
+      return formato === 'excel'
+        ? ReportesPagosController._excelFacturas(res, data)
+        : ReportesPagosController._pdfFacturas(res, data);
+
+    } catch (error) {
+      console.error('Error exportar facturas:', error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  // ══════════════════════════════════════════════
+  // 🔴 PDF — CURSOS
+  // ══════════════════════════════════════════════
+  static _pdfCursos(res, { periodo, cursos, totales }) {
+    const pdf = new PDFGenerator({ margin: 40, landscape: true });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=reporte-cursos-${periodo.codigo ?? periodo.id}.pdf`);
+    pdf.pipe(res);
+
+    pdf.drawHeader(
+      'ESTADO DE PAGOS POR CURSOS',
+      `Período: ${periodo.nombre}`
+    );
+
+    pdf.drawInfoBox([
+      { label: 'Período',         value: periodo.nombre },
+      { label: 'Generado',        value: formatearFecha(new Date(), 'largo') },
+    ], 2);
+
+    pdf.drawSection('RESUMEN DE RECAUDACIÓN');
+    pdf.drawStatsGrid([
+      { label: 'Total Cursos',      value: cursos.length.toString() },
+      { label: 'Estudiantes Activos', value: totales.estudiantes.toString() },
+      { label: 'Total Recaudado',   value: `Bs ${totales.pagado.toFixed(2)}` },
+      { label: 'Total Pendiente',   value: `Bs ${totales.pendiente.toFixed(2)}` },
+      { label: 'Monto Total Esperado', value: `Bs ${totales.total.toFixed(2)}` },
+    ], 3);
+
+    pdf.drawSection('DETALLE POR CURSO');
+    const headers = [
+      '#', 'Curso', 'Estudiantes', 'Cuotas Pagadas', 'Cuotas Pendientes', 'Cuotas Vencidas',
+      'Monto Pagado', 'Monto Pendiente', 'Monto Total', '% Cumplimiento'
+    ];
+    const colWidths = [30, 130, 70, 70, 75, 70, 95, 95, 95, 80];
+
+    const rows = cursos.map((cur, i) => {
+      const porcentaje = cur.monto_total > 0
+        ? ((parseFloat(cur.monto_pagado) / parseFloat(cur.monto_total)) * 100).toFixed(1) + '%'
+        : '—';
+      return [
+        (i + 1).toString(),
+        `${cur.grado} — ${cur.paralelo}`,
+        cur.total_estudiantes.toString(),
+        cur.mensualidades_pagadas.toString(),
+        cur.mensualidades_pendientes.toString(),
+        cur.mensualidades_vencidas.toString(),
+        `Bs ${parseFloat(cur.monto_pagado).toFixed(2)}`,
+        `Bs ${parseFloat(cur.monto_pendiente).toFixed(2)}`,
+        `Bs ${parseFloat(cur.monto_total).toFixed(2)}`,
+        porcentaje
+      ];
+    });
+
+    pdf.drawTable(headers, rows, { columnWidths: colWidths });
+    pdf.end();
+  }
+
+  // ══════════════════════════════════════════════
+  // 🔴 PDF — FACTURAS
+  // ══════════════════════════════════════════════
+  static _pdfFacturas(res, { periodo, detalle, metodos, stats }) {
+    const pdf = new PDFGenerator({ margin: 40, landscape: true });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=reporte-facturas-${periodo.codigo ?? periodo.id}.pdf`);
+    pdf.pipe(res);
+
+    pdf.drawHeader(
+      'REPORTE DE FACTURACIÓN',
+      `Período: ${periodo.nombre}`
+    );
+
+    pdf.drawInfoBox([
+      { label: 'Período',  value: periodo.nombre },
+      { label: 'Generado', value: formatearFecha(new Date(), 'largo') },
+    ], 2);
+
+    pdf.drawSection('RESUMEN DE FACTURACIÓN');
+    pdf.drawStatsGrid([
+      { label: 'Total Facturado', value: `Bs ${stats.totalFacturado.toFixed(2)}` },
+      { label: 'Cantidad de Facturas', value: stats.cantidadFacturas.toString() },
+      ...metodos.map(m => ({
+        label: m.metodo_pago === 'sin_metodo' ? 'Sin método' : m.metodo_pago.charAt(0).toUpperCase() + m.metodo_pago.slice(1),
+        value: `Bs ${parseFloat(m.total).toFixed(2)}`
+      }))
+    ], 3);
+
+    pdf.drawSection('DETALLE DE FACTURAS EMITIDAS');
+    const headers = [
+      '#', 'N° Factura', 'Código Pago', 'Fecha', 'Estudiante', 'Curso', 'Mes / Cuota', 'Método', 'Monto'
+    ];
+    const colWidths = [25, 75, 85, 70, 160, 100, 100, 80, 85];
+
+    const rows = detalle.map((p, i) => [
+      (i + 1).toString(),
+      p.numero_factura ?? 'Sí',
+      p.codigo_pago,
+      formatearFecha(p.fecha_pago, 'corto'),
+      `${p.apellidos}, ${p.nombres}`,
+      `${p.grado} — ${p.paralelo}`,
+      `C${p.numero_cuota} — ${p.mes_correspondiente}`,
+      p.metodo_pago ?? '—',
+      `Bs ${parseFloat(p.monto_pagado).toFixed(2)}`
+    ]);
+
+    pdf.drawTable(headers, rows, { columnWidths: colWidths });
+    pdf.end();
+  }
+
+  // ══════════════════════════════════════════════
+  // 🟢 EXCEL — CURSOS
+  // ══════════════════════════════════════════════
+  static async _excelCursos(res, { periodo, cursos, totales }) {
+    const excel = new ExcelGenerator();
+    const ws = excel.createSheet('Resumen por Cursos');
+
+    excel.addTitle(ws, 'ESTADO DE PAGOS POR CURSOS', `Período: ${periodo.nombre}`);
+    excel.addInfoBox(ws, [
+      { label: 'Período',  value: periodo.nombre },
+      { label: 'Generado', value: formatearFecha(new Date(), 'largo') },
+    ]);
+    excel.addStats(ws, [
+      { label: 'Total Cursos',      value: cursos.length.toString() },
+      { label: 'Estudiantes Activos', value: totales.estudiantes.toString() },
+      { label: 'Total Recaudado',   value: `Bs ${totales.pagado.toFixed(2)}` },
+      { label: 'Total Pendiente',   value: `Bs ${totales.pendiente.toFixed(2)}` },
+      { label: 'Monto Total Esperado', value: `Bs ${totales.total.toFixed(2)}` },
+    ], 3);
+
+    const headers = [
+      '#', 'Grado', 'Paralelo', 'Estudiantes', 'Total Cuotas', 'Pagadas', 'Pendientes', 'Vencidas',
+      'Monto Total', 'Monto Pagado', 'Monto Pendiente', '% Cumplimiento'
+    ];
+
+    const rows = cursos.map((cur, i) => [
+      i + 1,
+      cur.grado,
+      cur.paralelo,
+      parseInt(cur.total_estudiantes),
+      parseInt(cur.total_mensualidades),
+      parseInt(cur.mensualidades_pagadas),
+      parseInt(cur.mensualidades_pendientes),
+      parseInt(cur.mensualidades_vencidas),
+      parseFloat(parseFloat(cur.monto_total).toFixed(2)),
+      parseFloat(parseFloat(cur.monto_pagado).toFixed(2)),
+      parseFloat(parseFloat(cur.monto_pendiente).toFixed(2)),
+      cur.monto_total > 0
+        ? parseFloat(((parseFloat(cur.monto_pagado) / parseFloat(cur.monto_total)) * 100).toFixed(1))
+        : 0
+    ]);
+
+    excel.addTable(ws, headers, rows, {
+      sectionTitle: 'DETALLE POR CURSO',
+      columnWidths: [5, 20, 12, 12, 12, 10, 12, 10, 14, 14, 16, 16],
+    });
+    excel.addFooter(ws);
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename=reporte-cursos-${periodo.codigo ?? periodo.id}.xlsx`);
+    await excel.write(res);
+    res.end();
+  }
+
+  // ══════════════════════════════════════════════
+  // 🟢 EXCEL — FACTURAS
+  // ══════════════════════════════════════════════
+  static async _excelFacturas(res, { periodo, detalle, metodos, stats }) {
+    const excel = new ExcelGenerator();
+
+    // Hoja 1: Detalle completo
+    const ws1 = excel.createSheet('Facturas');
+    excel.addTitle(ws1, 'REPORTE DE FACTURACIÓN', `Período: ${periodo.nombre}`);
+    excel.addInfoBox(ws1, [
+      { label: 'Período',  value: periodo.nombre },
+      { label: 'Generado', value: formatearFecha(new Date(), 'largo') },
+    ]);
+    excel.addStats(ws1, [
+      { label: 'Total Facturado', value: `Bs ${stats.totalFacturado.toFixed(2)}` },
+      { label: 'Cantidad de Facturas', value: stats.cantidadFacturas.toString() },
+      ...metodos.map(m => ({
+        label: m.metodo_pago === 'sin_metodo' ? 'Sin método' : m.metodo_pago.charAt(0).toUpperCase() + m.metodo_pago.slice(1),
+        value: `Bs ${parseFloat(m.total).toFixed(2)}`
+      }))
+    ], 3);
+
+    const headers1 = [
+      '#', 'N° Factura', 'Código Pago', 'Fecha Pago', 'Estudiante Código', 'Nombres', 'Apellidos',
+      'Grado', 'Paralelo', 'N° Cuota', 'Mes', 'Método Pago', 'Monto (Bs)', 'Comprobante'
+    ];
+
+    const rows1 = detalle.map((p, i) => [
+      i + 1,
+      p.numero_factura ?? 'Sí',
+      p.codigo_pago,
+      formatearFecha(p.fecha_pago, 'corto'),
+      p.estudiante_codigo,
+      p.nombres,
+      p.apellidos,
+      p.grado,
+      p.paralelo,
+      parseInt(p.numero_cuota),
+      p.mes_correspondiente,
+      p.metodo_pago ?? '—',
+      parseFloat(parseFloat(p.monto_pagado).toFixed(2)),
+      p.numero_comprobante ?? '—'
+    ]);
+
+    excel.addTable(ws1, headers1, rows1, {
+      sectionTitle: 'DETALLE COMPLETO',
+      columnWidths: [5, 12, 16, 12, 14, 22, 22, 14, 12, 10, 18, 14, 14, 14],
+    });
+    excel.addFooter(ws1);
+
+    // Hoja 2: Métodos de Pago
+    const ws2 = excel.createSheet('Resumen por Método');
+    excel.addTitle(ws2, 'RESUMEN POR MÉTODO DE PAGO');
+    excel.addTable(ws2,
+      ['Método de Pago', 'Cantidad', 'Total (Bs)'],
+      metodos.map(m => [
+        m.metodo_pago === 'sin_metodo' ? 'Sin método' : m.metodo_pago,
+        parseInt(m.cantidad),
+        parseFloat(parseFloat(m.total).toFixed(2)),
+      ]),
+      { columnWidths: [22, 14, 20] }
+    );
+    excel.addFooter(ws2);
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename=reporte-facturas-${periodo.codigo ?? periodo.id}.xlsx`);
+    await excel.write(res);
+    res.end();
+  }
 }
 
 export default ReportesPagosController;

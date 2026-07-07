@@ -33,12 +33,12 @@
 //     ↓ no hay → ML service → Gemini → recursos externos
 //                → INSERT/upsert + notificar docente
 
-import { pool }        from '../db/pool.js';
+import { pool } from '../db/pool.js';
 import whatsappService from '../utils/whatsappService.js';
 import { buildPayloadCompleto } from '../services/ml-service.js';
 
 const ML_BASE_URL = process.env.ML_SERVICE_URL || 'http://localhost:8000/api/v1';
-const ML_TIMEOUT  = parseInt(process.env.ML_TIMEOUT_MS || '20000');
+const ML_TIMEOUT = parseInt(process.env.ML_TIMEOUT_MS || '20000');
 
 // Umbral de nota normalizada (sobre 100) para disparar la asignación
 const UMBRAL_NOTA_BAJA = 60;
@@ -55,13 +55,13 @@ const HORAS_ENTRE_NOTIFICACIONES = parseInt(
 // ─────────────────────────────────────────────────────────────
 async function llamarML(endpoint, body) {
   const controller = new AbortController();
-  const timeoutId  = setTimeout(() => controller.abort(), ML_TIMEOUT);
+  const timeoutId = setTimeout(() => controller.abort(), ML_TIMEOUT);
   try {
     const response = await fetch(`${ML_BASE_URL}/${endpoint}`, {
-      method:  'POST',
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(body),
-      signal:  controller.signal,
+      body: JSON.stringify(body),
+      signal: controller.signal,
     });
     if (!response.ok) throw new Error(`ML HTTP ${response.status}`);
     return await response.json();
@@ -94,19 +94,19 @@ async function obtenerRecursosExternosGemini({
   nivelEducativo,
 }) {
   const controller = new AbortController();
-  const timeoutId  = setTimeout(() => controller.abort(), 15000);
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
 
   try {
     const response = await fetch(`${ML_BASE_URL}/materiales/recursos-externos`, {
-      method:  'POST',
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        tema_titulo:      temaTitulo,
-        tema_descripcion: temaDescripcion  || null,
-        palabras_clave:   palabrasClave    || null,
-        nivel_dificultad: nivelDificultad  || null,
-        objetivos_unidad: objetivosUnidad  || null,
-        nivel_educativo:  nivelEducativo   || null,
+        tema_titulo: temaTitulo,
+        tema_descripcion: temaDescripcion || null,
+        palabras_clave: palabrasClave || null,
+        nivel_dificultad: nivelDificultad || null,
+        objetivos_unidad: objetivosUnidad || null,
+        nivel_educativo: nivelEducativo || null,
       }),
       signal: controller.signal,
     });
@@ -123,8 +123,8 @@ async function obtenerRecursosExternosGemini({
     }
 
     return data.recursos.map(r => ({
-      titulo:         r.titulo,
-      url:            r.url,
+      titulo: r.titulo,
+      url: r.url,
       origen_externo: r.origen_externo || 'web',
     }));
 
@@ -201,8 +201,8 @@ async function crearNotificacionPadre(
   const codigo = await generarCodigoNotificacion(client);
 
   const mensajes = {
-    medio:   `Estimado/a ${nombreTutor}, le informamos que ${estudianteNombre} presenta un rendimiento medio en ${materia}. Le recomendamos revisar sus tareas y asistencia. Nota estimada: ${notaEstimada}/100.`,
-    alto:    `Estimado/a ${nombreTutor}, ${estudianteNombre} está en riesgo ALTO de reprobar ${materia}. Nota estimada: ${notaEstimada}/100. Por favor comuníquese con el docente a la brevedad.`,
+    medio: `Estimado/a ${nombreTutor}, le informamos que ${estudianteNombre} presenta un rendimiento medio en ${materia}. Le recomendamos revisar sus tareas y asistencia. Nota estimada: ${notaEstimada}/100.`,
+    alto: `Estimado/a ${nombreTutor}, ${estudianteNombre} está en riesgo ALTO de reprobar ${materia}. Nota estimada: ${notaEstimada}/100. Por favor comuníquese con el docente a la brevedad.`,
     critico: `URGENTE: ${estudianteNombre} está en riesgo CRÍTICO de reprobar ${materia}. Nota estimada: ${notaEstimada}/100. Es fundamental una reunión con el docente esta semana.`,
   };
 
@@ -243,7 +243,7 @@ async function crearNotificacionPadre(
       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
       ON CONFLICT (notificacion_id, usuario_id, canal) DO NOTHING
     `, [notif.id, tutorUsuarioId, nombreTutor,
-        celular || null, email || null, 'padre', 'interno', 'enviado']);
+    celular || null, email || null, 'padre', 'interno', 'enviado']);
   }
 
   if (celular && nivelRiesgo !== 'medio') {
@@ -254,7 +254,7 @@ async function crearNotificacionPadre(
       ) VALUES ($1,$2,$3,$4,$5,$6,$7)
       ON CONFLICT (notificacion_id, usuario_id, canal) DO NOTHING
     `, [notif.id, tutorUsuarioId || null, nombreTutor,
-        celular, 'padre', 'whatsapp', 'pendiente']);
+      celular, 'padre', 'whatsapp', 'pendiente']);
   }
 
   return notif;
@@ -290,8 +290,8 @@ async function crearNotificacionDocenteNotaBaja(client, {
   const codigo = await generarCodigoNotificacion(client);
   const titulo = `📚 Material asignado automáticamente — ${estudianteNombre}`;
 
-  const internos  = materialesAsignados.filter(m => !m.esExterno);
-  const externos  = materialesAsignados.filter(m =>  m.esExterno);
+  const internos = materialesAsignados.filter(m => !m.esExterno);
+  const externos = materialesAsignados.filter(m => m.esExterno);
 
   const lineasMateriales = [];
 
@@ -347,8 +347,8 @@ async function crearNotificacionDocenteNotaBaja(client, {
       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
       ON CONFLICT (notificacion_id, usuario_id, canal) DO NOTHING
     `, [notif.id, docente.usuario_id, docente.nombre_completo,
-        docente.celular || null, docente.email || null,
-        'docente', 'interno', 'enviado']);
+    docente.celular || null, docente.email || null,
+      'docente', 'interno', 'enviado']);
 
     // Canal WhatsApp
     if (docente.celular) {
@@ -359,7 +359,7 @@ async function crearNotificacionDocenteNotaBaja(client, {
         ) VALUES ($1,$2,$3,$4,$5,$6,$7)
         ON CONFLICT (notificacion_id, usuario_id, canal) DO NOTHING
       `, [notif.id, docente.usuario_id, docente.nombre_completo,
-          docente.celular, 'docente', 'whatsapp', 'pendiente']);
+      docente.celular, 'docente', 'whatsapp', 'pendiente']);
     }
 
     // Canal email
@@ -371,7 +371,7 @@ async function crearNotificacionDocenteNotaBaja(client, {
         ) VALUES ($1,$2,$3,$4,$5,$6,$7)
         ON CONFLICT (notificacion_id, usuario_id, canal) DO NOTHING
       `, [notif.id, docente.usuario_id, docente.nombre_completo,
-          docente.email, 'docente', 'email', 'pendiente']);
+      docente.email, 'docente', 'email', 'pendiente']);
     }
   }
 
@@ -394,7 +394,7 @@ async function crearNotificacionDocenteNotaBaja(client, {
 
     whatsappService.enviarMensaje?.({
       telefono: docente.celular,
-      mensaje:  mensajeWA,
+      mensaje: mensajeWA,
     }).catch(err =>
       console.warn('[prediccionAuto] WhatsApp docente falló:', err.message)
     );
@@ -602,7 +602,7 @@ export async function dispararAsignacionMaterial({
           materialesAsignados.push({
             ...mat,
             asignacion_id: reg.id,
-            esExterno:     false,
+            esExterno: false,
           });
         }
 
@@ -619,12 +619,12 @@ export async function dispararAsignacionMaterial({
         );
 
         const recursosGemini = await obtenerRecursosExternosGemini({
-          temaTitulo:      evaluacion.tema_titulo,
+          temaTitulo: evaluacion.tema_titulo,
           temaDescripcion: evaluacion.tema_descripcion,
-          palabrasClave:   evaluacion.tema_palabras_clave,
+          palabrasClave: evaluacion.tema_palabras_clave,
           nivelDificultad: evaluacion.tema_nivel_dificultad,
           objetivosUnidad: evaluacion.unidad_objetivos,
-          nivelEducativo:  evaluacion.nivel_educativo,
+          nivelEducativo: evaluacion.nivel_educativo,
         });
 
         if (recursosGemini.length === 0) {
@@ -670,11 +670,11 @@ export async function dispararAsignacionMaterial({
           ]);
 
           materialesAsignados.push({
-            titulo:         recurso.titulo,
-            url:            recurso.url,
+            titulo: recurso.titulo,
+            url: recurso.url,
             origen_externo: recurso.origen_externo || 'web',
-            asignacion_id:  reg.id,
-            esExterno:      true,
+            asignacion_id: reg.id,
+            esExterno: true,
           });
         }
 
@@ -686,13 +686,13 @@ export async function dispararAsignacionMaterial({
 
       // 6. Notificar al docente por los 3 canales
       await crearNotificacionDocenteNotaBaja(client2, {
-        asignacionDocenteId:  evaluacion.asignacion_docente_id,
-        estudianteNombre:     estudiante.nombre_completo,
-        materia:              'la materia',
-        temaTitulo:           evaluacion.tema_titulo,
+        asignacionDocenteId: evaluacion.asignacion_docente_id,
+        estudianteNombre: estudiante.nombre_completo,
+        materia: 'la materia',
+        temaTitulo: evaluacion.tema_titulo,
         notaNormalizada,
         materialesAsignados,
-        creadorUsuarioId:     null,
+        creadorUsuarioId: null,
       });
 
       await client2.query('COMMIT');
@@ -742,8 +742,8 @@ export async function dispararPrediccionAlCierre({
       return;
     }
 
-    const estudianteId       = mat.estudiante_id;
-    const estudianteNombre   = mat.nombre_completo;
+    const estudianteId = mat.estudiante_id;
+    const estudianteNombre = mat.nombre_completo;
     const periodoAcademicoId = mat.periodo_academico_id;
 
     const client = await pool.connect();
@@ -757,7 +757,7 @@ export async function dispararPrediccionAlCierre({
         conMateriales: true,
       });
 
-      mlRequest    = resultado.mlRequest;
+      mlRequest = resultado.mlRequest;
       materiaResult = resultado.materia;
 
       mlRequest.semana = mlRequest.config_periodo.total_semanas;
@@ -773,8 +773,8 @@ export async function dispararPrediccionAlCierre({
 
     const resultado = await llamarML('predecir?incluir_gemini=true', mlRequest);
 
-    const nivelRiesgo   = resultado?.modelo?.nivel_riesgo;
-    const notaEstimada  = resultado?.modelo?.nota_estimada_final;
+    const nivelRiesgo = resultado?.modelo?.nivel_riesgo;
+    const notaEstimada = resultado?.modelo?.nota_estimada_final;
     const mensajeAlerta = resultado?.analisis?.mensaje_alerta;
 
     console.info(
@@ -803,22 +803,22 @@ export async function dispararPrediccionAlCierre({
 
       for (const tutor of tutores) {
         await crearNotificacionPadre(client2, {
-          tutorUsuarioId:    tutor.usuario_id,
-          nombreTutor:       tutor.nombre_completo,
-          celular:           tutor.celular || tutor.telefono,
-          email:             tutor.email,
+          tutorUsuarioId: tutor.usuario_id,
+          nombreTutor: tutor.nombre_completo,
+          celular: tutor.celular || tutor.telefono,
+          email: tutor.email,
           estudianteNombre,
-          materia:           mlRequest.materia,
+          materia: mlRequest.materia,
           nivelRiesgo,
           notaEstimada,
-          creadorUsuarioId:  cerradoPor,
+          creadorUsuarioId: cerradoPor,
           periodoAcademicoId,
         });
 
         if (nivelRiesgo !== 'medio' && (tutor.celular || tutor.telefono)) {
           whatsappService.enviarMensaje?.({
             telefono: tutor.celular || tutor.telefono,
-            mensaje:  [
+            mensaje: [
               `[${mlRequest.materia}] ${estudianteNombre}`,
               `tiene riesgo ${nivelRiesgo.toUpperCase()}.`,
               `Nota estimada: ${notaEstimada}/100.`,
@@ -888,8 +888,8 @@ export async function cerrarPeriodoClase({
   if (matriculas.length === 0) return { cerrados: 0, errores: 0 };
 
   let cerrados = 0;
-  let errores  = 0;
-  const BATCH  = 5;
+  let errores = 0;
+  const BATCH = 5;
 
   for (let i = 0; i < matriculas.length; i += BATCH) {
     const lote = matriculas.slice(i, i + BATCH);
@@ -914,7 +914,7 @@ export async function cerrarPeriodoClase({
         }
 
         await dispararPrediccionAlCierre({
-          matriculaId:         m.matricula_id,
+          matriculaId: m.matricula_id,
           gradoMateriaId,
           periodoEvaluacionId,
           asignacionDocenteId,

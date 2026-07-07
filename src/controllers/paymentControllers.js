@@ -1217,6 +1217,147 @@ class ReportesPagosController {
       });
     }
   }
+
+  // GET /api/reportes-pagos/cursos - Resumen agrupado por curso
+  static async cursos(req, res) {
+    try {
+      const { periodo_academico_id } = req.query;
+      if (!periodo_academico_id) {
+        return res.status(400).json({
+          success: false,
+          message: 'El periodo_academico_id es requerido'
+        });
+      }
+
+      const query = `
+        SELECT
+          g.id as grado_id,
+          g.nombre as grado,
+          p.id as paralelo_id,
+          p.nombre as paralelo,
+          COUNT(DISTINCT mat.id) as total_estudiantes,
+          COUNT(m.id) as total_mensualidades,
+          COUNT(CASE WHEN m.estado = 'pagado' THEN 1 END) as mensualidades_pagadas,
+          COUNT(CASE WHEN m.estado IN ('pendiente', 'vencido') THEN 1 END) as mensualidades_pendientes,
+          COUNT(CASE WHEN m.estado = 'vencido' THEN 1 END) as mensualidades_vencidas,
+          COALESCE(SUM(m.monto_final), 0) as monto_total,
+          COALESCE(SUM(CASE WHEN m.estado = 'pagado' THEN m.monto_final ELSE 0 END), 0) as monto_pagado,
+          COALESCE(SUM(CASE WHEN m.estado IN ('pendiente', 'vencido') THEN m.monto_final ELSE 0 END), 0) as monto_pendiente
+        FROM matricula mat
+        INNER JOIN paralelo p ON mat.paralelo_id = p.id
+        INNER JOIN grado g ON p.grado_id = g.id
+        LEFT JOIN mensualidad m ON mat.id = m.matricula_id AND m.estado != 'anulado'
+        WHERE mat.periodo_academico_id = $1
+          AND mat.estado = 'activo'
+          AND mat.deleted_at IS NULL
+        GROUP BY g.id, g.nombre, p.id, p.nombre
+        ORDER BY g.nombre ASC, p.nombre ASC
+      `;
+
+      const result = await pool.query(query, [parseInt(periodo_academico_id)]);
+
+      res.json({
+        success: true,
+        data: {
+          cursos: result.rows,
+          total: result.rows.length
+        }
+      });
+    } catch (error) {
+      console.error('Error al obtener reporte por cursos:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al obtener reporte por cursos: ' + error.message
+      });
+    }
+  }
+
+  // GET /api/reportes-pagos/facturas - Lista de pagos facturados
+  static async facturas(req, res) {
+    try {
+      const { periodo_academico_id, fecha_inicio, fecha_fin, metodo_pago } = req.query;
+      if (!periodo_academico_id) {
+        return res.status(400).json({
+          success: false,
+          message: 'El periodo_academico_id es requerido'
+        });
+      }
+
+      let whereConditions = [
+        'mat.periodo_academico_id = $1',
+        'pm.anulado = false',
+        'pm.entrego_factura = true'
+      ];
+      let queryParams = [parseInt(periodo_academico_id)];
+      let paramCounter = 2;
+
+      if (fecha_inicio) {
+        whereConditions.push(`pm.fecha_pago >= $${paramCounter}::date`);
+        queryParams.push(fecha_inicio);
+        paramCounter++;
+      }
+      if (fecha_fin) {
+        whereConditions.push(`pm.fecha_pago <= $${paramCounter}::date`);
+        queryParams.push(fecha_fin);
+        paramCounter++;
+      }
+      if (metodo_pago) {
+        whereConditions.push(`pm.metodo_pago = $${paramCounter}`);
+        queryParams.push(metodo_pago);
+        paramCounter++;
+      }
+
+      const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
+
+      const query = `
+        SELECT
+          pm.id as pago_id,
+          pm.codigo_pago,
+          pm.fecha_pago,
+          pm.monto_pagado,
+          pm.metodo_pago,
+          pm.numero_comprobante,
+          pm.entrego_factura,
+          pm.numero_factura,
+          m.mes_correspondiente,
+          m.numero_cuota,
+          e.codigo as estudiante_codigo,
+          e.nombres as estudiante_nombres,
+          e.apellidos as estudiante_apellidos,
+          g.nombre as grado,
+          p.nombre as paralelo
+        FROM pago_mensualidad pm
+        INNER JOIN mensualidad m ON pm.mensualidad_id = m.id
+        INNER JOIN matricula mat ON m.matricula_id = mat.id
+        INNER JOIN estudiante e ON mat.estudiante_id = e.id
+        INNER JOIN paralelo p ON mat.paralelo_id = p.id
+        INNER JOIN grado g ON p.grado_id = g.id
+        ${whereClause}
+        ORDER BY pm.fecha_pago DESC, e.apellidos ASC
+      `;
+
+      const result = await pool.query(query, queryParams);
+
+      const totalInvoiced = result.rows.reduce((sum, r) => sum + parseFloat(r.monto_pagado), 0);
+
+      res.json({
+        success: true,
+        data: {
+          facturas: result.rows,
+          stats: {
+            totalInvoiced,
+            invoiceCount: result.rows.length
+          }
+        }
+      });
+    } catch (error) {
+      console.error('Error al obtener reporte de facturas:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al obtener reporte de facturas: ' + error.message
+      });
+    }
+  }
 }
 
 class PagoMultipleController {

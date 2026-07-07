@@ -160,4 +160,83 @@ INSTRUCCIONES:
   });
 }
 
-export { generarContenidoTema, generarQuizTema };
+/**
+ * Genera 2-3 search queries pedagógicamente precisos para buscar videos
+ * de YouTube que refuercen un tema específico. Usado cuando un estudiante
+ * saca nota baja y no hay materiales internos disponibles para ese tema.
+ *
+ * @param {Object} datos
+ * @param {string} datos.temaTitulo
+ * @param {string} [datos.temaDescripcion]
+ * @param {string[]} [datos.palabrasClave]
+ * @param {string} [datos.nivelDificultad]
+ * @param {string} [datos.objetivosUnidad]
+ * @param {string} [datos.nivelEducativo]
+ * @returns {Promise<Array<{ titulo_sugerido: string, search_query: string }>>}
+ */
+async function generarQueriesRecursoExterno(datos) {
+  const {
+    temaTitulo,
+    temaDescripcion,
+    palabrasClave,
+    nivelDificultad,
+    objetivosUnidad,
+    nivelEducativo,
+  } = datos;
+
+  const model = genAI.getGenerativeModel({
+    model: MODEL,
+    generationConfig: {
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: 'object',
+        properties: {
+          queries: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 3,
+            items: {
+              type: 'object',
+              properties: {
+                titulo_sugerido: { type: 'string' },
+                search_query: { type: 'string' },
+              },
+              required: ['titulo_sugerido', 'search_query'],
+            },
+          },
+        },
+        required: ['queries'],
+      },
+    },
+  });
+
+  const nivel = nivelEducativo || 'secundaria';
+  const partes = [`Tema: "${temaTitulo}"`];
+  if (temaDescripcion) partes.push(`Descripción: ${temaDescripcion}`);
+  if (palabrasClave?.length) partes.push(`Palabras clave: ${palabrasClave.join(', ')}`);
+  if (nivelDificultad) partes.push(`Nivel de dificultad: ${nivelDificultad}`);
+  if (objetivosUnidad) partes.push(`Objetivos: ${objetivosUnidad}`);
+
+  const prompt = `
+Eres un asistente educativo. Un estudiante de nivel "${nivel}" necesita videos de
+YouTube para reforzar este tema:
+
+${partes.join('\n')}
+
+Genera 2 o 3 queries de búsqueda para YouTube que encuentren videos educativos
+específicos y útiles. Los videos deben ser en español y apropiados para el nivel.
+
+Reglas para search_query:
+- Específico al tema, no genérico.
+- Incluir palabras clave del tema + nivel educativo + "educativo" o "tutorial".
+- En español.
+`.trim();
+
+  return await withRetry(async () => {
+    const result = await model.generateContent(prompt);
+    const data = JSON.parse(result.response.text());
+    return data.queries || [];
+  });
+}
+
+export { generarContenidoTema, generarQuizTema, generarQueriesRecursoExterno };

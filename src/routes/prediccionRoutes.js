@@ -179,6 +179,12 @@ router.post(
 );
 
 router.get(
+  '/videos-recomendados/:matricula_id',
+  authorize('material_asignado.leer'),
+  MaterialAsignadoController.videosRecomendados
+);
+
+router.get(
   '/materiales-asignados/:matricula_id',
   authorize('material_asignado.leer'),
   MaterialAsignadoController.listarPorEstudiante

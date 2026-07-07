@@ -674,6 +674,7 @@ export async function buildPayloadCompleto(
     racha_trims_riesgo: historialFeatures.racha_trims_riesgo,
     estilo_docente: estiloDocente,
     regimen_pond: calcularRegimenPond(anio_periodo),
+    tiene_evaluaciones_periodo_actual: tieneEvaluaciones,   // ← NUEVO
   };
 
   return { mlRequest, meta, materia };
@@ -938,7 +939,11 @@ export async function predecirEstudiante({
     // notificarPadreManual() cuando el docente confirma desde el modal.
     let candidato_notificacion_padre = null;
 
-    if (incluirGemini && resultado.analisis?.alerta_urgente === true) {
+    const debeAlertarIndividual = incluirGemini
+      && resultado.analisis?.alerta_urgente === true
+      && meta.tiene_evaluaciones_periodo_actual;
+
+    if (debeAlertarIndividual) {
       const nivelRiesgo = resultado.modelo?.nivel_riesgo || 'alto';
       const notaEstimada = resultado.modelo?.nota_estimada_final ?? 0;
       const asistenciaPct = mlRequest.asistencia_acumulada_pct ?? 0;
@@ -996,6 +1001,11 @@ export async function predecirEstudiante({
             : null,
         };
       }
+    } else if (incluirGemini && resultado.analisis?.alerta_urgente === true) {
+      console.info(
+        `[mlService] Alerta individual suprimida para estudiante ${estudianteId}: ` +
+        `sin evaluaciones cargadas en el período actual (nota es proyección de historial).`
+      );
     }
 
     return { ...resultado, _meta: meta, notificacion_alerta, candidato_notificacion_padre };
@@ -1099,6 +1109,17 @@ export async function analizarClase({
       estudiantes: estudiantesML.map(({ _nombre, ...resto }) => resto),
     };
 
+    // Cobertura real de evaluaciones cargadas este período, a nivel de clase.
+    // Si casi nadie tiene notas cargadas, las predicciones son proyección
+    // de historial y no deben disparar una alerta institucional "crítica".
+    const estudiantesConEvaluaciones = estudiantesML.filter(
+      e => (e.notas_sab.length + e.notas_hac.length) > 0
+    ).length;
+    const pctCobertura = estudiantesML.length > 0
+      ? estudiantesConEvaluaciones / estudiantesML.length
+      : 0;
+    const UMBRAL_COBERTURA_MINIMA = 0.2;
+
     const params = new URLSearchParams({ incluir_gemini: incluirGemini });
     const response = await fetch(`${ML_BASE_URL}/predecir/clase?${params}`, {
       method: 'POST',
@@ -1126,7 +1147,15 @@ export async function analizarClase({
     // y el docente decida a quién notificar (vía notificarPadreManual()).
     let candidatos_notificacion_padre = [];
 
-    if (incluirGemini && resultado.analisis?.alerta_institucional === true) {
+    const hayAlertaML = incluirGemini && resultado.analisis?.alerta_institucional === true;
+
+    if (hayAlertaML && pctCobertura < UMBRAL_COBERTURA_MINIMA) {
+      console.info(
+        `[mlService] Alerta institucional suprimida: solo ${estudiantesConEvaluaciones}/${estudiantesML.length} ` +
+        `estudiantes tienen evaluaciones cargadas este período (${(pctCobertura * 100).toFixed(0)}%). ` +
+        `Notas actuales son proyección de historial, no situación real.`
+      );
+    } else if (hayAlertaML) {
       const estudiantesCriticos = (resultado.estudiantes ?? [])
         .filter(e => e.nivel_riesgo === 'critico' || e.nivel_riesgo === 'alto')
         .slice(0, 5)

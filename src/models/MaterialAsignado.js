@@ -26,19 +26,35 @@ class MaterialAsignado {
     origen = 'manual',
     mensaje_docente = null,
   }) {
+    const update = await pool.query(`
+      UPDATE material_asignado_estudiante
+      SET
+        origen          = $4,
+        mensaje_docente = $5,
+        asignado_por    = $6,
+        activo          = true,
+        updated_at      = CURRENT_TIMESTAMP
+      WHERE material_academico_id  = $1
+        AND matricula_id           = $2
+        AND asignacion_docente_id  = $3
+      RETURNING *
+    `, [
+      material_academico_id,
+      matricula_id,
+      asignacion_docente_id,
+      origen,
+      mensaje_docente,
+      asignado_por,
+    ]);
+
+    if (update.rows[0]) return update.rows[0];
+
     const { rows } = await pool.query(`
       INSERT INTO material_asignado_estudiante (
         material_academico_id, matricula_id, asignacion_docente_id,
         asignado_por, origen, mensaje_docente
       )
       VALUES ($1, $2, $3, $4, $5, $6)
-      ON CONFLICT ON CONSTRAINT uq_material_asignado_interno
-      DO UPDATE SET
-        origen          = EXCLUDED.origen,
-        mensaje_docente = EXCLUDED.mensaje_docente,
-        asignado_por    = EXCLUDED.asignado_por,
-        activo          = true,
-        updated_at      = CURRENT_TIMESTAMP
       RETURNING *
     `, [material_academico_id, matricula_id, asignacion_docente_id,
         asignado_por, origen, mensaje_docente]);
@@ -59,6 +75,31 @@ class MaterialAsignado {
     asignado_por,
     mensaje_docente = null,
   }) {
+    const update = await pool.query(`
+      UPDATE material_asignado_estudiante
+      SET
+        titulo_recurso_externo = $4,
+        origen_externo         = $5,
+        mensaje_docente        = $6,
+        asignado_por           = $7,
+        activo                 = true,
+        updated_at             = CURRENT_TIMESTAMP
+      WHERE url_recurso_externo   = $1
+        AND matricula_id          = $2
+        AND asignacion_docente_id = $3
+      RETURNING *
+    `, [
+      url_recurso_externo,
+      matricula_id,
+      asignacion_docente_id,
+      titulo_recurso_externo,
+      origen_externo,
+      mensaje_docente,
+      asignado_por,
+    ]);
+
+    if (update.rows[0]) return update.rows[0];
+
     const { rows } = await pool.query(`
       INSERT INTO material_asignado_estudiante (
         material_academico_id,
@@ -67,13 +108,6 @@ class MaterialAsignado {
         asignado_por, origen, mensaje_docente
       )
       VALUES (NULL, $1, $2, $3, $4, $5, $6, 'web_search', $7)
-      ON CONFLICT ON CONSTRAINT uq_material_asignado_externo
-      DO UPDATE SET
-        titulo_recurso_externo = EXCLUDED.titulo_recurso_externo,
-        mensaje_docente        = EXCLUDED.mensaje_docente,
-        asignado_por           = EXCLUDED.asignado_por,
-        activo                 = true,
-        updated_at             = CURRENT_TIMESTAMP
       RETURNING *
     `, [url_recurso_externo, titulo_recurso_externo, origen_externo,
         matricula_id, asignacion_docente_id, asignado_por, mensaje_docente]);

@@ -123,46 +123,47 @@ class Evaluacion {
       page = 1, limit = 20,
       asignacion_docente_id, dimension_evaluacion_id,
       periodo_evaluacion_id, activo,
-      tema_id           // ← NUEVO
+      tema_id
     } = filters;
     const offset = (page - 1) * limit;
     let where = []; let params = []; let p = 1;
 
-    if (asignacion_docente_id)   { where.push(`e.asignacion_docente_id = $${p++}`);   params.push(asignacion_docente_id); }
+    if (asignacion_docente_id) { where.push(`e.asignacion_docente_id = $${p++}`); params.push(asignacion_docente_id); }
     if (dimension_evaluacion_id) { where.push(`e.dimension_evaluacion_id = $${p++}`); params.push(dimension_evaluacion_id); }
-    if (periodo_evaluacion_id)   { where.push(`e.periodo_evaluacion_id = $${p++}`);   params.push(periodo_evaluacion_id); }
-    if (activo !== undefined)    { where.push(`e.activo = $${p++}`);                  params.push(activo); }
-    if (tema_id)                 { where.push(`e.tema_id = $${p++}`);                 params.push(tema_id); }  // ← NUEVO
+    if (periodo_evaluacion_id) { where.push(`e.periodo_evaluacion_id = $${p++}`); params.push(periodo_evaluacion_id); }
+    if (activo !== undefined) { where.push(`e.activo = $${p++}`); params.push(activo); }
+    if (tema_id) { where.push(`e.tema_id = $${p++}`); params.push(tema_id); }
 
     const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const countResult = await pool.query(`SELECT COUNT(*) FROM evaluacion e ${whereClause}`, params);
     const total = parseInt(countResult.rows[0].count);
 
     const result = await pool.query(`
-      SELECT
-        e.*,
-        de.nombre AS dimension_nombre, de.codigo AS dimension_codigo, de.color AS dimension_color,
-        pe.nombre AS periodo_nombre,
-        mat.nombre AS materia_nombre,
-        -- Tema y unidad (pueden ser NULL)              ← NUEVO bloque
-        t.id     AS tema_id,
-        t.titulo AS tema_titulo,
-        t.numero_tema,
-        u.id     AS unidad_id,
-        u.titulo AS unidad_titulo,
-        u.numero_unidad
-      FROM evaluacion e
-      INNER JOIN dimension_evaluacion de ON e.dimension_evaluacion_id = de.id
-      INNER JOIN periodo_evaluacion pe   ON e.periodo_evaluacion_id = pe.id
-      INNER JOIN asignacion_docente ad   ON e.asignacion_docente_id = ad.id
-      INNER JOIN grado_materia gm        ON ad.grado_materia_id = gm.id
-      INNER JOIN materia mat             ON gm.materia_id = mat.id
-      LEFT  JOIN tema t                  ON e.tema_id = t.id           -- ← NUEVO
-      LEFT  JOIN unidad_tematica u       ON t.unidad_tematica_id = u.id -- ← NUEVO
-      ${whereClause}
-      ORDER BY e.fecha DESC, de.orden, e.nombre
-      LIMIT $${p} OFFSET $${p + 1}
-    `, [...params, limit, offset]);
+    SELECT
+      e.*,
+      CAST(e.puntaje_maximo AS FLOAT8) AS puntaje_maximo,
+      CAST(e.peso_en_dimension AS FLOAT8) AS peso_en_dimension,
+      de.nombre AS dimension_nombre, de.codigo AS dimension_codigo, de.color AS dimension_color,
+      pe.nombre AS periodo_nombre,
+      mat.nombre AS materia_nombre,
+      t.id     AS tema_id,
+      t.titulo AS tema_titulo,
+      t.numero_tema,
+      u.id     AS unidad_id,
+      u.titulo AS unidad_titulo,
+      u.numero_unidad
+    FROM evaluacion e
+    INNER JOIN dimension_evaluacion de ON e.dimension_evaluacion_id = de.id
+    INNER JOIN periodo_evaluacion pe   ON e.periodo_evaluacion_id = pe.id
+    INNER JOIN asignacion_docente ad   ON e.asignacion_docente_id = ad.id
+    INNER JOIN grado_materia gm        ON ad.grado_materia_id = gm.id
+    INNER JOIN materia mat             ON gm.materia_id = mat.id
+    LEFT  JOIN tema t                  ON e.tema_id = t.id
+    LEFT  JOIN unidad_tematica u       ON t.unidad_tematica_id = u.id
+    ${whereClause}
+    ORDER BY e.fecha DESC, de.orden, e.nombre
+    LIMIT $${p} OFFSET $${p + 1}
+  `, [...params, limit, offset]);
 
     return {
       evaluaciones: result.rows,
@@ -215,9 +216,9 @@ class Evaluacion {
       WHERE id = $10        -- ← era $9, ahora $10
       RETURNING *
     `, [nombre, tipo, descripcion || null, fecha, puntaje_maximo,
-        peso_en_dimension, visible_para_padres, activo,
-        tema_id || null,    // ← NUEVO
-        id]);
+      peso_en_dimension, visible_para_padres, activo,
+      tema_id || null,    // ← NUEVO
+      id]);
     return result.rows[0];
   }
 
@@ -373,7 +374,7 @@ class Evaluacion {
 
     return result.rows;
   }
-  
+
 }
 
 // =============================================
@@ -446,36 +447,41 @@ class Calificacion {
 
   static async findByEvaluacion(evaluacion_id) {
     const result = await pool.query(`
-      SELECT c.*, e.codigo AS estudiante_codigo, e.nombres AS estudiante_nombres,
-             e.apellidos AS estudiante_apellidos, e.foto_url AS estudiante_foto, m.id AS matricula_id
-      FROM asignacion_docente ad
-      INNER JOIN matricula m
-        ON  m.paralelo_id          = ad.paralelo_id
-        AND m.periodo_academico_id = ad.periodo_academico_id
-        AND m.estado               = 'activo'
-        AND m.deleted_at           IS NULL
-      INNER JOIN estudiante e ON e.id = m.estudiante_id
-      LEFT JOIN calificacion c ON c.matricula_id = m.id AND c.evaluacion_id = $1
-      WHERE ad.id = (SELECT asignacion_docente_id FROM evaluacion WHERE id = $1)
-      ORDER BY e.apellidos, e.nombres
-    `, [evaluacion_id]);
+    SELECT c.*,
+           CAST(c.puntaje_obtenido AS FLOAT8) AS puntaje_obtenido,
+           e.codigo AS estudiante_codigo, e.nombres AS estudiante_nombres,
+           e.apellidos AS estudiante_apellidos, e.foto_url AS estudiante_foto, m.id AS matricula_id
+    FROM asignacion_docente ad
+    INNER JOIN matricula m
+      ON  m.paralelo_id          = ad.paralelo_id
+      AND m.periodo_academico_id = ad.periodo_academico_id
+      AND m.estado               = 'activo'
+      AND m.deleted_at           IS NULL
+    INNER JOIN estudiante e ON e.id = m.estudiante_id
+    LEFT JOIN calificacion c ON c.matricula_id = m.id AND c.evaluacion_id = $1
+    WHERE ad.id = (SELECT asignacion_docente_id FROM evaluacion WHERE id = $1)
+    ORDER BY e.apellidos, e.nombres
+  `, [evaluacion_id]);
     return result.rows;
   }
 
   static async findByMatriculaPeriodo(matricula_id, periodo_evaluacion_id) {
     const result = await pool.query(`
-      SELECT c.*, ev.nombre AS evaluacion_nombre, ev.tipo AS evaluacion_tipo,
-             ev.puntaje_maximo, ev.peso_en_dimension, ev.fecha AS evaluacion_fecha,
-             de.nombre AS dimension_nombre, de.codigo AS dimension_codigo,
-             de.porcentaje_ponderacion, de.color AS dimension_color
-      FROM calificacion c
-      INNER JOIN evaluacion ev           ON c.evaluacion_id = ev.id
-      INNER JOIN dimension_evaluacion de ON ev.dimension_evaluacion_id = de.id
-      WHERE c.matricula_id = $1
-        AND ev.periodo_evaluacion_id = $2
-        AND ev.activo = true
-      ORDER BY de.orden, ev.fecha
-    `, [matricula_id, periodo_evaluacion_id]);
+    SELECT c.*,
+           CAST(c.puntaje_obtenido AS FLOAT8) AS puntaje_obtenido,
+           ev.nombre AS evaluacion_nombre, ev.tipo AS evaluacion_tipo,
+           CAST(ev.puntaje_maximo AS FLOAT8) AS puntaje_maximo,
+           ev.peso_en_dimension, ev.fecha AS evaluacion_fecha,
+           de.nombre AS dimension_nombre, de.codigo AS dimension_codigo,
+           de.porcentaje_ponderacion, de.color AS dimension_color
+    FROM calificacion c
+    INNER JOIN evaluacion ev           ON c.evaluacion_id = ev.id
+    INNER JOIN dimension_evaluacion de ON ev.dimension_evaluacion_id = de.id
+    WHERE c.matricula_id = $1
+      AND ev.periodo_evaluacion_id = $2
+      AND ev.activo = true
+    ORDER BY de.orden, ev.fecha
+  `, [matricula_id, periodo_evaluacion_id]);
     return result.rows;
   }
 }

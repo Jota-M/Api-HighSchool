@@ -229,6 +229,20 @@ router.get(
   authorize('reportes_pagos.ver_ingresos'),
   ReportesPagosController.resumen
 );
+
+// GET /api/reportes-pagos/cursos - Resumen agrupado por curso
+router.get(
+  '/reportes-pagos/cursos',
+  authorize('reportes_pagos.ver_estado_estudiante'),
+  ReportesPagosController.cursos
+);
+
+// GET /api/reportes-pagos/facturas - Pagos facturados
+router.get(
+  '/reportes-pagos/facturas',
+  authorize('reportes_pagos.ver_ingresos'),
+  ReportesPagosController.facturas
+);
 // GET /api/pago-multiple/resumen - Resumen de mensualidades pendientes
 router.get(
   '/pago-multiple/resumen',
@@ -294,6 +308,22 @@ router.get(
   '/reportes-pagos/exportar/ingresos',
   authorize('reportes_pagos.ver_ingresos'),
   ReportesPagosControlleer.exportarIngresos
+);
+
+// GET /api/reportes-pagos/exportar/cursos
+// ?periodo_academico_id=X&formato=pdf|excel
+router.get(
+  '/reportes-pagos/exportar/cursos',
+  authorize('reportes_pagos.ver_estado_estudiante'),
+  ReportesPagosControlleer.exportarCursos
+);
+
+// GET /api/reportes-pagos/exportar/facturas
+// ?periodo_academico_id=X&formato=pdf|excel&fecha_inicio=Y&fecha_fin=Z&metodo_pago=W
+router.get(
+  '/reportes-pagos/exportar/facturas',
+  authorize('reportes_pagos.ver_ingresos'),
+  ReportesPagosControlleer.exportarFacturas
 );
 
 export default router;
