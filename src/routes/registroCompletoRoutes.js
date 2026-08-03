@@ -15,6 +15,19 @@ router.get(
   RegistroCompletoController.buscarPadrePorCI
 );
 
+// POST /registro-completo/familiar
+// Registro único: estudiantes + tutores + relaciones explícitas.
+// Recibe JSON o multipart/form-data. Los documentos se asocian por la
+// referencia del estudiante indicada en documentos_metadata.
+router.post(
+  '/familiar',
+  authorize('estudiante.crear'),
+  upload.fields([{ name: 'documentos', maxCount: 20 }]),
+  handleMulterError,
+  logActivity('registro_familiar', 'estudiante'),
+  RegistroCompletoController.registroFamiliar
+);
+
 // POST /api/registro-completo - Registro completo mejorado
 // Soporta 3 modos: nuevo, padre_existente, multiple
 router.post(

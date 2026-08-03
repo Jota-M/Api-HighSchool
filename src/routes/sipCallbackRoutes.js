@@ -5,6 +5,7 @@
 
 import express from 'express';
 import SipCallbackController from '../controllers/sipCallbackController.js';
+import SipCallbackTransporteController from '../controllers/sipCallbackTransporteController.js';
 
 const router = express.Router();
 
@@ -13,10 +14,21 @@ const router = express.Router();
  *
  * Esta es la URL que le pasás a SIP cuando generás un QR:
  * "callback": "https://tu-servidor.com/api/sip/callback"
- *
+ *  
  * También es la que le informás a MC4 junto con
  * el CALLBACK_USER y CALLBACK_PASSWORD para que la configuren.
  */
 router.post('/callback', SipCallbackController.confirmarPago);
+
+/**
+ * POST /api/sip/callback-transporte
+ *
+ * Esta es la URL que le pasás a SIP cuando generás un QR:
+ * "callback": "https://tu-servidor.com/api/sip/callback"
+ * 
+ * También es la que le informás a MC4 junto con
+ * el CALLBACK_USER y CALLBACK_PASSWORD para que la configuren.
+ */
+router.post('/callback-transporte', SipCallbackTransporteController.confirmarPago);
 
 export default router;

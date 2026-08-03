@@ -62,6 +62,7 @@ import backupRoutes from './routes/backupRoutes.js';
 import whatsappRoutes from './routes/whatsappRoutes.js';
 import sipCallbackRoutes from './routes/sipCallbackRoutes.js';
 import padrePagoRoutes from './routes/padrePagoRoutes.js';
+import padreTransportePagoRoutes from './routes/padreTransportePagoRoutes.js';
 import solicitudFacturaRoutes from './routes/solicitudFacturaRoutes.js';
 
 // Modelo para limpieza de sesiones
@@ -241,6 +242,7 @@ app.use('/whatsapp', whatsappRoutes);
 // PADRE PAGOS
 // ------------------------------
 app.use('/padre-p', padrePagoRoutes);
+app.use('/padre-p', padreTransportePagoRoutes);
 app.use('/solicitudes-factura', solicitudFacturaRoutes);
 
 // ------------------------------

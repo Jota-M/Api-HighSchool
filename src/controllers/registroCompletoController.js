@@ -139,7 +139,8 @@ class RegistroCompletoController {
         }
       }
 
-      // Validar según modo
+      // En modo existente también pueden agregarse otros tutores. Cada CI se
+      // reutiliza si ya existe y solo se crea cuando no está registrado.
       if (modo === 'existente') {
         if (!padre_existente_id) {
           await client.query('ROLLBACK');
@@ -157,23 +158,23 @@ class RegistroCompletoController {
             message: 'El padre especificado no existe'
           });
         }
-      } else {
-        if (!tutores || !Array.isArray(tutores) || tutores.length === 0) {
+      }
+
+      if (modo !== 'existente' && (!Array.isArray(tutores) || tutores.length === 0)) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Debe proporcionar al menos un tutor'
+        });
+      }
+
+      for (const [idx, tutor] of tutores.entries()) {
+        if (!tutor.ci) {
           await client.query('ROLLBACK');
           return res.status(400).json({
             success: false,
-            message: 'Debe proporcionar al menos un tutor'
+            message: `Tutor #${idx + 1}: el CI es obligatorio`
           });
-        }
-
-        for (const [idx, tutor] of tutores.entries()) {
-          if (!tutor.nombres || !tutor.apellido_paterno || !tutor.ci) {
-            await client.query('ROLLBACK');
-            return res.status(400).json({
-              success: false,
-              message: `Tutor #${idx + 1}: faltan datos obligatorios (nombres, apellido paterno, CI)`
-            });
-          }
         }
       }
 
@@ -184,8 +185,9 @@ class RegistroCompletoController {
       if (modo === 'existente') {
         const padreExistente = await PadreFamilia.findById(padre_existente_id, client);
         tutoresCreados.push(padreExistente);
-      } else {
-        for (const [index, tutor] of tutores.entries()) {
+      }
+
+      for (const [index, tutor] of tutores.entries()) {
           let tutorExistente = await PadreFamilia.findByCI(tutor.ci, client);
           let tutor_id;
           let tutor_usuario_id = null;
@@ -193,9 +195,18 @@ class RegistroCompletoController {
           if (tutorExistente) {
             tutor_id = tutorExistente.id;
             tutor_usuario_id = tutorExistente.usuario_id;
-            tutoresCreados.push(tutorExistente);
+            if (!tutoresCreados.some(t => t.id === tutor_id)) {
+              tutoresCreados.push(tutorExistente);
+            }
             console.log(`✅ Tutor existente encontrado: ${tutorExistente.id}`);
           } else {
+            if (!tutor.nombres || !tutor.apellido_paterno) {
+              await client.query('ROLLBACK');
+              return res.status(400).json({
+                success: false,
+                message: `Tutor #${index + 1}: nombres y apellido paterno son obligatorios para un CI nuevo`
+              });
+            }
             const nuevoTutor = await PadreFamilia.create({
               usuario_id: null,
               nombres: tutor.nombres,
@@ -216,7 +227,9 @@ class RegistroCompletoController {
             }, client);
 
             tutor_id = nuevoTutor.id;
-            tutoresCreados.push(nuevoTutor);
+            if (!tutoresCreados.some(t => t.id === nuevoTutor.id)) {
+              tutoresCreados.push(nuevoTutor);
+            }
             console.log(`✅ Nuevo tutor creado: ${nuevoTutor.id}`);
 
             if (crear_usuarios_tutores && !tutor_usuario_id) {
@@ -276,7 +289,6 @@ class RegistroCompletoController {
               });
             }
           }
-        }
       }
 
       // 6️⃣ PROCESAR ESTUDIANTES
@@ -434,16 +446,17 @@ class RegistroCompletoController {
 
         // Relacionar con tutores
         for (const [tutorIndex, tutorCreado] of tutoresCreados.entries()) {
+          const configuracion = tutores.find(t => String(t.ci).trim() === String(tutorCreado.ci).trim()) || {};
           await EstudianteTutor.assign({
             estudiante_id: nuevoEstudiante.id,
             padre_familia_id: tutorCreado.id,
-            es_tutor_principal: tutorIndex === 0,
-            vive_con_estudiante: true,
-            autorizado_recoger: true,
-            puede_autorizar_salidas: true,
-            recibe_notificaciones: true,
-            prioridad_contacto: tutorIndex + 1,
-            observaciones: null
+            es_tutor_principal: configuracion.es_tutor_principal ?? tutorIndex === 0,
+            vive_con_estudiante: configuracion.vive_con_estudiante ?? true,
+            autorizado_recoger: configuracion.autorizado_recoger ?? true,
+            puede_autorizar_salidas: configuracion.puede_autorizar_salidas ?? true,
+            recibe_notificaciones: configuracion.recibe_notificaciones ?? true,
+            prioridad_contacto: configuracion.prioridad_contacto ?? tutorIndex + 1,
+            observaciones: configuracion.observaciones ?? null
           }, client);
         }
 
@@ -628,6 +641,364 @@ class RegistroCompletoController {
       res.status(500).json({
         success: false,
         message: 'Error en el registro: ' + error.message
+      });
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Registro familiar unificado.
+   *
+   * Recibe estudiantes, tutores y sus relaciones de forma explícita. Mantiene
+   * las tablas actuales y reutiliza un tutor cuando el CI ya está registrado.
+   */
+  static async registroFamiliar(req, res) {
+    const client = await pool.connect();
+    const documentosUrls = [];
+
+    try {
+      const parseArray = (value, campo) => {
+        const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+        if (!Array.isArray(parsed)) {
+          const error = new Error(`El campo "${campo}" debe ser un arreglo`);
+          error.status = 400;
+          throw error;
+        }
+        return parsed;
+      };
+
+      const estudiantes = parseArray(req.body.estudiantes, 'estudiantes');
+      const tutores = parseArray(req.body.tutores, 'tutores');
+      const relaciones = parseArray(req.body.relaciones, 'relaciones');
+      const matriculas = req.body.matriculas ? parseArray(req.body.matriculas, 'matriculas') : [];
+      const credencialesEstudiantes = req.body.credenciales_estudiantes
+        ? parseArray(req.body.credenciales_estudiantes, 'credenciales_estudiantes')
+        : [];
+      const credencialesTutores = req.body.credenciales_tutores
+        ? parseArray(req.body.credenciales_tutores, 'credenciales_tutores')
+        : [];
+      const crearUsuariosEstudiantes = req.body.crear_usuarios_estudiantes === true || req.body.crear_usuarios_estudiantes === 'true';
+      const crearUsuariosTutores = req.body.crear_usuarios_tutores === true || req.body.crear_usuarios_tutores === 'true';
+
+      if (!estudiantes.length || !tutores.length || !relaciones.length) {
+        const error = new Error('Debe registrar al menos un estudiante, un tutor y una relación');
+        error.status = 400;
+        throw error;
+      }
+
+      const referenciasEstudiantes = new Set();
+      for (const [index, estudiante] of estudiantes.entries()) {
+        if (!estudiante.referencia || !estudiante.nombres || !estudiante.apellido_paterno || !estudiante.fecha_nacimiento) {
+          const error = new Error(`Estudiante #${index + 1}: referencia, nombres, apellido paterno y fecha de nacimiento son obligatorios`);
+          error.status = 400;
+          throw error;
+        }
+        if (referenciasEstudiantes.has(estudiante.referencia)) {
+          const error = new Error(`La referencia de estudiante "${estudiante.referencia}" está repetida`);
+          error.status = 400;
+          throw error;
+        }
+        referenciasEstudiantes.add(estudiante.referencia);
+      }
+
+      const referenciasTutores = new Set();
+      const cisTutores = new Set();
+      for (const [index, tutor] of tutores.entries()) {
+        if (!tutor.referencia || !tutor.ci) {
+          const error = new Error(`Tutor #${index + 1}: referencia y CI son obligatorios`);
+          error.status = 400;
+          throw error;
+        }
+        if (referenciasTutores.has(tutor.referencia) || cisTutores.has(String(tutor.ci).trim())) {
+          const error = new Error(`El tutor #${index + 1} está repetido`);
+          error.status = 400;
+          throw error;
+        }
+        referenciasTutores.add(tutor.referencia);
+        cisTutores.add(String(tutor.ci).trim());
+      }
+
+      const relacionesPorEstudiante = new Map();
+      const paresRelacion = new Set();
+      for (const [index, relacion] of relaciones.entries()) {
+        const estudianteRef = relacion.estudiante_referencia;
+        const tutorRef = relacion.tutor_referencia;
+        if (!referenciasEstudiantes.has(estudianteRef) || !referenciasTutores.has(tutorRef)) {
+          const error = new Error(`Relación #${index + 1}: estudiante o tutor inexistente en el registro`);
+          error.status = 400;
+          throw error;
+        }
+        const par = `${estudianteRef}::${tutorRef}`;
+        if (paresRelacion.has(par)) {
+          const error = new Error(`La relación ${par} está repetida`);
+          error.status = 400;
+          throw error;
+        }
+        paresRelacion.add(par);
+        const lista = relacionesPorEstudiante.get(estudianteRef) || [];
+        lista.push(relacion);
+        relacionesPorEstudiante.set(estudianteRef, lista);
+      }
+
+      for (const estudianteRef of referenciasEstudiantes) {
+        const relacionesDelEstudiante = relacionesPorEstudiante.get(estudianteRef) || [];
+        const principales = relacionesDelEstudiante.filter(r => r.es_tutor_principal === true);
+        if (!relacionesDelEstudiante.length || principales.length > 1) {
+          const error = new Error(`El estudiante "${estudianteRef}" debe tener relaciones y como máximo un tutor principal`);
+          error.status = 400;
+          throw error;
+        }
+      }
+
+      await client.query('BEGIN');
+
+      const buscarCredencial = (credenciales, referencia) =>
+        credenciales.find(credencial => credencial.referencia === referencia) || {};
+      const credencialesEstudiantesGeneradas = [];
+      const credencialesTutoresGeneradas = [];
+      const crearUsuario = async ({ persona, credencial, rolNombre, dominio }) => {
+        const username = credencial.username || RegistroCompletoController.generarUsername(persona.nombres, persona.apellido_paterno);
+        const password = credencial.password || RegistroCompletoController.generarPassword(persona.ci);
+        const email = credencial.email || persona.email || `${username}@${dominio}`;
+        if (await Usuario.findByUsername(username, client)) {
+          const error = new Error(`El nombre de usuario "${username}" ya existe`);
+          error.status = 409;
+          throw error;
+        }
+        const usuario = await Usuario.create({
+          username, email, password, activo: true, verificado: false, debe_cambiar_password: true,
+        }, client);
+        const rol = await RegistroCompletoController.obtenerRolPorNombre(rolNombre, client);
+        if (rol) {
+          await client.query('INSERT INTO usuario_roles (usuario_id, rol_id) VALUES ($1, $2)', [usuario.id, rol.id]);
+        }
+        return { usuario, username, password, email };
+      };
+
+      const tutoresPorReferencia = new Map();
+      for (const tutor of tutores) {
+        const ci = String(tutor.ci).trim();
+        let tutorGuardado = await PadreFamilia.findByCI(ci, client);
+
+        if (!tutorGuardado) {
+          if (!tutor.nombres || !tutor.apellido_paterno) {
+            const error = new Error(`El tutor con CI ${ci} es nuevo: nombres y apellido paterno son obligatorios`);
+            error.status = 400;
+            throw error;
+          }
+          tutorGuardado = await PadreFamilia.create({
+            usuario_id: null,
+            nombres: tutor.nombres,
+            apellido_paterno: tutor.apellido_paterno,
+            apellido_materno: tutor.apellido_materno || null,
+            ci,
+            fecha_nacimiento: tutor.fecha_nacimiento || null,
+            telefono: tutor.telefono || null,
+            celular: tutor.celular || null,
+            email: tutor.email || null,
+            direccion: tutor.direccion || null,
+            ocupacion: tutor.ocupacion || null,
+            parentesco: tutor.parentesco || null,
+            estado_civil: tutor.estado_civil || null,
+          }, client);
+          if (crearUsuariosTutores) {
+            const cuenta = await crearUsuario({
+              persona: tutorGuardado,
+              credencial: buscarCredencial(credencialesTutores, tutor.referencia),
+              rolNombre: 'padre',
+              dominio: 'padre.edu.bo',
+            });
+            await client.query('UPDATE padre_familia SET usuario_id = $1, updated_at = NOW() WHERE id = $2', [cuenta.usuario.id, tutorGuardado.id]);
+            tutorGuardado.usuario_id = cuenta.usuario.id;
+            credencialesTutoresGeneradas.push({
+              referencia: tutor.referencia,
+              nombre_completo: `${tutorGuardado.nombres} ${tutorGuardado.apellido_paterno}`,
+              username: cuenta.username,
+              password: cuenta.password,
+              email: cuenta.email,
+            });
+          }
+        }
+        tutoresPorReferencia.set(tutor.referencia, tutorGuardado);
+      }
+
+      const estudiantesPorReferencia = new Map();
+      for (const estudiante of estudiantes) {
+        if (estudiante.ci && await Estudiante.findByCI(estudiante.ci, client)) {
+          const error = new Error(`El CI del estudiante ${estudiante.ci} ya está registrado`);
+          error.status = 409;
+          throw error;
+        }
+
+        const codigo = estudiante.codigo || await Estudiante.generateCodeWithLock(client);
+        if (await Estudiante.findByCode(codigo, client)) {
+          const error = new Error(`El código de estudiante "${codigo}" ya está registrado`);
+          error.status = 409;
+          throw error;
+        }
+
+        const estudianteGuardado = await Estudiante.create({
+          usuario_id: null,
+          codigo,
+          nombres: estudiante.nombres,
+          apellido_paterno: estudiante.apellido_paterno,
+          apellido_materno: estudiante.apellido_materno || null,
+          fecha_nacimiento: estudiante.fecha_nacimiento,
+          rude: estudiante.rude || null,
+          ci: estudiante.ci || null,
+          lugar_nacimiento: estudiante.lugar_nacimiento || null,
+          genero: estudiante.genero || null,
+          direccion: estudiante.direccion || null,
+          zona: estudiante.zona || null,
+          ciudad: estudiante.ciudad || null,
+          telefono: estudiante.telefono || null,
+          email: estudiante.email || null,
+          foto_url: null,
+          contacto_emergencia: estudiante.contacto_emergencia || null,
+          tiene_discapacidad: estudiante.tiene_discapacidad ?? false,
+          tipo_discapacidad: estudiante.tipo_discapacidad || null,
+          observaciones: estudiante.observaciones || null,
+          activo: true,
+        }, client);
+        if (crearUsuariosEstudiantes) {
+          const cuenta = await crearUsuario({
+            persona: estudianteGuardado,
+            credencial: buscarCredencial(credencialesEstudiantes, estudiante.referencia),
+            rolNombre: 'estudiante',
+            dominio: 'estudiante.edu.bo',
+          });
+          await client.query('UPDATE estudiante SET usuario_id = $1, updated_at = NOW() WHERE id = $2', [cuenta.usuario.id, estudianteGuardado.id]);
+          estudianteGuardado.usuario_id = cuenta.usuario.id;
+          credencialesEstudiantesGeneradas.push({
+            referencia: estudiante.referencia,
+            nombre_completo: `${estudianteGuardado.nombres} ${estudianteGuardado.apellido_paterno}`,
+            username: cuenta.username,
+            password: cuenta.password,
+            email: cuenta.email,
+          });
+        }
+        estudiantesPorReferencia.set(estudiante.referencia, estudianteGuardado);
+      }
+
+      const relacionesCreadas = [];
+      for (const [estudianteRef, relacionesDelEstudiante] of relacionesPorEstudiante.entries()) {
+        for (const [index, relacion] of relacionesDelEstudiante.entries()) {
+          relacionesCreadas.push(await EstudianteTutor.assign({
+            estudiante_id: estudiantesPorReferencia.get(estudianteRef).id,
+            padre_familia_id: tutoresPorReferencia.get(relacion.tutor_referencia).id,
+            es_tutor_principal: relacion.es_tutor_principal ?? index === 0,
+            vive_con_estudiante: relacion.vive_con_estudiante ?? false,
+            autorizado_recoger: relacion.autorizado_recoger ?? true,
+            puede_autorizar_salidas: relacion.puede_autorizar_salidas ?? true,
+            recibe_notificaciones: relacion.recibe_notificaciones ?? true,
+            prioridad_contacto: relacion.prioridad_contacto ?? index + 1,
+            observaciones: relacion.observaciones || null,
+          }, client));
+        }
+      }
+
+      const matriculasCreadas = [];
+      const matriculasPorEstudiante = new Map();
+      for (const matricula of matriculas) {
+        const estudiante = estudiantesPorReferencia.get(matricula.estudiante_referencia);
+        if (!estudiante || !matricula.paralelo_id || !matricula.periodo_academico_id) {
+          const error = new Error('Cada matrícula debe indicar un estudiante, paralelo y período académico válidos');
+          error.status = 400;
+          throw error;
+        }
+        const numero = matricula.numero_matricula || await Matricula.generateNumeroMatricula(matricula.periodo_academico_id, client);
+        const result = await client.query(`
+          INSERT INTO matricula (
+            estudiante_id, paralelo_id, periodo_academico_id, numero_matricula,
+            fecha_matricula, estado, es_repitente, es_becado, porcentaje_beca,
+            tipo_beca, observaciones
+          ) VALUES ($1, $2, $3, $4, $5, 'activo', $6, $7, $8, $9, $10)
+          RETURNING *
+        `, [
+          estudiante.id, matricula.paralelo_id, matricula.periodo_academico_id,
+          numero, matricula.fecha_matricula || new Date(), matricula.es_repitente ?? false,
+          matricula.es_becado ?? false, matricula.porcentaje_beca || null,
+          matricula.tipo_beca || null, matricula.observaciones || null,
+        ]);
+        matriculasCreadas.push(result.rows[0]);
+        matriculasPorEstudiante.set(matricula.estudiante_referencia, result.rows[0]);
+      }
+
+      const documentosMetadata = req.body.documentos_metadata
+        ? parseArray(req.body.documentos_metadata, 'documentos_metadata')
+        : [];
+      const documentosArchivos = req.files?.documentos || [];
+      if (documentosMetadata.length !== documentosArchivos.length) {
+        const error = new Error('Cada archivo debe incluir sus metadatos de documento');
+        error.status = 400;
+        throw error;
+      }
+
+      for (const [index, archivo] of documentosArchivos.entries()) {
+        const metadata = documentosMetadata[index];
+        const matricula = matriculasPorEstudiante.get(metadata.estudiante_referencia);
+        if (!matricula) {
+          const error = new Error(`El documento #${index + 1} debe pertenecer a un estudiante con matrícula en este registro`);
+          error.status = 400;
+          throw error;
+        }
+        if (archivo.size > 10 * 1024 * 1024) {
+          const error = new Error(`El documento "${archivo.originalname}" supera el máximo de 10 MB`);
+          error.status = 400;
+          throw error;
+        }
+
+        const uploadResult = await UploadImage.uploadFromBuffer(
+          archivo.buffer,
+          'documentos',
+          `doc_matricula_${matricula.id}_${Date.now()}_${archivo.originalname}`
+        );
+        documentosUrls.push(uploadResult.url);
+        await client.query(`
+          INSERT INTO matricula_documento (
+            matricula_id, tipo_documento, nombre_archivo, url_archivo,
+            verificado, observaciones, created_at
+          ) VALUES ($1, $2, $3, $4, false, $5, NOW())
+        `, [
+          matricula.id,
+          metadata.tipo_documento || 'otro',
+          archivo.originalname,
+          uploadResult.url,
+          metadata.observaciones || null,
+        ]);
+      }
+
+      await client.query('COMMIT');
+      res.status(201).json({
+        success: true,
+        message: 'Registro familiar completado exitosamente',
+        data: {
+          estudiantes: [...estudiantesPorReferencia.entries()].map(([referencia, estudiante]) => ({ referencia, id: estudiante.id, codigo: estudiante.codigo })),
+          tutores: [...tutoresPorReferencia.entries()].map(([referencia, tutor]) => ({ referencia, id: tutor.id, ci: tutor.ci })),
+          relaciones_count: relacionesCreadas.length,
+          matriculas: matriculasCreadas.map(m => ({ id: m.id, numero_matricula: m.numero_matricula })),
+          documentos_guardados: documentosUrls.length,
+          credenciales_estudiantes: credencialesEstudiantesGeneradas,
+          credenciales_tutores: credencialesTutoresGeneradas,
+        },
+      });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      console.error('❌ Error en registro familiar:', error);
+      for (const url of documentosUrls) {
+        const publicId = UploadImage.extractPublicIdFromUrl(url);
+        if (publicId) {
+          try {
+            await UploadImage.deleteImage(publicId);
+          } catch (deleteError) {
+            console.error('Error al eliminar documento:', deleteError);
+          }
+        }
+      }
+      res.status(error.status || 500).json({
+        success: false,
+        message: error.status ? error.message : `Error en el registro familiar: ${error.message}`,
       });
     } finally {
       client.release();
