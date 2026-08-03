@@ -235,18 +235,11 @@ class RegistroCompletoController {
             if (crear_usuarios_tutores && !tutor_usuario_id) {
               const credencial_tutor = credenciales_tutores?.[index] || {};
               const tutor_username = credencial_tutor.username || 
-                RegistroCompletoController.generarUsername(tutor.nombres, tutor.apellido_paterno);
+                await RegistroCompletoController.generarUsernameUnico(
+                  tutor.nombres, tutor.apellido_paterno, tutor.apellido_materno, client
+                );
               const tutor_password_temporal = credencial_tutor.password || 
                 RegistroCompletoController.generarPassword(tutor.ci);
-
-              const usuarioTutorExiste = await Usuario.findByUsername(tutor_username, client);
-              if (usuarioTutorExiste) {
-                await client.query('ROLLBACK');
-                return res.status(409).json({
-                  success: false,
-                  message: `El username "${tutor_username}" ya existe`
-                });
-              }
 
               const email_tutor = credencial_tutor.email || tutor.email || 
                 `${tutor_username}@padre.edu.bo`;
@@ -388,23 +381,16 @@ class RegistroCompletoController {
           const cred_est = modo === 'multiple' ? credenciales_estudiantes?.[i] : credenciales_estudiantes;
           
           if (!cred_est || !cred_est.username || !cred_est.password) {
-            estudiante_username = RegistroCompletoController.generarUsername(
+            estudiante_username = await RegistroCompletoController.generarUsernameUnico(
               estudiante.nombres,
-              estudiante.apellido_paterno
+              estudiante.apellido_paterno,
+              estudiante.apellido_materno,
+              client
             );
             estudiante_password_temporal = RegistroCompletoController.generarPassword(estudiante.ci);
           } else {
             estudiante_username = cred_est.username;
             estudiante_password_temporal = cred_est.password;
-          }
-
-          const usuarioExiste = await Usuario.findByUsername(estudiante_username, client);
-          if (usuarioExiste) {
-            await client.query('ROLLBACK');
-            return res.status(409).json({
-              success: false,
-              message: `El username "${estudiante_username}" ya existe`
-            });
           }
 
           const email_estudiante = cred_est?.email || estudiante.email || 
@@ -758,14 +744,11 @@ class RegistroCompletoController {
       const credencialesEstudiantesGeneradas = [];
       const credencialesTutoresGeneradas = [];
       const crearUsuario = async ({ persona, credencial, rolNombre, dominio }) => {
-        const username = credencial.username || RegistroCompletoController.generarUsername(persona.nombres, persona.apellido_paterno);
+        const username = credencial.username || await RegistroCompletoController.generarUsernameUnico(
+          persona.nombres, persona.apellido_paterno, persona.apellido_materno, client
+        );
         const password = credencial.password || RegistroCompletoController.generarPassword(persona.ci);
         const email = credencial.email || persona.email || `${username}@${dominio}`;
-        if (await Usuario.findByUsername(username, client)) {
-          const error = new Error(`El nombre de usuario "${username}" ya existe`);
-          error.status = 409;
-          throw error;
-        }
         const usuario = await Usuario.create({
           username, email, password, activo: true, verificado: false, debe_cambiar_password: true,
         }, client);
@@ -1009,23 +992,83 @@ class RegistroCompletoController {
   // MÉTODOS AUXILIARES
   // ========================================
 
-  static generarUsername(nombres, apellido) {
-    const nombreLimpio = nombres.split(' ')[0]
+  /**
+   * Limpia una cadena de texto para usarla como parte de un username:
+   * elimina tildes, caracteres especiales y convierte a minúsculas.
+   */
+  static limpiarParteUsername(texto) {
+    if (!texto) return '';
+    return texto
       .toLowerCase()
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-z]/g, '');
-    
-    const apellidoLimpio = apellido
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^a-z]/g, '');
-    
-    const nombreCapital = nombreLimpio.charAt(0).toUpperCase() + nombreLimpio.slice(1);
-    const apellidoCapital = apellidoLimpio.charAt(0).toUpperCase() + apellidoLimpio.slice(1);
-    
-    return `${nombreCapital}${apellidoCapital}`;
+  }
+
+  /**
+   * Genera el username base: PrimerNombre + ApellidoPaterno.
+   * Ej: "Susana Dalia" + "Ramirez" → "SusanaRamirez"
+   */
+  static generarUsername(nombres, apellidoPaterno) {
+    const primerNombre = RegistroCompletoController.limpiarParteUsername(nombres.split(' ')[0]);
+    const paterno = RegistroCompletoController.limpiarParteUsername(apellidoPaterno);
+
+    const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+    return `${cap(primerNombre)}${cap(paterno)}`;
+  }
+
+  /**
+   * Genera un username único verificando contra la base de datos.
+   * Estrategia de fallback (usando Susana Dalia Ramirez Ari como ejemplo):
+   *  1. SusanaRamirez           (PrimerNombre + ApellidoPaterno)
+   *  2. SusanaDRamirez          (PrimerNombre + InicialSegundoNombre + ApellidoPaterno)
+   *  3. SusanaRamirezA          (PrimerNombre + ApellidoPaterno + InicialApellidoMaterno)
+   *  4. SusanaRamirez1, ...2... (sufijo numérico como último recurso)
+   */
+  static async generarUsernameUnico(nombres, apellidoPaterno, apellidoMaterno, client) {
+    const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
+    const limpiar = RegistroCompletoController.limpiarParteUsername.bind(RegistroCompletoController);
+
+    const partes = (nombres || '').trim().split(/\s+/);
+    const primerNombre = limpiar(partes[0] || '');
+    const segundoNombre = limpiar(partes[1] || '');
+    const paterno = limpiar(apellidoPaterno || '');
+    const materno = limpiar(apellidoMaterno || '');
+
+    // Candidatos en orden de prioridad
+    const candidatos = [
+      // 1. SusanaRamirez
+      `${cap(primerNombre)}${cap(paterno)}`,
+    ];
+
+    // 2. SusanaDRamirez  (solo si hay segundo nombre)
+    if (segundoNombre) {
+      candidatos.push(`${cap(primerNombre)}${segundoNombre.charAt(0).toUpperCase()}${cap(paterno)}`);
+    }
+
+    // 3. SusanaRamirezA  (solo si hay apellido materno)
+    if (materno) {
+      candidatos.push(`${cap(primerNombre)}${cap(paterno)}${materno.charAt(0).toUpperCase()}`);
+    }
+
+    // Probar candidatos
+    for (const username of candidatos) {
+      if (username && !(await Usuario.findByUsername(username, client))) {
+        return username;
+      }
+    }
+
+    // 4. Sufijos numéricos como último recurso
+    const base = `${cap(primerNombre)}${cap(paterno)}`;
+    for (let n = 1; n <= 999; n++) {
+      const username = `${base}${n}`;
+      if (!(await Usuario.findByUsername(username, client))) {
+        return username;
+      }
+    }
+
+    // Nunca debería llegar aquí
+    throw new Error(`No se pudo generar un username único para ${nombres} ${apellidoPaterno}`);
   }
 
   static generarPassword(ci = null) {
@@ -1062,10 +1105,18 @@ class RegistroCompletoController {
         });
       }
 
-      const finalUsername = username || RegistroCompletoController.generarUsername(
-        estudiante.nombres, 
-        estudiante.apellido_paterno
-      );
+      const client2 = await pool.connect();
+      let finalUsername;
+      try {
+        finalUsername = username || await RegistroCompletoController.generarUsernameUnico(
+          estudiante.nombres,
+          estudiante.apellido_paterno,
+          estudiante.apellido_materno,
+          client2
+        );
+      } finally {
+        client2.release();
+      }
       const finalPassword = password || RegistroCompletoController.generarPassword(estudiante.ci);
       const finalEmail = email || `${finalUsername}@estudiante.edu.bo`;
 
@@ -1160,11 +1211,19 @@ class RegistroCompletoController {
         });
       }
 
-      const finalUsername = username || RegistroCompletoController.generarUsername(
-        tutor.nombres, 
-        tutor.apellido_paterno
-      );
-      const finalPassword = password || RegistroCompletoController.generarPassword(tutor.ci); 
+      const clientTutor = await pool.connect();
+      let finalUsername;
+      try {
+        finalUsername = username || await RegistroCompletoController.generarUsernameUnico(
+          tutor.nombres,
+          tutor.apellido_paterno,
+          tutor.apellido_materno,
+          clientTutor
+        );
+      } finally {
+        clientTutor.release();
+      }
+      const finalPassword = password || RegistroCompletoController.generarPassword(tutor.ci);
       const finalEmail = email || tutor.email || `${finalUsername}@padre.edu.bo`;
 
       const usuarioExiste = await Usuario.findByCredential(finalUsername);
