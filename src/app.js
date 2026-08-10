@@ -64,6 +64,7 @@ import sipCallbackRoutes from './routes/sipCallbackRoutes.js';
 import padrePagoRoutes from './routes/padrePagoRoutes.js';
 import padreTransportePagoRoutes from './routes/padreTransportePagoRoutes.js';
 import solicitudFacturaRoutes from './routes/solicitudFacturaRoutes.js';
+import ocrRoutes from './routes/ocrRoutes.js';
 
 // Modelo para limpieza de sesiones
 import Sesion from './models/Sesion.js';
@@ -162,6 +163,7 @@ app.use('/public/academicos', publicAcademicosRoutes);
 // Auth (SIN rate limit global, cada ruta tiene el suyo)
 // ------------------------------
 app.use('/auth', authRoutes);
+app.use('/api/auth', authRoutes);
 
 // ------------------------------
 // SIP CALLBACK (PUBLICO)
@@ -244,6 +246,7 @@ app.use('/whatsapp', whatsappRoutes);
 app.use('/padre-p', padrePagoRoutes);
 app.use('/padre-p', padreTransportePagoRoutes);
 app.use('/solicitudes-factura', solicitudFacturaRoutes);
+app.use('/ocr', ocrRoutes);
 
 // ------------------------------
 // Rutas API antiguas

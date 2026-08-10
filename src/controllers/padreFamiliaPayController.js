@@ -86,6 +86,12 @@ class PadreFamiliaPayController {
          LEFT  JOIN matricula mat      ON e.id                 = mat.estudiante_id
                                       AND mat.estado           = 'activo'
                                       AND mat.deleted_at       IS NULL
+                                      AND mat.periodo_academico_id = (
+                                        SELECT id FROM periodo_academico
+                                        WHERE activo = true AND deleted_at IS NULL
+                                        ORDER BY fecha_inicio DESC
+                                        LIMIT 1
+                                      )
          LEFT  JOIN paralelo p         ON mat.paralelo_id      = p.id
          LEFT  JOIN grado g            ON p.grado_id           = g.id
          LEFT  JOIN nivel_academico n  ON g.nivel_academico_id = n.id

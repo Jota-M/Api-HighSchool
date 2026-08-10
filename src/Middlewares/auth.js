@@ -9,37 +9,70 @@ import authConfig from '../config/auth.js';
 // Middleware para verificar autenticación
 const authenticate = async (req, res, next) => {
   try {
-    // Leer token desde cookie
-    const token = req.cookies.access_token;
+    // Leer token desde cookie (web) o desde el header Authorization
+    // (apps móviles / Flutter, que no manejan cookies httpOnly).
+    const bearer = req.headers.authorization?.startsWith('Bearer ')
+      ? req.headers.authorization.slice(7)
+      : null;
+    const token = req.cookies?.access_token || bearer;
 
     if (!token) {
-      return res.status(401).json({ 
-        success: false, 
-        message: 'No autenticado. Token no proporcionado.' 
+      return res.status(401).json({
+        success: false,
+        code: 'TOKEN_REQUIRED',
+        message: 'No autenticado. Token no proporcionado.'
       });
     }
 
     // Verificar token
-    const decoded = TokenUtils.verifyAccessToken(token);
+    let decoded;
+    try {
+      decoded = TokenUtils.verifyAccessToken(token);
+    } catch (tokenError) {
+      if (tokenError.message === 'Token inválido o expirado') {
+        const refreshToken =
+          req.cookies?.refresh_token ||
+          req.headers['x-refresh-token'] ||
+          req.headers['refresh-token'];
+
+        if (refreshToken) {
+          return handleTokenRefresh(req, res, next, refreshToken);
+        }
+
+        return res.status(401).json({
+          success: false,
+          code: 'TOKEN_EXPIRED',
+          message: 'Token de acceso expirado.'
+        });
+      }
+
+      return res.status(401).json({
+        success: false,
+        code: 'INVALID_TOKEN',
+        message: 'Error de autenticación: ' + tokenError.message
+      });
+    }
 
     // Verificar que la sesión existe en BD
     const sesion = await Sesion.findByToken(token);
     if (!sesion) {
       res.clearCookie('access_token');
       res.clearCookie('refresh_token');
-      return res.status(401).json({ 
-        success: false, 
-        message: 'Sesión inválida o expirada.' 
+      return res.status(401).json({
+        success: false,
+        code: 'INVALID_SESSION',
+        message: 'Sesión inválida o expirada.'
       });
     }
 
     // Cargar usuario con permisos
     const usuario = await Usuario.findByIdWithPermissions(decoded.userId);
-    
+
     if (!usuario || !usuario.activo) {
-      return res.status(401).json({ 
-        success: false, 
-        message: 'Usuario inactivo o no encontrado.' 
+      return res.status(401).json({
+        success: false,
+        code: 'USER_INACTIVE',
+        message: 'Usuario inactivo o no encontrado.'
       });
     }
 
@@ -49,22 +82,21 @@ const authenticate = async (req, res, next) => {
 
     next();
   } catch (error) {
-    if (error.message === 'Token inválido o expirado') {
-      // Intentar renovar con refresh token
-      return handleTokenRefresh(req, res, next);
-    }
-    
-    return res.status(401).json({ 
-      success: false, 
-      message: 'Error de autenticación: ' + error.message 
+    return res.status(401).json({
+      success: false,
+      code: 'AUTH_ERROR',
+      message: 'Error de autenticación: ' + error.message
     });
   }
 };
 
 // Renovar token usando refresh token
-const handleTokenRefresh = async (req, res, next) => {
+const handleTokenRefresh = async (req, res, next, providedRefreshToken = null) => {
   try {
-    const refreshToken = req.cookies.refresh_token;
+    const refreshToken = providedRefreshToken ||
+      req.cookies?.refresh_token ||
+      req.headers['x-refresh-token'] ||
+      req.headers['refresh-token'];
 
     if (!refreshToken) {
       throw new Error('No hay refresh token disponible');
@@ -72,6 +104,9 @@ const handleTokenRefresh = async (req, res, next) => {
 
     // Verificar refresh token
     const decoded = TokenUtils.verifyRefreshToken(refreshToken);
+    if (!decoded) {
+      throw new Error('Refresh token inválido');
+    }
 
     // Buscar sesión con refresh token
     const sesion = await Sesion.findByRefreshToken(refreshToken);
@@ -92,6 +127,10 @@ const handleTokenRefresh = async (req, res, next) => {
     // Establecer nueva cookie
     res.cookie('access_token', newAccessToken, authConfig.cookieOptions);
 
+    // Exponer nuevo token en cabecera para clientes móviles / HTTP que no usan cookies
+    res.setHeader('X-Access-Token', newAccessToken);
+    res.setHeader('Access-Control-Expose-Headers', 'X-Access-Token, Authorization');
+
     // Cargar usuario y continuar
     const usuario = await Usuario.findByIdWithPermissions(decoded.userId);
     req.user = usuario;
@@ -101,9 +140,10 @@ const handleTokenRefresh = async (req, res, next) => {
   } catch (error) {
     res.clearCookie('access_token');
     res.clearCookie('refresh_token');
-    return res.status(401).json({ 
-      success: false, 
-      message: 'Sesión expirada. Por favor inicia sesión nuevamente.' 
+    return res.status(401).json({
+      success: false,
+      code: 'REFRESH_EXPIRED',
+      message: 'Sesión expirada. Por favor inicia sesión nuevamente.'
     });
   }
 };
@@ -115,9 +155,9 @@ const authorize = (...permisosRequeridos) => {
       const usuario = req.user;
 
       if (!usuario) {
-        return res.status(401).json({ 
-          success: false, 
-          message: 'Usuario no autenticado.' 
+        return res.status(401).json({
+          success: false,
+          message: 'Usuario no autenticado.'
         });
       }
 
@@ -129,7 +169,7 @@ const authorize = (...permisosRequeridos) => {
 
       // Verificar permisos específicos
       const permisosUsuario = usuario.permisos || [];
-      const tienePermiso = permisosRequeridos.some(permiso => 
+      const tienePermiso = permisosRequeridos.some(permiso =>
         permisosUsuario.some(p => p.nombre === permiso)
       );
 
@@ -146,8 +186,8 @@ const authorize = (...permisosRequeridos) => {
           mensaje: `Intento de acceso sin permisos: ${permisosRequeridos.join(', ')}`
         });
 
-        return res.status(403).json({ 
-          success: false, 
+        return res.status(403).json({
+          success: false,
           message: 'No tienes permisos suficientes para realizar esta acción.',
           permisosRequeridos
         });
@@ -155,9 +195,9 @@ const authorize = (...permisosRequeridos) => {
 
       next();
     } catch (error) {
-      return res.status(500).json({ 
-        success: false, 
-        message: 'Error al verificar permisos: ' + error.message 
+      return res.status(500).json({
+        success: false,
+        message: 'Error al verificar permisos: ' + error.message
       });
     }
   };
@@ -169,19 +209,19 @@ const requireRole = (...rolesRequeridos) => {
     const usuario = req.user;
 
     if (!usuario) {
-      return res.status(401).json({ 
-        success: false, 
-        message: 'Usuario no autenticado.' 
+      return res.status(401).json({
+        success: false,
+        message: 'Usuario no autenticado.'
       });
     }
 
     // Cambiar 'nombre' por el nombre real de la columna en tu tabla de roles
-    const rolesUsuario = usuario.roles?.map(r => r.nombre) || []; 
+    const rolesUsuario = usuario.roles?.map(r => r.nombre) || [];
     const tieneRol = rolesRequeridos.some(rol => rolesUsuario.includes(rol));
 
     if (!tieneRol) {
-      return res.status(403).json({ 
-        success: false, 
+      return res.status(403).json({
+        success: false,
         message: 'No tienes el rol necesario para acceder a este recurso.',
         rolesRequeridos
       });
@@ -194,8 +234,11 @@ const requireRole = (...rolesRequeridos) => {
 // Middleware opcional (no falla si no hay token)
 const optionalAuth = async (req, res, next) => {
   try {
-    const token = req.cookies.access_token;
-    
+    const bearer = req.headers.authorization?.startsWith('Bearer ')
+      ? req.headers.authorization.slice(7)
+      : null;
+    const token = req.cookies?.access_token || bearer;
+
     if (token) {
       const decoded = TokenUtils.verifyAccessToken(token);
       const usuario = await Usuario.findByIdWithPermissions(decoded.userId);
@@ -211,8 +254,8 @@ const optionalAuth = async (req, res, next) => {
 const logActivity = (accion, modulo) => {
   return async (req, res, next) => {
     const originalJson = res.json.bind(res);
-    
-    res.json = async function(data) {
+
+    res.json = async function (data) {
       // Solo registrar si hay usuario autenticado
       if (req.user) {
         const reqInfo = RequestInfo.extract(req);
@@ -226,10 +269,10 @@ const logActivity = (accion, modulo) => {
           mensaje: data.message || `${accion} en ${modulo}`
         });
       }
-      
+
       return originalJson(data);
     };
-    
+
     next();
   };
 };

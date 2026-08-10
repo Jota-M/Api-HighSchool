@@ -211,7 +211,9 @@ class EstudianteDashboard {
         WHERE pe.periodo_academico_id = $3
           AND pe.activo = true
           AND ($4::INTEGER IS NULL OR pe.id = $4)
-        ORDER BY pe.orden DESC
+        ORDER BY
+          CASE WHEN CURRENT_DATE BETWEEN pe.fecha_inicio AND pe.fecha_fin THEN 0 ELSE 1 END,
+          pe.orden ASC
         LIMIT 1
       ) pe ON true
 

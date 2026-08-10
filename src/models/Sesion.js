@@ -28,8 +28,7 @@ class Sesion {
   // Buscar por refresh token
   static async findByRefreshToken(refreshToken) {
     const result = await pool.query(
-      `SELECT * FROM sesiones 
-       WHERE refresh_token = $1 AND expires_at > CURRENT_TIMESTAMP`,
+      `SELECT * FROM sesiones WHERE refresh_token = $1`,
       [refreshToken]
     );
     return result.rows[0];

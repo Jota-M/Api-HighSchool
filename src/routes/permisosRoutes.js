@@ -9,7 +9,7 @@ import { authenticate, authorize, logActivity } from '../Middlewares/auth.js';
 
 const router = express.Router();
 
-router.use(authenticate);
+router.use(['/permisoss', '/roles', '/usuarios'], authenticate);
 
 // ==========================================
 // PERMISOS

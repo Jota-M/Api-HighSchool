@@ -188,6 +188,11 @@ class AuthController {
         success: true,
         message: 'Login exitoso.',
         data: {
+          // Se mantienen las cookies httpOnly para el frontend web (sin cambios).
+          // Se agregan los tokens en el body para clientes que no manejan
+          // cookies de forma nativa (apps móviles / Flutter).
+          accessToken,
+          refreshToken,
           user: {
             id: usuario.id,
             username: usuario.username,
@@ -209,7 +214,10 @@ class AuthController {
   // Cerrar sesión
   static async logout(req, res) {
     try {
-      const token = req.cookies.access_token;
+      const bearer = req.headers.authorization?.startsWith('Bearer ')
+        ? req.headers.authorization.slice(7)
+        : null;
+      const token = req.cookies.access_token || bearer;
 
       if (token) {
         await Sesion.delete(token);
@@ -247,22 +255,53 @@ class AuthController {
   // Renovar token
   static async refreshToken(req, res) {
     try {
-      const refreshToken = req.cookies.refresh_token;
+      const bearer = req.headers.authorization?.startsWith('Bearer ')
+        ? req.headers.authorization.slice(7)
+        : null;
+
+      // Extraer refresh token de múltiples fuentes posibles (Web y Apps Móviles)
+      const refreshToken =
+        req.cookies?.refresh_token ||
+        req.body?.refreshToken ||
+        req.body?.refresh_token ||
+        req.body?.token ||
+        req.body?.refresh ||
+        req.headers['x-refresh-token'] ||
+        req.headers['refresh-token'] ||
+        bearer;
 
       if (!refreshToken) {
-        return res.status(401).json({
+        console.warn('⚠️ [POST /auth/refresh-token] No se recibió refresh token en body, cookies ni headers:', {
+          body: req.body,
+          headers: req.headers
+        });
+        return res.status(400).json({
           success: false,
+          code: 'REFRESH_TOKEN_REQUIRED',
           message: 'Refresh token no proporcionado.'
         });
       }
 
-      const decoded = TokenUtils.verifyRefreshToken(refreshToken);
+      let decoded;
+      try {
+        decoded = TokenUtils.verifyRefreshToken(refreshToken);
+      } catch (tokenErr) {
+        console.warn('⚠️ [POST /auth/refresh-token] El token provisto no se pudo verificar como Refresh Token:', tokenErr.message);
+        return res.status(401).json({
+          success: false,
+          code: 'REFRESH_TOKEN_INVALID',
+          message: 'El refresh token es inválido o ha expirado. Debe iniciar sesión nuevamente.'
+        });
+      }
+
       const sesion = await Sesion.findByRefreshToken(refreshToken);
 
       if (!sesion) {
+        console.warn('⚠️ [POST /auth/refresh-token] No se encontró una sesión activa asociada al refresh token');
         return res.status(401).json({
           success: false,
-          message: 'Sesión inválida.'
+          code: 'SESSION_EXPIRED',
+          message: 'Sesión no encontrada o cerrada. Inicie sesión nuevamente.'
         });
       }
 
@@ -277,16 +316,25 @@ class AuthController {
 
       res.cookie('access_token', newAccessToken, authConfig.cookieOptions);
 
-      res.json({
+      console.log(`✅ [POST /auth/refresh-token] Token renovado exitosamente para usuario_id: ${decoded.userId}`);
+
+      return res.json({
         success: true,
-        message: 'Token renovado exitosamente.'
+        message: 'Token renovado exitosamente.',
+        data: {
+          accessToken: newAccessToken,
+          refreshToken: refreshToken,
+          token: newAccessToken
+        }
       });
     } catch (error) {
+      console.error('❌ [POST /auth/refresh-token] Error al renovar token:', error);
       res.clearCookie('access_token');
       res.clearCookie('refresh_token');
 
-      res.status(401).json({
+      return res.status(401).json({
         success: false,
+        code: 'REFRESH_FAILED',
         message: 'Error al renovar token: ' + error.message
       });
     }

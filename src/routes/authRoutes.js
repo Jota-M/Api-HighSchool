@@ -10,7 +10,9 @@ router.post('/login', AuthController.login);
 
 // Rutas protegidas
 router.post('/logout', authenticate, logActivity('logout', 'auth'), AuthController.logout);
+// Rutas de refresco de token (soporta tanto /refresh como /refresh-token)
 router.post('/refresh', AuthController.refreshToken);
+router.post('/refresh-token', AuthController.refreshToken);
 router.get('/me', authenticate, AuthController.me);
 router.post('/change-password', authenticate, logActivity('cambio_password', 'auth'), AuthController.changePassword);
 router.get('/sessions', authenticate, AuthController.getSessions);
