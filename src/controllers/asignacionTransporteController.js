@@ -3,6 +3,7 @@ import { AsignacionTransporte, PagoTransporte } from '../models/AsignacionTransp
 import { Estudiante } from '../models/Estudiantes.js';
 import ActividadLog from '../models/actividadLog.js';
 import RequestInfo from '../utils/requestInfo.js';
+import { pool } from '../db/pool.js';
 
 class AsignacionTransporteController {
   // ==========================================
@@ -70,13 +71,50 @@ class AsignacionTransporteController {
   // Crear asignación
   static async crear(req, res) {
     try {
-      const { estudiante_id, ruta_id, periodo_academico_id, costo_mensual } = req.body;
+      let { estudiante_id, ruta_id, periodo_academico_id, costo_mensual } = req.body;
 
       // Validaciones básicas
-      if (!estudiante_id || !ruta_id || !periodo_academico_id || !costo_mensual) {
+      if (!estudiante_id || !ruta_id || !costo_mensual) {
         return res.status(400).json({
           success: false,
-          message: 'Estudiante, ruta, periodo académico y costo mensual son requeridos'
+          message: 'Estudiante, ruta y costo mensual son requeridos'
+        });
+      }
+
+      // Validar o resolver periodo_academico_id
+      if (!periodo_academico_id) {
+        const periodoActivo = await pool.query(
+          'SELECT id FROM periodo_academico WHERE activo = true AND deleted_at IS NULL ORDER BY id DESC LIMIT 1'
+        );
+        if (periodoActivo.rows.length > 0) {
+          periodo_academico_id = periodoActivo.rows[0].id;
+          req.body.periodo_academico_id = periodo_academico_id;
+        } else {
+          const primerPeriodo = await pool.query(
+            'SELECT id FROM periodo_academico WHERE deleted_at IS NULL ORDER BY id DESC LIMIT 1'
+          );
+          if (primerPeriodo.rows.length > 0) {
+            periodo_academico_id = primerPeriodo.rows[0].id;
+            req.body.periodo_academico_id = periodo_academico_id;
+          }
+        }
+      } else {
+        const checkPeriodo = await pool.query('SELECT id FROM periodo_academico WHERE id = $1', [periodo_academico_id]);
+        if (checkPeriodo.rows.length === 0) {
+          const periodoActivo = await pool.query(
+            'SELECT id FROM periodo_academico WHERE activo = true AND deleted_at IS NULL ORDER BY id DESC LIMIT 1'
+          );
+          if (periodoActivo.rows.length > 0) {
+            periodo_academico_id = periodoActivo.rows[0].id;
+            req.body.periodo_academico_id = periodo_academico_id;
+          }
+        }
+      }
+
+      if (!req.body.periodo_academico_id) {
+        return res.status(400).json({
+          success: false,
+          message: 'No se encontró ningún periodo académico configurado en el sistema'
         });
       }
 
@@ -92,12 +130,12 @@ class AsignacionTransporteController {
       // Verificar que no tenga asignación activa en este periodo
       const asignacionExistente = await AsignacionTransporte.exists(
         estudiante_id,
-        periodo_academico_id
+        req.body.periodo_academico_id
       );
       if (asignacionExistente) {
         return res.status(409).json({
           success: false,
-          message: 'El estudiante ya tiene una asignación de transporte en este periodo académico'
+          message: 'El estudiante ya tiene una asignación de transporte activa en este periodo académico'
         });
       }
 
@@ -342,7 +380,7 @@ class AsignacionTransporteController {
   static async generarCuotas(req, res) {
     try {
       const { id } = req.params;
-      const { cantidad_meses = 10 } = req.body;
+      const { cantidad_meses } = req.body;
 
       const asignacion = await AsignacionTransporte.findById(id);
       if (!asignacion) {

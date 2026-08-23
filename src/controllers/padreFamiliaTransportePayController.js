@@ -188,7 +188,12 @@ class PadreFamiliaTransportePayController {
             const resultQRExistente = await client.query(
                 `SELECT qr_data, qr_expiracion, qr_image_url, monto_final
          FROM pago_transporte
-         WHERE id = $1 AND qr_estado = 'generado' AND qr_expiracion > CURRENT_TIMESTAMP`,
+         WHERE id = $1
+           AND qr_estado = 'generado'
+           AND qr_expiracion > CURRENT_TIMESTAMP
+           AND (anulado = false OR anulado IS NULL)
+         ORDER BY created_at DESC
+         LIMIT 1`,
                 [pago_id]
             );
 

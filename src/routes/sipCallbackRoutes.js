@@ -6,6 +6,7 @@
 import express from 'express';
 import SipCallbackController from '../controllers/sipCallbackController.js';
 import SipCallbackTransporteController from '../controllers/sipCallbackTransporteController.js';
+import SipCallbackProductoController from '../controllers/sipCallbackProductoController.js';
 
 const router = express.Router();
 
@@ -30,5 +31,12 @@ router.post('/callback', SipCallbackController.confirmarPago);
  * el CALLBACK_USER y CALLBACK_PASSWORD para que la configuren.
  */
 router.post('/callback-transporte', SipCallbackTransporteController.confirmarPago);
+
+/**
+ * POST /api/sip/callback-productos
+ *
+ * Callback para confirmaciones de pagos QR de compras de productos/uniformes
+ */
+router.post('/callback-productos', SipCallbackProductoController.confirmarPago);
 
 export default router;

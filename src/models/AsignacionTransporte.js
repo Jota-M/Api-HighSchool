@@ -104,6 +104,8 @@ class AsignacionTransporte {
       SELECT COUNT(*)
       FROM asignacion_transporte at
       INNER JOIN estudiante e ON at.estudiante_id = e.id
+      INNER JOIN ruta_transporte r ON at.ruta_id = r.id
+      LEFT JOIN periodo_academico pa ON at.periodo_academico_id = pa.id
       WHERE ${whereClause}
     `;
     const countResult = await pool.query(countQuery, queryParams);
@@ -112,6 +114,7 @@ class AsignacionTransporte {
     // Obtener datos
     const dataQuery = `
       SELECT at.*,
+        COALESCE(at.activo, true) as activo,
         e.codigo as estudiante_codigo,
         e.nombres as estudiante_nombres,
         e.apellido_paterno as estudiante_apellido_paterno,
@@ -121,7 +124,7 @@ class AsignacionTransporte {
         r.codigo as ruta_codigo,
         r.zona_cobertura,
         pr.nombre as parada_nombre,
-        pa.nombre as periodo_nombre,
+        COALESCE(pa.nombre, 'Sin periodo') as periodo_nombre,
         COUNT(pt.id) as total_cuotas,
         COUNT(CASE WHEN pt.estado = 'pagado' THEN 1 END) as cuotas_pagadas,
         COUNT(CASE WHEN pt.estado = 'pendiente' THEN 1 END) as cuotas_pendientes,
@@ -131,7 +134,7 @@ class AsignacionTransporte {
       INNER JOIN estudiante e ON at.estudiante_id = e.id
       INNER JOIN ruta_transporte r ON at.ruta_id = r.id
       LEFT JOIN parada_ruta pr ON at.parada_id = pr.id
-      INNER JOIN periodo_academico pa ON at.periodo_academico_id = pa.id
+      LEFT JOIN periodo_academico pa ON at.periodo_academico_id = pa.id
       LEFT JOIN pago_transporte pt ON at.id = pt.asignacion_transporte_id
       WHERE ${whereClause}
       GROUP BY at.id, e.codigo, e.nombres, e.apellido_paterno, e.apellido_materno, 
@@ -292,7 +295,7 @@ class AsignacionTransporte {
 // =============================================
 class PagoTransporte {
   // Generar cuotas mensuales (llama a la función SQL)
-  static async generarCuotas(asignacion_id, cantidad_meses = 10) {
+  static async generarCuotas(asignacion_id, cantidad_meses = null) {
     const query = 'SELECT * FROM generar_cuotas_transporte($1, $2)';
     const result = await pool.query(query, [asignacion_id, cantidad_meses]);
     return result.rows;
@@ -494,21 +497,21 @@ class PagoTransporte {
 
   // 🆕 REGISTRAR PAGO MÚLTIPLE
   static async registrarPagoMultiple(data, usuario_id) {
-  const client = await pool.connect();
-  
-  try {
-    await client.query('BEGIN');
+    const client = await pool.connect();
 
-    const { pagos, metodo_pago, numero_comprobante, observaciones } = data;
-    
-    let monto_total = 0;
-    let cantidad_pagos = 0;
-    const pagosRegistrados = [];
+    try {
+      await client.query('BEGIN');
 
-    for (const pagoData of pagos) {
-      const { pago_transporte_id, monto_pagado } = pagoData;
+      const { pagos, metodo_pago, numero_comprobante, observaciones } = data;
 
-      const query = `
+      let monto_total = 0;
+      let cantidad_pagos = 0;
+      const pagosRegistrados = [];
+
+      for (const pagoData of pagos) {
+        const { pago_transporte_id, monto_pagado } = pagoData;
+
+        const query = `
         UPDATE pago_transporte
         SET monto_pagado = COALESCE(monto_pagado, 0) + $1,
             estado = CASE 
@@ -526,41 +529,41 @@ class PagoTransporte {
         RETURNING *
       `;
 
-      const result = await client.query(query, [
-        monto_pagado,
-        metodo_pago,
-        numero_comprobante,
-        usuario_id,
-        observaciones,
-        pago_transporte_id
-      ]);
+        const result = await client.query(query, [
+          monto_pagado,
+          metodo_pago,
+          numero_comprobante,
+          usuario_id,
+          observaciones,
+          pago_transporte_id
+        ]);
 
-      if (result.rows[0]) {
-        monto_total += parseFloat(monto_pagado);
-        cantidad_pagos++;
-        pagosRegistrados.push(result.rows[0]);
+        if (result.rows[0]) {
+          monto_total += parseFloat(monto_pagado);
+          cantidad_pagos++;
+          pagosRegistrados.push(result.rows[0]);
+        }
       }
+
+      await client.query('COMMIT');
+
+      return {
+        cantidad_pagos,
+        monto_total,
+        pagos: pagosRegistrados
+      };
+
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
     }
-
-    await client.query('COMMIT');
-
-    return {
-      cantidad_pagos,
-      monto_total,
-      pagos: pagosRegistrados
-    };
-
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
   }
-}
 
-// 🆕 CALCULAR DISTRIBUCIÓN (sin cambios)
-static async calcularDistribucion(asignacion_id, monto_total) {
-  const query = `
+  // 🆕 CALCULAR DISTRIBUCIÓN (sin cambios)
+  static async calcularDistribucion(asignacion_id, monto_total) {
+    const query = `
     SELECT 
       pt.id as pago_id,
       pt.mes_correspondiente,
@@ -574,94 +577,94 @@ static async calcularDistribucion(asignacion_id, monto_total) {
     ORDER BY pt.fecha_vencimiento ASC
   `;
 
-  const result = await pool.query(query, [asignacion_id]);
-  const pagosPendientes = result.rows;
+    const result = await pool.query(query, [asignacion_id]);
+    const pagosPendientes = result.rows;
 
-  if (pagosPendientes.length === 0) {
+    if (pagosPendientes.length === 0) {
+      return {
+        monto_total,
+        monto_distribuido: 0,
+        monto_sobrante: monto_total,
+        pagos_completos: 0,
+        pagos_parciales: 0,
+        distribucion: [],
+        advertencias: ['No hay pagos pendientes para esta asignación']
+      };
+    }
+
+    let montoRestante = parseFloat(monto_total);
+    const distribucion = [];
+    let pagosCompletos = 0;
+    let pagosParciales = 0;
+    const advertencias = [];
+
+    for (const pago of pagosPendientes) {
+      if (montoRestante <= 0) break;
+
+      const saldoPendiente = parseFloat(pago.saldo_pendiente);
+      const montoAPagar = Math.min(montoRestante, saldoPendiente);
+      const saldoRestante = saldoPendiente - montoAPagar;
+      const porcentajePago = (montoAPagar / saldoPendiente) * 100;
+      const esPagoCompleto = montoAPagar >= saldoPendiente;
+
+      distribucion.push({
+        pago_id: pago.pago_id,
+        mes_correspondiente: pago.mes_correspondiente,
+        saldo_pendiente: saldoPendiente,
+        monto_a_pagar: montoAPagar,
+        saldo_restante: saldoRestante,
+        porcentaje_pago: porcentajePago,
+        es_pago_completo: esPagoCompleto,
+        es_pago_parcial: !esPagoCompleto
+      });
+
+      if (esPagoCompleto) {
+        pagosCompletos++;
+      } else {
+        pagosParciales++;
+      }
+
+      montoRestante -= montoAPagar;
+    }
+
+    const montoDistribuido = parseFloat(monto_total) - montoRestante;
+
+    if (montoRestante > 0.01) {
+      advertencias.push(`Sobra Bs. ${montoRestante.toFixed(2)} después de cubrir todos los pagos pendientes`);
+    }
+
     return {
-      monto_total,
-      monto_distribuido: 0,
-      monto_sobrante: monto_total,
-      pagos_completos: 0,
-      pagos_parciales: 0,
-      distribucion: [],
-      advertencias: ['No hay pagos pendientes para esta asignación']
+      monto_total: parseFloat(monto_total),
+      monto_distribuido: montoDistribuido,
+      monto_sobrante: montoRestante,
+      pagos_completos: pagosCompletos,
+      pagos_parciales: pagosParciales,
+      distribucion,
+      advertencias
     };
   }
 
-  let montoRestante = parseFloat(monto_total);
-  const distribucion = [];
-  let pagosCompletos = 0;
-  let pagosParciales = 0;
-  const advertencias = [];
+  // 🆕 REGISTRAR PAGO DISTRIBUIDO (CORREGIDO - sin banco_origen ni numero_referencia)
+  static async registrarPagoDistribuido(data, usuario_id) {
+    const client = await pool.connect();
 
-  for (const pago of pagosPendientes) {
-    if (montoRestante <= 0) break;
+    try {
+      await client.query('BEGIN');
 
-    const saldoPendiente = parseFloat(pago.saldo_pendiente);
-    const montoAPagar = Math.min(montoRestante, saldoPendiente);
-    const saldoRestante = saldoPendiente - montoAPagar;
-    const porcentajePago = (montoAPagar / saldoPendiente) * 100;
-    const esPagoCompleto = montoAPagar >= saldoPendiente;
+      const { asignacion_id, monto_total, metodo_pago, numero_comprobante, observaciones } = data;
 
-    distribucion.push({
-      pago_id: pago.pago_id,
-      mes_correspondiente: pago.mes_correspondiente,
-      saldo_pendiente: saldoPendiente,
-      monto_a_pagar: montoAPagar,
-      saldo_restante: saldoRestante,
-      porcentaje_pago: porcentajePago,
-      es_pago_completo: esPagoCompleto,
-      es_pago_parcial: !esPagoCompleto
-    });
+      // Calcular distribución
+      const distribucion = await this.calcularDistribucion(asignacion_id, monto_total);
 
-    if (esPagoCompleto) {
-      pagosCompletos++;
-    } else {
-      pagosParciales++;
-    }
+      if (distribucion.distribucion.length === 0) {
+        throw new Error('No hay pagos pendientes para distribuir');
+      }
 
-    montoRestante -= montoAPagar;
-  }
+      const pagosRegistrados = [];
 
-  const montoDistribuido = parseFloat(monto_total) - montoRestante;
-
-  if (montoRestante > 0.01) {
-    advertencias.push(`Sobra Bs. ${montoRestante.toFixed(2)} después de cubrir todos los pagos pendientes`);
-  }
-
-  return {
-    monto_total: parseFloat(monto_total),
-    monto_distribuido: montoDistribuido,
-    monto_sobrante: montoRestante,
-    pagos_completos: pagosCompletos,
-    pagos_parciales: pagosParciales,
-    distribucion,
-    advertencias
-  };
-}
-
-// 🆕 REGISTRAR PAGO DISTRIBUIDO (CORREGIDO - sin banco_origen ni numero_referencia)
-static async registrarPagoDistribuido(data, usuario_id) {
-  const client = await pool.connect();
-  
-  try {
-    await client.query('BEGIN');
-
-    const { asignacion_id, monto_total, metodo_pago, numero_comprobante, observaciones } = data;
-
-    // Calcular distribución
-    const distribucion = await this.calcularDistribucion(asignacion_id, monto_total);
-
-    if (distribucion.distribucion.length === 0) {
-      throw new Error('No hay pagos pendientes para distribuir');
-    }
-
-    const pagosRegistrados = [];
-
-    // Registrar cada pago según la distribución
-    for (const item of distribucion.distribucion) {
-      const query = `
+      // Registrar cada pago según la distribución
+      for (const item of distribucion.distribucion) {
+        const query = `
         UPDATE pago_transporte
         SET monto_pagado = COALESCE(monto_pagado, 0) + $1,
             estado = CASE 
@@ -679,38 +682,38 @@ static async registrarPagoDistribuido(data, usuario_id) {
         RETURNING *
       `;
 
-      const result = await client.query(query, [
-        item.monto_a_pagar,
-        metodo_pago,
-        numero_comprobante,
-        usuario_id,
-        observaciones,
-        item.pago_id
-      ]);
+        const result = await client.query(query, [
+          item.monto_a_pagar,
+          metodo_pago,
+          numero_comprobante,
+          usuario_id,
+          observaciones,
+          item.pago_id
+        ]);
 
-      if (result.rows[0]) {
-        pagosRegistrados.push(result.rows[0]);
+        if (result.rows[0]) {
+          pagosRegistrados.push(result.rows[0]);
+        }
       }
+
+      await client.query('COMMIT');
+
+      return {
+        cantidad_pagos: pagosRegistrados.length,
+        monto_distribuido: distribucion.monto_distribuido,
+        monto_sobrante: distribucion.monto_sobrante,
+        pagos_completos: distribucion.pagos_completos,
+        pagos_parciales: distribucion.pagos_parciales,
+        pagos: pagosRegistrados
+      };
+
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
     }
-
-    await client.query('COMMIT');
-
-    return {
-      cantidad_pagos: pagosRegistrados.length,
-      monto_distribuido: distribucion.monto_distribuido,
-      monto_sobrante: distribucion.monto_sobrante,
-      pagos_completos: distribucion.pagos_completos,
-      pagos_parciales: distribucion.pagos_parciales,
-      pagos: pagosRegistrados
-    };
-
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
   }
-}
 
   // 🆕 CALCULAR DISTRIBUCIÓN
   static async calcularDistribucion(asignacion_id, monto_total) {

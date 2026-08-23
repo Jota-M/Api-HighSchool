@@ -273,7 +273,8 @@ class PadreFamiliaPayController {
          WHERE mensualidad_id = $1
            AND qr_estado      = 'generado'
            AND qr_expiracion  > CURRENT_TIMESTAMP
-           AND anulado        = false
+           AND (anulado       = false OR anulado IS NULL)
+         ORDER BY created_at DESC
          LIMIT 1`,
         [mensualidad_id]
       );

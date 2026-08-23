@@ -8,7 +8,7 @@ class RutaTransporte {
       codigo, nombre, descripcion, zona_cobertura, punto_inicio, punto_fin,
       horario_ida, horario_retorno, capacidad_maxima, costo_mensual,
       conductor_responsable, telefono_conductor, placa_vehiculo,
-      modelo_vehiculo, anio_vehiculo, color, observaciones
+      modelo_vehiculo, anio_vehiculo, color, observaciones, activo = true
     } = data;
 
     const query = `
@@ -18,15 +18,29 @@ class RutaTransporte {
         conductor_responsable, telefono_conductor, placa_vehiculo,
         modelo_vehiculo, anio_vehiculo, color, observaciones, activo
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, true)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
       RETURNING *
     `;
 
     const result = await pool.query(query, [
-      codigo, nombre, descripcion, zona_cobertura, punto_inicio, punto_fin,
-      horario_ida, horario_retorno, capacidad_maxima || 40, costo_mensual,
-      conductor_responsable, telefono_conductor, placa_vehiculo,
-      modelo_vehiculo, anio_vehiculo, color, observaciones
+      codigo,
+      nombre,
+      descripcion || null,
+      zona_cobertura || null,
+      punto_inicio || null,
+      punto_fin || null,
+      horario_ida || null,
+      horario_retorno || null,
+      capacidad_maxima || 40,
+      costo_mensual,
+      conductor_responsable || null,
+      telefono_conductor || null,
+      placa_vehiculo || null,
+      modelo_vehiculo || null,
+      anio_vehiculo || null,
+      color || null,
+      observaciones || null,
+      activo !== undefined ? Boolean(activo) : true
     ]);
 
     return result.rows[0];
@@ -54,7 +68,7 @@ class RutaTransporte {
     }
 
     if (activo !== undefined) {
-      whereConditions.push(`r.activo = $${paramCounter}`);
+      whereConditions.push(`COALESCE(r.activo, true) = $${paramCounter}`);
       queryParams.push(activo);
       paramCounter++;
     }
@@ -71,6 +85,7 @@ class RutaTransporte {
     // Obtener datos con paradas
     const dataQuery = `
       SELECT r.*,
+        COALESCE(r.activo, true) as activo,
         COUNT(DISTINCT pr.id) as cantidad_paradas,
         ROUND((r.cupos_ocupados::NUMERIC / r.capacidad_maxima * 100), 1) as porcentaje_ocupacion
       FROM ruta_transporte r
@@ -98,6 +113,7 @@ class RutaTransporte {
   static async findById(id) {
     const query = `
       SELECT r.*,
+        COALESCE(r.activo, true) as activo,
         COUNT(DISTINCT pr.id) as cantidad_paradas,
         COUNT(DISTINCT at.id) FILTER (WHERE at.activo = true) as estudiantes_asignados,
         ROUND((r.cupos_ocupados::NUMERIC / r.capacidad_maxima * 100), 1) as porcentaje_ocupacion
@@ -123,22 +139,47 @@ class RutaTransporte {
 
     const query = `
       UPDATE ruta_transporte
-      SET nombre = $1, descripcion = $2, zona_cobertura = $3, 
-          punto_inicio = $4, punto_fin = $5, horario_ida = $6,
-          horario_retorno = $7, capacidad_maxima = $8, costo_mensual = $9,
-          conductor_responsable = $10, telefono_conductor = $11,
-          placa_vehiculo = $12, modelo_vehiculo = $13, anio_vehiculo = $14,
-          color = $15, activo = $16, observaciones = $17,
+      SET nombre = COALESCE($1, nombre),
+          descripcion = $2,
+          zona_cobertura = $3, 
+          punto_inicio = $4,
+          punto_fin = $5,
+          horario_ida = $6,
+          horario_retorno = $7,
+          capacidad_maxima = COALESCE($8, capacidad_maxima),
+          costo_mensual = COALESCE($9, costo_mensual),
+          conductor_responsable = $10,
+          telefono_conductor = $11,
+          placa_vehiculo = $12,
+          modelo_vehiculo = $13,
+          anio_vehiculo = $14,
+          color = $15,
+          activo = COALESCE($16, activo, true),
+          observaciones = $17,
           updated_at = CURRENT_TIMESTAMP
       WHERE id = $18 AND deleted_at IS NULL
       RETURNING *
     `;
 
     const result = await pool.query(query, [
-      nombre, descripcion, zona_cobertura, punto_inicio, punto_fin,
-      horario_ida, horario_retorno, capacidad_maxima, costo_mensual,
-      conductor_responsable, telefono_conductor, placa_vehiculo,
-      modelo_vehiculo, anio_vehiculo, color, activo, observaciones, id
+      nombre,
+      descripcion !== undefined ? (descripcion || null) : null,
+      zona_cobertura !== undefined ? (zona_cobertura || null) : null,
+      punto_inicio !== undefined ? (punto_inicio || null) : null,
+      punto_fin !== undefined ? (punto_fin || null) : null,
+      horario_ida || null,
+      horario_retorno || null,
+      capacidad_maxima,
+      costo_mensual,
+      conductor_responsable !== undefined ? (conductor_responsable || null) : null,
+      telefono_conductor !== undefined ? (telefono_conductor || null) : null,
+      placa_vehiculo !== undefined ? (placa_vehiculo || null) : null,
+      modelo_vehiculo !== undefined ? (modelo_vehiculo || null) : null,
+      anio_vehiculo || null,
+      color !== undefined ? (color || null) : null,
+      activo !== undefined ? Boolean(activo) : null,
+      observaciones !== undefined ? (observaciones || null) : null,
+      id
     ]);
 
     return result.rows[0];
@@ -210,8 +251,15 @@ class ParadaRuta {
     `;
 
     const result = await pool.query(query, [
-      ruta_id, nombre, direccion, referencia, latitud, longitud,
-      orden, hora_estimada_ida, hora_estimada_retorno
+      ruta_id,
+      nombre,
+      direccion || null,
+      referencia || null,
+      latitud ? parseFloat(latitud) : null,
+      longitud ? parseFloat(longitud) : null,
+      orden ? parseInt(orden) : 1,
+      hora_estimada_ida || null,
+      hora_estimada_retorno || null
     ]);
 
     return result.rows[0];
@@ -249,16 +297,30 @@ class ParadaRuta {
 
     const query = `
       UPDATE parada_ruta
-      SET nombre = $1, direccion = $2, referencia = $3,
-          latitud = $4, longitud = $5, orden = $6,
-          hora_estimada_ida = $7, hora_estimada_retorno = $8, activo = $9
+      SET nombre = COALESCE($1, nombre),
+          direccion = $2,
+          referencia = $3,
+          latitud = $4,
+          longitud = $5,
+          orden = COALESCE($6, orden),
+          hora_estimada_ida = $7,
+          hora_estimada_retorno = $8,
+          activo = COALESCE($9, activo, true)
       WHERE id = $10
       RETURNING *
     `;
 
     const result = await pool.query(query, [
-      nombre, direccion, referencia, latitud, longitud, orden,
-      hora_estimada_ida, hora_estimada_retorno, activo, id
+      nombre,
+      direccion !== undefined ? (direccion || null) : null,
+      referencia !== undefined ? (referencia || null) : null,
+      latitud ? parseFloat(latitud) : null,
+      longitud ? parseFloat(longitud) : null,
+      orden ? parseInt(orden) : null,
+      hora_estimada_ida || null,
+      hora_estimada_retorno || null,
+      activo !== undefined ? Boolean(activo) : null,
+      id
     ]);
 
     return result.rows[0];

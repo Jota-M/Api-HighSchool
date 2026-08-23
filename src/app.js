@@ -45,6 +45,8 @@ import rutaTransporteRoutes from './routes/rutaTransporteRoutes.js';
 import asignacionTransporteRoutes from './routes/asignacionTransporteRoutes.js';
 import pagoTransporteRoutes from './routes/pagoTransporteRoutes.js';
 import ingresoRoutes from './routes/ingresoRoutes.js';
+import egresoRoutes from './routes/egresoRoutes.js';
+import financieroRoutes from './routes/financieroRoutes.js';
 import notasRoutes from './routes/notasRoutes.js';
 import asistenciaRoutes from './routes/asistenciaRoutes.js';
 
@@ -63,11 +65,14 @@ import whatsappRoutes from './routes/whatsappRoutes.js';
 import sipCallbackRoutes from './routes/sipCallbackRoutes.js';
 import padrePagoRoutes from './routes/padrePagoRoutes.js';
 import padreTransportePagoRoutes from './routes/padreTransportePagoRoutes.js';
+import productoRoutes from './routes/productoRoutes.js';
+import padreProductoRoutes from './routes/padreProductoRoutes.js';
 import solicitudFacturaRoutes from './routes/solicitudFacturaRoutes.js';
 import ocrRoutes from './routes/ocrRoutes.js';
 
-// Modelo para limpieza de sesiones
+// Modelo y servicio para limpiezas periódicas
 import Sesion from './models/Sesion.js';
+import { liberarPedidosVencidos } from './services/pedidoProductoService.js';
 
 // Importar pool para DB
 import { pool } from './db/pool.js';
@@ -227,6 +232,8 @@ app.use('/api/ruta-transporte', rutaTransporteRoutes);
 app.use('/api/asignacion-transporte', asignacionTransporteRoutes);
 app.use('/api/pago-transporte', pagoTransporteRoutes);
 app.use('/api/ingreso', ingresoRoutes);
+app.use('/api/egreso', egresoRoutes);
+app.use('/api/financiero', financieroRoutes);
 
 app.use('/estudianted', estudiantedRoutes);
 app.use('/reportes/asistencia', reportesAsistenciaRoutes);
@@ -241,10 +248,12 @@ app.use('/prediccion', prediccionRoutes);
 app.use('/backups', backupRoutes);
 app.use('/whatsapp', whatsappRoutes);
 // ------------------------------
-// PADRE PAGOS
+// PADRE PAGOS Y PRODUCTOS
 // ------------------------------
+app.use('/api', productoRoutes);
 app.use('/padre-p', padrePagoRoutes);
 app.use('/padre-p', padreTransportePagoRoutes);
+app.use('/padre-p', padreProductoRoutes);
 app.use('/solicitudes-factura', solicitudFacturaRoutes);
 app.use('/ocr', ocrRoutes);
 
@@ -273,7 +282,7 @@ app.use((err, req, res, next) => {
 });
 
 // ------------------------------
-// Limpieza de sesiones expiradas
+// Tareas en segundo plano (limpieza de sesiones y pedidos de productos vencidos)
 // ------------------------------
 setInterval(async () => {
   try {
@@ -283,5 +292,16 @@ setInterval(async () => {
     console.error('Error al limpiar sesiones:', error);
   }
 }, 60 * 60 * 1000);
+
+setInterval(async () => {
+  try {
+    const { liberados } = await liberarPedidosVencidos();
+    if (liberados > 0) {
+      console.log(`[PedidosProductos] ${liberados} pedidos vencidos liberados.`);
+    }
+  } catch (error) {
+    console.error('Error al liberar pedidos de productos vencidos:', error);
+  }
+}, 30 * 60 * 1000);
 
 export default app;
