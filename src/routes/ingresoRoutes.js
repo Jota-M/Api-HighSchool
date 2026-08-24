@@ -1,6 +1,7 @@
 // routes/ingresoRoutes.js
 import express from 'express';
 import { IngresoController, TipoIngresoController } from '../controllers/ingresoController.js';
+import ReportesFinancierosController from '../controllers/reportesFinancierosController.js';
 import { authenticate, authorize, logActivity } from '../Middlewares/auth.js';
 import { upload, handleMulterError } from '../Middlewares/uploadMiddleware.js';
 
@@ -54,6 +55,17 @@ router.get(
   '/resumen/diario',
   authorize('ingresos.leer'),
   IngresoController.obtenerIngresosDiarios
+);
+
+/**
+ * GET /api/ingreso/exportar/ingresos
+ * Exportar reporte de ingresos a PDF o Excel
+ * Query: fecha_desde, fecha_hasta, formato=pdf|excel, tipo_ingreso_id
+ */
+router.get(
+  '/exportar/ingresos',
+  authorize('ingresos.leer'),
+  ReportesFinancierosController.exportarIngresos
 );
 
 // ==========================================

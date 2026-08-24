@@ -39,6 +39,7 @@ import cursosVacacionalesRoutes from './routes/cursoVacacionalRoutes.js';
 import reportesRoutes from './routes/reportesRoutes.js';
 import paymentRoutes from './routes/paymentRoutes.js';
 import materialRoutes from './routes/materialRoutes.js';
+import galeriaRoutes from './routes/galeriaRoutes.js';
 
 //Rutas modulo transporte
 import rutaTransporteRoutes from './routes/rutaTransporteRoutes.js';
@@ -58,6 +59,7 @@ import seguimientoRoutes from './routes/seguimientoPedagogicoRoutes.js';
 import docentedRoutes from './routes/docentedRoutes.js';
 import reportesNotasRoutes from './routes/reportesNotasRoutes.js';
 import notificacionRoutes from './routes/notificacionRoutes.js';
+// import dispositivoPushRoutes from './routes/dispositivoPushRoutes.js';
 import permisosRoutes from './routes/permisosRoutes.js';
 import prediccionRoutes from './routes/prediccionRoutes.js';
 import backupRoutes from './routes/backupRoutes.js';
@@ -224,6 +226,7 @@ app.use('/notas', notasRoutes);
 app.use('/asistencia', asistenciaRoutes);
 app.use('/permisos', asistenciaRoutes);
 app.use('/materiales', materialRoutes);
+app.use('/galeria', galeriaRoutes);
 
 // ------------------------------
 // Rutas del módulo de transporte
@@ -241,8 +244,9 @@ app.use('/reportes/notas', reportesNotasRoutes);
 app.use('/horarios', horarioRoutes);
 app.use('/seguimiento', seguimientoRoutes);
 app.use('/docentes', docentedRoutes);
-// app.use('/reportes/notas', reportesNotasRoutes);
+app.use('/reportes/notas', reportesNotasRoutes);
 app.use('/notificaciones', notificacionRoutes);
+// app.use('/dispositivos', dispositivoPushRoutes);
 app.use('/padre', padreRoutes);
 app.use('/prediccion', prediccionRoutes);
 app.use('/backups', backupRoutes);
@@ -282,7 +286,7 @@ app.use((err, req, res, next) => {
 });
 
 // ------------------------------
-// Tareas en segundo plano (limpieza de sesiones y pedidos de productos vencidos)
+// Limpieza de sesiones expiradas
 // ------------------------------
 setInterval(async () => {
   try {

@@ -789,13 +789,13 @@ class ReportesPagosController {
   }
 
   // ══════════════════════════════════════════════
-  // 5️⃣  REPORTE DE FACTURAS
+  // 5️⃣  REPORTE DE FACTURAS Y RECIBOS
   //     GET /api/reportes-pagos/exportar/facturas
-  //     ?periodo_academico_id=X&formato=pdf|excel&fecha_inicio=Y&fecha_fin=Z&metodo_pago=W
+  //     ?periodo_academico_id=X&formato=pdf|excel&fecha_inicio=Y&fecha_fin=Z&metodo_pago=W&tipo_emision=todos|factura|recibo&grado_id=G&paralelo_id=P
   // ══════════════════════════════════════════════
   static async exportarFacturas(req, res) {
     try {
-      const { periodo_academico_id, formato = 'pdf', fecha_inicio, fecha_fin, metodo_pago } = req.query;
+      const { periodo_academico_id, formato = 'pdf', fecha_inicio, fecha_fin, metodo_pago, tipo_emision = 'todos', grado_id, paralelo_id } = req.query;
       if (!periodo_academico_id)
         return res.status(400).json({ success: false, message: 'Se requiere periodo_academico_id' });
 
@@ -805,12 +805,27 @@ class ReportesPagosController {
 
       let whereConditions = [
         'mat.periodo_academico_id = $1',
-        'pm.anulado = false',
-        'pm.entrego_factura = true'
+        'pm.anulado = false'
       ];
       let queryParams = [parseInt(periodo_academico_id)];
       let paramCounter = 2;
 
+      if (tipo_emision === 'factura') {
+        whereConditions.push('pm.entrego_factura = true');
+      } else if (tipo_emision === 'recibo') {
+        whereConditions.push('pm.entrego_factura = false');
+      }
+
+      if (grado_id) {
+        whereConditions.push(`g.id = $${paramCounter}`);
+        queryParams.push(parseInt(grado_id));
+        paramCounter++;
+      }
+      if (paralelo_id) {
+        whereConditions.push(`p.id = $${paramCounter}`);
+        queryParams.push(parseInt(paralelo_id));
+        paramCounter++;
+      }
       if (fecha_inicio) {
         whereConditions.push(`pm.fecha_pago >= $${paramCounter}::date`);
         queryParams.push(fecha_inicio);
@@ -829,7 +844,7 @@ class ReportesPagosController {
 
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
-      // Detalle de pagos facturados
+      // Detalle de pagos facturados y con recibo
       const detalle = await pool.query(`
         SELECT
           pm.codigo_pago,
@@ -865,21 +880,51 @@ class ReportesPagosController {
         FROM pago_mensualidad pm
         INNER JOIN mensualidad m ON pm.mensualidad_id = m.id
         INNER JOIN matricula mat ON m.matricula_id = mat.id
+        INNER JOIN estudiante e ON mat.estudiante_id = e.id
+        INNER JOIN paralelo p ON mat.paralelo_id = p.id
+        INNER JOIN grado g ON p.grado_id = g.id
         ${whereClause}
         GROUP BY pm.metodo_pago
         ORDER BY total DESC
       `, queryParams);
 
-      const totalFacturado = detalle.rows.reduce((sum, r) => sum + parseFloat(r.monto_pagado), 0);
+      let totalMonto = 0;
+      let facturasCount = 0;
+      let facturasMonto = 0;
+      let recibosCount = 0;
+      let recibosMonto = 0;
+
+      detalle.rows.forEach((r) => {
+        const monto = parseFloat(r.monto_pagado || 0);
+        totalMonto += monto;
+        if (r.entrego_factura) {
+          facturasCount++;
+          facturasMonto += monto;
+        } else {
+          recibosCount++;
+          recibosMonto += monto;
+        }
+      });
+
+      const totalPagos = detalle.rows.length;
       const stats = {
-        totalFacturado,
-        cantidadFacturas: detalle.rows.length,
+        totalPagos,
+        totalMonto,
+        facturasCount,
+        facturasMonto,
+        recibosCount,
+        recibosMonto,
+        porcentajeFacturado: totalPagos > 0 ? ((facturasCount / totalPagos) * 100).toFixed(1) : '0',
+        porcentajeRecibo: totalPagos > 0 ? ((recibosCount / totalPagos) * 100).toFixed(1) : '0',
+        totalFacturado: facturasMonto,
+        cantidadFacturas: facturasCount,
       };
 
       const data = {
         periodo,
         detalle: detalle.rows,
         metodos: metodos.rows,
+        tipo_emision,
         stats
       };
 
@@ -951,48 +996,52 @@ class ReportesPagosController {
   }
 
   // ══════════════════════════════════════════════
-  // 🔴 PDF — FACTURAS
+  // 🔴 PDF — FACTURAS Y RECIBOS
   // ══════════════════════════════════════════════
-  static _pdfFacturas(res, { periodo, detalle, metodos, stats }) {
+  static _pdfFacturas(res, { periodo, detalle, metodos, tipo_emision, stats }) {
     const pdf = new PDFGenerator({ margin: 40, landscape: true });
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename=reporte-facturas-${periodo.codigo ?? periodo.id}.pdf`);
+    res.setHeader('Content-Disposition', `attachment; filename=reporte-facturacion-${periodo.codigo ?? periodo.id}.pdf`);
     pdf.pipe(res);
 
     pdf.drawHeader(
-      'REPORTE DE FACTURACIÓN',
+      'REPORTE DE EMISIÓN DE FACTURAS Y RECIBOS',
       `Período: ${periodo.nombre}`
     );
 
     pdf.drawInfoBox([
       { label: 'Período',  value: periodo.nombre },
+      { label: 'Filtro Emisión', value: tipo_emision === 'factura' ? 'Solo Facturas' : tipo_emision === 'recibo' ? 'Solo Recibos' : 'Todos (Facturas y Recibos)' },
       { label: 'Generado', value: formatearFecha(new Date(), 'largo') },
-    ], 2);
+    ], 3);
 
-    pdf.drawSection('RESUMEN DE FACTURACIÓN');
+    pdf.drawSection('RESUMEN COMPARATIVO DE EMISIÓN');
     pdf.drawStatsGrid([
-      { label: 'Total Facturado', value: `Bs ${stats.totalFacturado.toFixed(2)}` },
-      { label: 'Cantidad de Facturas', value: stats.cantidadFacturas.toString() },
+      { label: 'Total Recaudado', value: `Bs ${stats.totalMonto.toFixed(2)}` },
+      { label: 'Total Pagos', value: stats.totalPagos.toString() },
+      { label: 'Con Factura', value: `${stats.facturasCount} (${stats.porcentajeFacturado}%) — Bs ${stats.facturasMonto.toFixed(2)}` },
+      { label: 'Solo Recibo', value: `${stats.recibosCount} (${stats.porcentajeRecibo}%) — Bs ${stats.recibosMonto.toFixed(2)}` },
       ...metodos.map(m => ({
         label: m.metodo_pago === 'sin_metodo' ? 'Sin método' : m.metodo_pago.charAt(0).toUpperCase() + m.metodo_pago.slice(1),
         value: `Bs ${parseFloat(m.total).toFixed(2)}`
       }))
     ], 3);
 
-    pdf.drawSection('DETALLE DE FACTURAS EMITIDAS');
+    pdf.drawSection('DETALLE DE PAGOS REGISTRADOS');
     const headers = [
-      '#', 'N° Factura', 'Código Pago', 'Fecha', 'Estudiante', 'Curso', 'Mes / Cuota', 'Método', 'Monto'
+      '#', 'Código Pago', 'Fecha', 'Estudiante', 'Curso', 'Cuota / Mes', 'Emisión', 'N° Doc', 'Método', 'Monto'
     ];
-    const colWidths = [25, 75, 85, 70, 160, 100, 100, 80, 85];
+    const colWidths = [22, 75, 65, 140, 85, 90, 65, 75, 70, 75];
 
     const rows = detalle.map((p, i) => [
       (i + 1).toString(),
-      p.numero_factura ?? 'Sí',
       p.codigo_pago,
       formatearFecha(p.fecha_pago, 'corto'),
       `${p.apellidos}, ${p.nombres}`,
       `${p.grado} — ${p.paralelo}`,
       `C${p.numero_cuota} — ${p.mes_correspondiente}`,
+      p.entrego_factura ? 'Factura' : 'Recibo',
+      p.entrego_factura ? (p.numero_factura || 'Facturado') : (p.numero_comprobante || 'Recibo'),
       p.metodo_pago ?? '—',
       `Bs ${parseFloat(p.monto_pagado).toFixed(2)}`
     ]);
@@ -1056,35 +1105,32 @@ class ReportesPagosController {
   }
 
   // ══════════════════════════════════════════════
-  // 🟢 EXCEL — FACTURAS
+  // 🟢 EXCEL — FACTURAS Y RECIBOS
   // ══════════════════════════════════════════════
   static async _excelFacturas(res, { periodo, detalle, metodos, stats }) {
     const excel = new ExcelGenerator();
 
     // Hoja 1: Detalle completo
-    const ws1 = excel.createSheet('Facturas');
-    excel.addTitle(ws1, 'REPORTE DE FACTURACIÓN', `Período: ${periodo.nombre}`);
+    const ws1 = excel.createSheet('Facturación y Recibos');
+    excel.addTitle(ws1, 'REPORTE DE EMISIÓN DE FACTURAS Y RECIBOS', `Período: ${periodo.nombre}`);
     excel.addInfoBox(ws1, [
       { label: 'Período',  value: periodo.nombre },
       { label: 'Generado', value: formatearFecha(new Date(), 'largo') },
     ]);
     excel.addStats(ws1, [
-      { label: 'Total Facturado', value: `Bs ${stats.totalFacturado.toFixed(2)}` },
-      { label: 'Cantidad de Facturas', value: stats.cantidadFacturas.toString() },
-      ...metodos.map(m => ({
-        label: m.metodo_pago === 'sin_metodo' ? 'Sin método' : m.metodo_pago.charAt(0).toUpperCase() + m.metodo_pago.slice(1),
-        value: `Bs ${parseFloat(m.total).toFixed(2)}`
-      }))
-    ], 3);
+      { label: 'Total Recaudado', value: `Bs ${stats.totalMonto.toFixed(2)}` },
+      { label: 'Total Pagos', value: stats.totalPagos.toString() },
+      { label: 'Facturas Emitidas', value: `${stats.facturasCount} (${stats.porcentajeFacturado}%) — Bs ${stats.facturasMonto.toFixed(2)}` },
+      { label: 'Recibos Emitidos', value: `${stats.recibosCount} (${stats.porcentajeRecibo}%) — Bs ${stats.recibosMonto.toFixed(2)}` },
+    ], 2);
 
     const headers1 = [
-      '#', 'N° Factura', 'Código Pago', 'Fecha Pago', 'Estudiante Código', 'Nombres', 'Apellidos',
-      'Grado', 'Paralelo', 'N° Cuota', 'Mes', 'Método Pago', 'Monto (Bs)', 'Comprobante'
+      '#', 'Código Pago', 'Fecha Pago', 'Estudiante Código', 'Nombres', 'Apellidos',
+      'Grado', 'Paralelo', 'N° Cuota', 'Mes', 'Tipo Emisión', 'N° Factura', 'N° Comprobante', 'Método Pago', 'Monto (Bs)'
     ];
 
     const rows1 = detalle.map((p, i) => [
       i + 1,
-      p.numero_factura ?? 'Sí',
       p.codigo_pago,
       formatearFecha(p.fecha_pago, 'corto'),
       p.estudiante_codigo,
@@ -1094,14 +1140,16 @@ class ReportesPagosController {
       p.paralelo,
       parseInt(p.numero_cuota),
       p.mes_correspondiente,
+      p.entrego_factura ? 'Factura' : 'Recibo',
+      p.numero_factura ?? '—',
+      p.numero_comprobante ?? '—',
       p.metodo_pago ?? '—',
-      parseFloat(parseFloat(p.monto_pagado).toFixed(2)),
-      p.numero_comprobante ?? '—'
+      parseFloat(parseFloat(p.monto_pagado).toFixed(2))
     ]);
 
     excel.addTable(ws1, headers1, rows1, {
-      sectionTitle: 'DETALLE COMPLETO',
-      columnWidths: [5, 12, 16, 12, 14, 22, 22, 14, 12, 10, 18, 14, 14, 14],
+      sectionTitle: 'DETALLE COMPLETO DE PAGOS',
+      columnWidths: [5, 16, 12, 14, 22, 22, 14, 12, 10, 18, 14, 14, 16, 14, 14],
     });
     excel.addFooter(ws1);
 
@@ -1120,7 +1168,7 @@ class ReportesPagosController {
     excel.addFooter(ws2);
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename=reporte-facturas-${periodo.codigo ?? periodo.id}.xlsx`);
+    res.setHeader('Content-Disposition', `attachment; filename=reporte-facturacion-${periodo.codigo ?? periodo.id}.xlsx`);
     await excel.write(res);
     res.end();
   }

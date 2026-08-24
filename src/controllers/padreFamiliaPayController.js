@@ -176,7 +176,7 @@ class PadreFamiliaPayController {
            pm.qr_estado,
            pm.qr_expiracion,
            pm.transaccion_id,
-           pm.fecha_pago,
+           COALESCE(pm.fecha_pago, pm.created_at) AS fecha_pago,
            pm.monto_pagado,
            CASE
              WHEN pm.qr_estado = 'generado'
@@ -186,10 +186,17 @@ class PadreFamiliaPayController {
            END AS tiene_qr_activo
          FROM mensualidad m
          INNER JOIN matricula mat ON m.matricula_id = mat.id
-         LEFT JOIN pago_mensualidad pm
-           ON pm.mensualidad_id = m.id
-           AND pm.anulado       = false
-           AND pm.qr_estado     IS NOT NULL
+         LEFT JOIN (
+           SELECT DISTINCT ON (mensualidad_id)
+             *
+           FROM pago_mensualidad
+           WHERE anulado = false
+           ORDER BY
+             mensualidad_id,
+             -- Priorizar pagos QR completados, luego el pago más reciente
+             CASE WHEN qr_estado = 'pagado' THEN 0 ELSE 1 END ASC,
+             created_at DESC
+         ) pm ON pm.mensualidad_id = m.id
          WHERE mat.estudiante_id = $1
            AND mat.estado        = 'activo'
            AND mat.deleted_at    IS NULL

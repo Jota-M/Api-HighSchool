@@ -17,6 +17,84 @@ class ReportesFinancierosController {
     }
 
     // ══════════════════════════════════════════════
+    // 0️⃣  REPORTE DE INGRESOS
+    //     GET /api/ingreso/exportar/ingresos
+    //     ?fecha_desde=X&fecha_hasta=Y&formato=pdf|excel&tipo_ingreso_id=Z
+    // ══════════════════════════════════════════════
+    static async exportarIngresos(req, res) {
+        try {
+            const { formato = 'pdf', tipo_ingreso_id } = req.query;
+            const { desde, hasta } = ReportesFinancierosController._rango(req.query.fecha_desde, req.query.fecha_hasta);
+
+            let whereConditions = ["i.estado != 'anulado'", 'DATE(i.fecha_ingreso) >= $1', 'DATE(i.fecha_ingreso) <= $2'];
+            let queryParams = [desde, hasta];
+            let paramCounter = 3;
+
+            if (tipo_ingreso_id) {
+                whereConditions.push(`i.tipo_ingreso_id = $${paramCounter}`);
+                queryParams.push(parseInt(tipo_ingreso_id));
+                paramCounter++;
+            }
+
+            const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
+
+            // Resumen por categoría
+            const porCategoria = await pool.query(`
+                SELECT ti.categoria, ti.nombre as tipo_ingreso, COUNT(i.id) as cantidad, SUM(i.monto_neto) as total
+                FROM ingreso i
+                INNER JOIN tipo_ingreso ti ON i.tipo_ingreso_id = ti.id
+                ${whereClause}
+                GROUP BY ti.categoria, ti.nombre, ti.orden
+                ORDER BY ti.orden, total DESC
+            `, queryParams);
+
+            // Resumen por método de pago
+            const porMetodo = await pool.query(`
+                SELECT i.metodo_pago, COUNT(i.id) as cantidad, SUM(i.monto_neto) as total
+                FROM ingreso i
+                ${whereClause}
+                GROUP BY i.metodo_pago
+                ORDER BY total DESC
+            `, queryParams);
+
+            // Detalle de ingresos
+            const detalle = await pool.query(`
+                SELECT
+                    i.codigo_ingreso, i.fecha_ingreso, i.observaciones, i.referencia_tipo,
+                    i.monto_neto, i.metodo_pago, i.estado,
+                    ti.nombre as tipo_ingreso_nombre,
+                    e.nombres as estudiante_nombres, e.apellido_paterno as estudiante_apellido_paterno, e.apellido_materno as estudiante_apellido_materno,
+                    p.nombres as padre_nombres, p.apellidos as padre_apellidos
+                FROM ingreso i
+                INNER JOIN tipo_ingreso ti ON i.tipo_ingreso_id = ti.id
+                LEFT JOIN estudiante e ON i.estudiante_id = e.id
+                LEFT JOIN padre_familia p ON i.padre_familia_id = p.id
+                ${whereClause}
+                ORDER BY i.fecha_ingreso DESC, i.id DESC
+            `, queryParams);
+
+            const totalIngresos = porCategoria.rows.reduce((s, r) => s + parseFloat(r.total || 0), 0);
+            const totalTransacciones = porCategoria.rows.reduce((s, r) => s + parseInt(r.cantidad || 0), 0);
+
+            const data = {
+                rango: { desde, hasta },
+                porCategoria: porCategoria.rows,
+                porMetodo: porMetodo.rows,
+                detalle: detalle.rows,
+                stats: { totalIngresos, totalTransacciones },
+            };
+
+            return formato === 'excel'
+                ? ReportesFinancierosController._excelIngresos(res, data)
+                : ReportesFinancierosController._pdfIngresos(res, data);
+
+        } catch (error) {
+            console.error('Error exportar ingresos:', error);
+            res.status(500).json({ success: false, message: error.message });
+        }
+    }
+
+    // ══════════════════════════════════════════════
     // 1️⃣  REPORTE DE EGRESOS
     //     GET /api/egreso/exportar/egresos
     //     ?fecha_desde=X&fecha_hasta=Y&formato=pdf|excel&tipo_egreso_id=Z
@@ -165,6 +243,131 @@ class ReportesFinancierosController {
             console.error('Error exportar balance:', error);
             res.status(500).json({ success: false, message: error.message });
         }
+    }
+
+    // ══════════════════════════════════════════════
+    // 🟡 PDF — INGRESOS
+    // ══════════════════════════════════════════════
+    static _pdfIngresos(res, { rango, porCategoria, porMetodo, detalle, stats }) {
+        const pdf = new PDFGenerator({ margin: 40, landscape: true });
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename=reporte-ingresos-${rango.desde}_${rango.hasta}.pdf`);
+        pdf.pipe(res);
+
+        pdf.drawHeader(
+            'REPORTE DE INGRESOS',
+            `Período: ${formatearFecha(rango.desde, 'corto')} — ${formatearFecha(rango.hasta, 'corto')}`
+        );
+
+        pdf.drawInfoBox([
+            { label: 'Desde', value: formatearFecha(rango.desde, 'corto') },
+            { label: 'Hasta', value: formatearFecha(rango.hasta, 'corto') },
+            { label: 'Generado', value: formatearFecha(new Date(), 'largo') },
+        ], 3);
+
+        pdf.drawSection('RESUMEN DE INGRESOS');
+        pdf.drawStatsGrid([
+            { label: 'Total Ingresado', value: `Bs ${stats.totalIngresos.toFixed(2)}` },
+            { label: 'Total Transacciones', value: stats.totalTransacciones.toString() },
+            ...porMetodo.map(m => ({
+                label: (m.metodo_pago || 'Otro').charAt(0).toUpperCase() + (m.metodo_pago || 'Otro').slice(1),
+                value: `Bs ${parseFloat(m.total || 0).toFixed(2)}`,
+            })),
+        ], 3);
+
+        pdf.drawSection('INGRESOS POR CATEGORÍA');
+        pdf.drawTable(
+            ['Categoría', 'Tipo de Ingreso', 'Cantidad', 'Total'],
+            porCategoria.map(r => [
+                r.categoria || 'General',
+                r.tipo_ingreso,
+                r.cantidad.toString(),
+                `Bs ${parseFloat(r.total || 0).toFixed(2)}`,
+            ]),
+            { columnWidths: [140, 220, 100, 130] }
+        );
+
+        pdf.drawSection('DETALLE DE INGRESOS');
+        const headers = ['#', 'Código', 'Fecha', 'Concepto', 'Cliente / Estudiante', 'Tipo', 'Método', 'Monto'];
+        const colWidths = [25, 85, 70, 150, 130, 110, 80, 85];
+
+        const rows = detalle.map((e, i) => {
+            const persona = e.estudiante_nombres
+                ? `${e.estudiante_apellido_paterno || ''} ${e.estudiante_nombres}`.trim()
+                : (e.padre_nombres ? `${e.padre_apellidos || ''} ${e.padre_nombres}`.trim() : '—');
+            const concepto = e.observaciones || e.tipo_ingreso_nombre || '—';
+            return [
+                (i + 1).toString(),
+                e.codigo_ingreso,
+                formatearFecha(e.fecha_ingreso, 'corto'),
+                concepto,
+                persona,
+                e.tipo_ingreso_nombre || '—',
+                e.metodo_pago,
+                `Bs ${parseFloat(e.monto_neto).toFixed(2)}`,
+            ];
+        });
+
+        pdf.drawTable(headers, rows, { columnWidths: colWidths });
+        pdf.end();
+    }
+
+    // ══════════════════════════════════════════════
+    // 🟢 EXCEL — INGRESOS
+    // ══════════════════════════════════════════════
+    static async _excelIngresos(res, { rango, porCategoria, porMetodo, detalle, stats }) {
+        const excel = new ExcelGenerator();
+        const ws = excel.createSheet('Ingresos');
+
+        excel.addTitle(ws, 'REPORTE DE INGRESOS', `Período: ${formatearFecha(rango.desde, 'corto')} — ${formatearFecha(rango.hasta, 'corto')}`);
+        excel.addInfoBox(ws, [
+            { label: 'Desde', value: formatearFecha(rango.desde, 'corto') },
+            { label: 'Hasta', value: formatearFecha(rango.hasta, 'corto') },
+            { label: 'Generado', value: formatearFecha(new Date(), 'largo') },
+        ]);
+        excel.addStats(ws, [
+            { label: 'Total Ingresado', value: `Bs ${stats.totalIngresos.toFixed(2)}` },
+            { label: 'Total Transacciones', value: stats.totalTransacciones.toString() },
+            ...porMetodo.map(m => ({
+                label: (m.metodo_pago || 'Otro').charAt(0).toUpperCase() + (m.metodo_pago || 'Otro').slice(1),
+                value: `Bs ${parseFloat(m.total || 0).toFixed(2)}`,
+            })),
+        ], 3);
+
+        excel.addTable(ws,
+            ['Categoría', 'Tipo de Ingreso', 'Cantidad', 'Total (Bs)'],
+            porCategoria.map(r => [r.categoria || 'General', r.tipo_ingreso, parseInt(r.cantidad), parseFloat(parseFloat(r.total || 0).toFixed(2))]),
+            { sectionTitle: 'INGRESOS POR CATEGORÍA', columnWidths: [16, 26, 12, 16] }
+        );
+
+        const headers = ['#', 'Código', 'Fecha', 'Concepto', 'Cliente / Estudiante', 'Tipo de Ingreso', 'Método', 'Monto (Bs)'];
+        const rows = detalle.map((e, i) => {
+            const persona = e.estudiante_nombres
+                ? `${e.estudiante_apellido_paterno || ''} ${e.estudiante_nombres}`.trim()
+                : (e.padre_nombres ? `${e.padre_apellidos || ''} ${e.padre_nombres}`.trim() : '—');
+            const concepto = e.observaciones || e.tipo_ingreso_nombre || '—';
+            return [
+                i + 1,
+                e.codigo_ingreso,
+                formatearFecha(e.fecha_ingreso, 'corto'),
+                concepto,
+                persona,
+                e.tipo_ingreso_nombre || '—',
+                e.metodo_pago,
+                parseFloat(parseFloat(e.monto_neto).toFixed(2)),
+            ];
+        });
+
+        excel.addTable(ws, headers, rows, {
+            sectionTitle: 'DETALLE DE INGRESOS',
+            columnWidths: [5, 14, 12, 30, 24, 20, 14, 14],
+        });
+        excel.addFooter(ws);
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename=reporte-ingresos-${rango.desde}_${rango.hasta}.xlsx`);
+        await excel.write(res);
+        res.end();
     }
 
     // ══════════════════════════════════════════════

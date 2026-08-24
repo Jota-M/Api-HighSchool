@@ -1272,10 +1272,10 @@ class ReportesPagosController {
     }
   }
 
-  // GET /api/reportes-pagos/facturas - Lista de pagos facturados
+  // GET /api/reportes-pagos/facturas - Reporte comparativo de Facturación vs Recibos
   static async facturas(req, res) {
     try {
-      const { periodo_academico_id, fecha_inicio, fecha_fin, metodo_pago } = req.query;
+      const { periodo_academico_id, fecha_inicio, fecha_fin, metodo_pago, tipo_emision = 'todos', grado_id, paralelo_id } = req.query;
       if (!periodo_academico_id) {
         return res.status(400).json({
           success: false,
@@ -1285,11 +1285,28 @@ class ReportesPagosController {
 
       let whereConditions = [
         'mat.periodo_academico_id = $1',
-        'pm.anulado = false',
-        'pm.entrego_factura = true'
+        'pm.anulado = false'
       ];
       let queryParams = [parseInt(periodo_academico_id)];
       let paramCounter = 2;
+
+      if (tipo_emision === 'factura') {
+        whereConditions.push('pm.entrego_factura = true');
+      } else if (tipo_emision === 'recibo') {
+        whereConditions.push('pm.entrego_factura = false');
+      }
+
+      if (grado_id) {
+        whereConditions.push(`g.id = $${paramCounter}`);
+        queryParams.push(parseInt(grado_id));
+        paramCounter++;
+      }
+
+      if (paralelo_id) {
+        whereConditions.push(`p.id = $${paramCounter}`);
+        queryParams.push(parseInt(paralelo_id));
+        paramCounter++;
+      }
 
       if (fecha_inicio) {
         whereConditions.push(`pm.fecha_pago >= $${paramCounter}::date`);
@@ -1338,20 +1355,50 @@ class ReportesPagosController {
 
       const result = await pool.query(query, queryParams);
 
-      const totalInvoiced = result.rows.reduce((sum, r) => sum + parseFloat(r.monto_pagado), 0);
+      // Calcular estadísticas de Factura vs Recibo
+      let totalMonto = 0;
+      let facturasCount = 0;
+      let facturasMonto = 0;
+      let recibosCount = 0;
+      let recibosMonto = 0;
+
+      result.rows.forEach((r) => {
+        const monto = parseFloat(r.monto_pagado || 0);
+        totalMonto += monto;
+        if (r.entrego_factura) {
+          facturasCount++;
+          facturasMonto += monto;
+        } else {
+          recibosCount++;
+          recibosMonto += monto;
+        }
+      });
+
+      const totalPagos = result.rows.length;
+      const porcentajeFacturado = totalPagos > 0 ? ((facturasCount / totalPagos) * 100).toFixed(1) : '0';
+      const porcentajeRecibo = totalPagos > 0 ? ((recibosCount / totalPagos) * 100).toFixed(1) : '0';
 
       res.json({
         success: true,
         data: {
           facturas: result.rows,
           stats: {
-            totalInvoiced,
-            invoiceCount: result.rows.length
+            totalPagos,
+            totalMonto,
+            facturasCount,
+            facturasMonto,
+            recibosCount,
+            recibosMonto,
+            porcentajeFacturado,
+            porcentajeRecibo,
+            // retrocompatibilidad
+            totalInvoiced: facturasMonto,
+            invoiceCount: facturasCount
           }
         }
       });
     } catch (error) {
-      console.error('Error al obtener reporte de facturas:', error);
+      console.error('Error al obtener reporte de facturación:', error);
       res.status(500).json({
         success: false,
         message: 'Error al obtener reporte de facturas: ' + error.message
@@ -1791,8 +1838,9 @@ class PagoDistribuidoController {
           INSERT INTO pago_mensualidad (
             codigo_pago, mensualidad_id, monto_pagado, metodo_pago,
             numero_comprobante, banco_origen, numero_referencia,
-            entrego_factura, numero_factura, registrado_por, observaciones
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            entrego_factura, numero_factura, registrado_por, observaciones,
+            fecha_pago
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
           RETURNING *
         `;
 

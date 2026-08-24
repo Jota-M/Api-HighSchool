@@ -448,8 +448,9 @@ class PagoMensualidad {
       INSERT INTO pago_mensualidad (
         codigo_pago, mensualidad_id, monto_pagado, metodo_pago,
         numero_comprobante, comprobante_url, entrego_factura, numero_factura,
-        banco_origen, numero_referencia, registrado_por, observaciones
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        banco_origen, numero_referencia, registrado_por, observaciones,
+        fecha_pago
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
       RETURNING *
     `;
 
