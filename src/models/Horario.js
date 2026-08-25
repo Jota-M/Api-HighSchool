@@ -359,14 +359,18 @@ class HorarioDetalle {
 
   // Horario semanal de un docente en un período
   // CORRECCIÓN: acepta parámetro estado para que admin pueda ver borradores
+  // CORRECCIÓN: agrega bloque_horario_id y materia_id — sin esto, el frontend
+  // no puede identificar filas/materias únicas al reconstruir bloques con Map()
   static async findByDocente(docente_id, periodo_academico_id, estado = 'publicado') {
     const result = await pool.query(`
       SELECT
         hd.dia_semana,
+        bh.id           AS bloque_horario_id,
         bh.numero       AS bloque_numero,
         bh.nombre       AS bloque_nombre,
         bh.hora_inicio,
         bh.hora_fin,
+        m.id            AS materia_id,
         m.nombre        AS materia_nombre,
         m.color         AS materia_color,
         p.nombre        AS paralelo_nombre,
@@ -392,17 +396,24 @@ class HorarioDetalle {
 
   // Horario semanal de un paralelo (para padres/alumnos)
   // CORRECCIÓN: acepta parámetro estado para que admin pueda ver borradores
+  // CORRECCIÓN: agrega bloque_horario_id, materia_id y docente_id — antes no se
+  // seleccionaban, y el frontend arma bloques/materias únicos con
+  // new Map(celdas.map(c => [c.bloque_horario_id, ...])). Sin el id, todas las
+  // celdas caían bajo la key `undefined` y el Map se quedaba con una sola fila.
   static async findByParalelo(paralelo_id, periodo_academico_id, estado = 'publicado') {
     const result = await pool.query(`
       SELECT
         hd.dia_semana,
+        bh.id           AS bloque_horario_id,
         bh.numero       AS bloque_numero,
         bh.nombre       AS bloque_nombre,
         bh.hora_inicio,
         bh.hora_fin,
         bh.es_recreo,
+        m.id            AS materia_id,
         m.nombre        AS materia_nombre,
         m.color         AS materia_color,
+        d.id            AS docente_id,
         d.nombres       AS docente_nombres,
         d.apellidos     AS docente_apellidos,
         hd.aula,

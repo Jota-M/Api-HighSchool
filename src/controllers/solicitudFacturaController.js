@@ -75,21 +75,21 @@ class SolicitudFacturaController {
             // 1. Verificar que el pago pertenece a un hijo del padre autenticado
             const resultVerif = await pool.query(
                 `SELECT
-           pm.id,
-           pm.codigo_pago,
-           pm.monto_pagado,
-           m.mes_correspondiente,
-           e.nombres,
-           e.apellidos
-         FROM pago_mensualidad pm
-         INNER JOIN mensualidad m       ON pm.mensualidad_id    = m.id
-         INNER JOIN matricula mat       ON m.matricula_id       = mat.id
-         INNER JOIN estudiante e        ON mat.estudiante_id    = e.id
-         INNER JOIN estudiante_tutor et ON e.id                 = et.estudiante_id
-         INNER JOIN padre_familia pf    ON et.padre_familia_id  = pf.id
-         WHERE pm.id         = $1
-           AND pf.usuario_id = $2
-           AND pm.anulado    = false`,
+                   pm.id,
+                   pm.codigo_pago,
+                   pm.monto_pagado,
+                   m.mes_correspondiente,
+                   e.nombres,
+                   e.apellidos
+                 FROM pago_mensualidad pm
+                 INNER JOIN mensualidad m       ON pm.mensualidad_id    = m.id
+                 INNER JOIN matricula mat       ON m.matricula_id       = mat.id
+                 INNER JOIN estudiante e        ON mat.estudiante_id    = e.id
+                 INNER JOIN estudiante_tutor et ON e.id                 = et.estudiante_id
+                 INNER JOIN padre_familia pf    ON et.padre_familia_id  = pf.id
+                 WHERE pm.id         = $1
+                   AND pf.usuario_id = $2
+                   AND pm.anulado    = false`,
                 [pago_id, req.user.id]
             );
 
@@ -115,17 +115,24 @@ class SolicitudFacturaController {
 
             // 3. Crear la solicitud
             const solicitud = await SolicitudFactura.create(pago_id, req.user.id);
+            const solicitudDetalle = await SolicitudFactura.findById(solicitud.id);
 
             // 4. Obtener datos del admin
             const admin = await getAdminUser();
             const adminWhatsapp = getAdminWhatsapp();
 
+            const esGrupo = (solicitudDetalle?.cantidad_cuotas || 1) > 1;
+            const mesesTexto = esGrupo
+                ? `${solicitudDetalle.cantidad_cuotas} cuotas (${(solicitudDetalle.meses_cubiertos || []).join(', ')})`
+                : pago.mes_correspondiente;
+            const montoTexto = `Bs ${parseFloat(solicitudDetalle?.monto_total || pago.monto_pagado).toFixed(2)}`;
+
             const tituloAdmin = '📄 Nueva solicitud de factura';
             const mensajeAdmin =
                 `El padre solicitó factura del pago ${pago.codigo_pago} ` +
-                `(${pago.mes_correspondiente}) de ` +
+                `(${mesesTexto}) de ` +
                 `${pago.nombres} ${pago.apellidos} — ` +
-                `Bs ${parseFloat(pago.monto_pagado).toFixed(2)}`;
+                `${montoTexto}`;
 
             // 4a. Notificación interna al admin
             if (admin) {
@@ -143,9 +150,9 @@ class SolicitudFacturaController {
                 const msgWA =
                     `📄 *Nueva solicitud de factura*\n\n` +
                     `👤 Estudiante: ${pago.nombres} ${pago.apellidos}\n` +
-                    `📋 Pago: ${pago.codigo_pago}\n` +
-                    `📅 Mes: ${pago.mes_correspondiente}\n` +
-                    `💰 Monto: Bs ${parseFloat(pago.monto_pagado).toFixed(2)}\n\n` +
+                    `📋 Pago: ${pago.codigo_pago}${esGrupo ? ` (+${solicitudDetalle.cantidad_cuotas - 1} pagos)` : ''}\n` +
+                    `📅 Concepto/Meses: ${mesesTexto}\n` +
+                    `💰 Monto Total: ${montoTexto}\n\n` +
                     `Ingresá al panel de administración para subir la factura.`;
 
                 await enviarWhatsApp(adminWhatsapp, msgWA);
@@ -162,7 +169,8 @@ class SolicitudFacturaController {
                 datos_nuevos: {
                     pago_id,
                     pago_codigo: pago.codigo_pago,
-                    mes: pago.mes_correspondiente
+                    mes: pago.mes_correspondiente,
+                    cantidad_cuotas: solicitudDetalle?.cantidad_cuotas || 1
                 },
                 ip_address: reqInfo.ip,
                 user_agent: reqInfo.userAgent,
@@ -173,7 +181,7 @@ class SolicitudFacturaController {
             return res.status(201).json({
                 success: true,
                 message: 'Solicitud enviada. El administrador la procesará a la brevedad.',
-                data: { solicitud }
+                data: { solicitud: solicitudDetalle || solicitud }
             });
 
         } catch (error) {
@@ -298,12 +306,18 @@ class SolicitudFacturaController {
             });
 
             // 5. Notificar al padre — interno + WhatsApp
+            const esGrupo = (solicitud.cantidad_cuotas || 1) > 1;
+            const mesesTexto = esGrupo
+                ? `${solicitud.cantidad_cuotas} cuotas (${(solicitud.meses_cubiertos || []).join(', ')})`
+                : solicitud.mes_correspondiente;
+            const montoTexto = `Bs ${parseFloat(solicitud.monto_total || solicitud.monto_pagado).toFixed(2)}`;
+
             // 5a. Notificación interna al padre
             await crearNotificacionInterna({
                 usuario_id: solicitud.solicitado_por,
                 titulo: '✅ Tu factura está lista',
                 mensaje: `La factura del pago ${solicitud.codigo_pago} ` +
-                    `(${solicitud.mes_correspondiente}) ya está disponible. ` +
+                    `(${mesesTexto}) por ${montoTexto} ya está disponible. ` +
                     `Ingresá a tu historial de pagos para descargarla.`,
                 referencia_id: solicitud.id,
                 creada_por: req.user.id
@@ -312,26 +326,25 @@ class SolicitudFacturaController {
             // 5b. Obtener el número de WhatsApp del padre desde padre_familia
             const resultPadre = await pool.query(
                 `SELECT pf.telefono, pf.celular, pf.nombres, pf.apellidos
-         FROM padre_familia pf
-         INNER JOIN usuarios u ON pf.usuario_id = u.id
-         WHERE u.id = $1
-           AND pf.deleted_at IS NULL
-         LIMIT 1`,
+                 FROM padre_familia pf
+                 INNER JOIN usuarios u ON pf.usuario_id = u.id
+                 WHERE u.id = $1
+                   AND pf.deleted_at IS NULL
+                 LIMIT 1`,
                 [solicitud.solicitado_por]
             );
 
             if (resultPadre.rows.length > 0) {
                 const padre = resultPadre.rows[0];
-                // Preferir celular, si no telefono
                 const numPadre = padre.celular || padre.telefono;
 
                 if (numPadre) {
                     const msgWA =
                         `✅ *Tu factura está lista*\n\n` +
-                        `📋 Pago: ${solicitud.codigo_pago}\n` +
-                        `📅 Mes: ${solicitud.mes_correspondiente}\n` +
+                        `📋 Pago: ${solicitud.codigo_pago}${esGrupo ? ` (+${solicitud.cantidad_cuotas - 1} pagos)` : ''}\n` +
+                        `📅 Concepto/Meses: ${mesesTexto}\n` +
                         `👤 Estudiante: ${solicitud.estudiante_nombres} ${solicitud.estudiante_apellidos}\n` +
-                        `💰 Monto: Bs ${parseFloat(solicitud.monto_pagado).toFixed(2)}\n\n` +
+                        `💰 Monto Total: ${montoTexto}\n\n` +
                         `Ingresá al portal para descargarla desde tu historial de pagos.`;
 
                     await enviarWhatsApp(numPadre, msgWA);
@@ -348,7 +361,8 @@ class SolicitudFacturaController {
                 registro_id: parseInt(id),
                 datos_nuevos: {
                     factura_url: uploadResult.url,
-                    public_id: uploadResult.public_id
+                    public_id: uploadResult.public_id,
+                    cantidad_cuotas: solicitud.cantidad_cuotas || 1
                 },
                 ip_address: reqInfo.ip,
                 user_agent: reqInfo.userAgent,

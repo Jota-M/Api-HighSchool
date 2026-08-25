@@ -6,7 +6,7 @@ import express from 'express';
 import PadreFamiliaPayController from '../controllers/padreFamiliaPayController.js';
 import { authenticate } from '../Middlewares/auth.js';
 import SolicitudFacturaController from '../controllers/solicitudFacturaController.js';
-import PagoMensualidadPDFPadreController from '../controllers/pagoMensualidadPDFPadreController.js';
+import PagoMensualidadPDFController from '../controllers/pagoMensualidadPDFController.js';
 
 const router = express.Router();
 
@@ -88,6 +88,6 @@ router.get(
 router.get(
   '/pago/:id/recibo-pdf',
   authenticate,
-  PagoMensualidadPDFPadreController.generarReciboPadre
+  PagoMensualidadPDFController.generarReciboPadre
 );
 export default router;

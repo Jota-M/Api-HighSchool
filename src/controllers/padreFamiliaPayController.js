@@ -171,12 +171,14 @@ class PadreFamiliaPayController {
            m.monto_beca,
            m.monto_final,
            m.estado,
-           pm.id                 AS pago_id,
-           pm.qr_data            AS alias_qr,
+           pm.pago_id,
+           pm.codigo_pago,
+           pm.metodo_pago,
+           pm.alias_qr,
            pm.qr_estado,
            pm.qr_expiracion,
            pm.transaccion_id,
-           COALESCE(pm.fecha_pago, pm.created_at) AS fecha_pago,
+           pm.fecha_pago,
            pm.monto_pagado,
            CASE
              WHEN pm.qr_estado = 'generado'
@@ -186,17 +188,31 @@ class PadreFamiliaPayController {
            END AS tiene_qr_activo
          FROM mensualidad m
          INNER JOIN matricula mat ON m.matricula_id = mat.id
-         LEFT JOIN (
-           SELECT DISTINCT ON (mensualidad_id)
-             *
-           FROM pago_mensualidad
-           WHERE anulado = false
+         -- LATERAL en vez de un LEFT JOIN plano: elegimos UN pago representativo
+         -- por mensualidad (el más reciente no anulado), sin importar el método
+         -- de pago. Antes se exigía qr_estado IS NOT NULL, lo que dejaba afuera
+         -- los pagos en efectivo/transferencia (nunca tienen qr_estado).
+         LEFT JOIN LATERAL (
+           SELECT
+             pm2.id            AS pago_id,
+             pm2.codigo_pago,
+             pm2.metodo_pago,
+             pm2.qr_data       AS alias_qr,
+             pm2.qr_estado,
+             pm2.qr_expiracion,
+             pm2.transaccion_id,
+             pm2.fecha_pago,
+             pm2.monto_pagado
+           FROM pago_mensualidad pm2
+           WHERE pm2.mensualidad_id = m.id
+             AND pm2.anulado        = false
            ORDER BY
-             mensualidad_id,
-             -- Priorizar pagos QR completados, luego el pago más reciente
-             CASE WHEN qr_estado = 'pagado' THEN 0 ELSE 1 END ASC,
-             created_at DESC
-         ) pm ON pm.mensualidad_id = m.id
+             -- preferimos el pago que efectivamente se acreditó (pagado/manual)
+             -- por sobre un QR todavía "generado" (pendiente de cobro)
+             CASE WHEN pm2.qr_estado IS NULL OR pm2.qr_estado = 'pagado' THEN 0 ELSE 1 END,
+             pm2.fecha_pago DESC
+           LIMIT 1
+         ) pm ON true
          WHERE mat.estudiante_id = $1
            AND mat.estado        = 'activo'
            AND mat.deleted_at    IS NULL
@@ -215,9 +231,52 @@ class PadreFamiliaPayController {
           .reduce((acc, m) => acc + parseFloat(m.monto_final), 0),
       };
 
+      // ── Agrupar pagos que comparten transaccion_id (mismo QR, misma
+      //    operación) para que el front no tenga que rearmar esta lógica.
+      //    Los pagos sin transaccion_id (histórico viejo, o flujos que
+      //    todavía no lo llenan) quedan como grupo de 1 usando su propio
+      //    pago_id como clave.
+      const gruposMap = new Map();
+      for (const m of mensualidades) {
+        if (!m.pago_id) continue; // cuota sin pago asociado, no forma parte de ningún grupo
+        const clave = m.transaccion_id || `pago-${m.pago_id}`;
+        if (!gruposMap.has(clave)) {
+          gruposMap.set(clave, {
+            clave,
+            transaccion_id: m.transaccion_id,
+            metodo_pago: m.metodo_pago,
+            fecha_pago: m.fecha_pago,
+            monto_total: 0,
+            pago_ids: [],
+            cuotas: [],
+          });
+        }
+        const grupo = gruposMap.get(clave);
+        grupo.monto_total += parseFloat(m.monto_pagado || 0);
+        grupo.pago_ids.push(m.pago_id);
+        grupo.cuotas.push({
+          mensualidad_id: m.mensualidad_id,
+          numero_cuota: m.numero_cuota,
+          mes_correspondiente: m.mes_correspondiente,
+          pago_id: m.pago_id,
+        });
+        // nos quedamos con la fecha de pago más reciente del grupo
+        if (m.fecha_pago && (!grupo.fecha_pago || m.fecha_pago > grupo.fecha_pago)) {
+          grupo.fecha_pago = m.fecha_pago;
+        }
+      }
+      const grupos_pago = Array.from(gruposMap.values())
+        .sort((a, b) => {
+          // fecha_pago puede venir como Date (driver pg) o string — normalizamos
+          // a timestamp numérico en vez de asumir que es un string.
+          const tA = a.fecha_pago ? new Date(a.fecha_pago).getTime() : 0;
+          const tB = b.fecha_pago ? new Date(b.fecha_pago).getTime() : 0;
+          return tB - tA;
+        });
+
       return res.json({
         success: true,
-        data: { mensualidades, resumen },
+        data: { mensualidades, resumen, grupos_pago },
       });
 
     } catch (error) {

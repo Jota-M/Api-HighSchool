@@ -439,7 +439,8 @@ class PagoMensualidad {
       banco_origen,
       numero_referencia,
       registrado_por,
-      observaciones
+      observaciones,
+      transaccion_id // opcional: id de lote para agrupar pagos de una misma operación
     } = data;
 
     const codigo_pago = await this.generarCodigoPago();
@@ -449,8 +450,8 @@ class PagoMensualidad {
         codigo_pago, mensualidad_id, monto_pagado, metodo_pago,
         numero_comprobante, comprobante_url, entrego_factura, numero_factura,
         banco_origen, numero_referencia, registrado_por, observaciones,
-        fecha_pago
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
+        transaccion_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       RETURNING *
     `;
 
@@ -466,7 +467,8 @@ class PagoMensualidad {
       banco_origen,
       numero_referencia,
       registrado_por,
-      observaciones
+      observaciones,
+      transaccion_id ?? null
     ]);
 
     return result.rows[0];
