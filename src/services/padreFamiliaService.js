@@ -34,9 +34,16 @@ class PadreFamiliaService {
         FROM estudiante e
         INNER JOIN estudiante_tutor et ON et.estudiante_id = e.id
         LEFT JOIN LATERAL (
-          SELECT m.*, pa.nombre as paralelo_nombre, g.nombre as grado_nombre
+          SELECT m.*,
+                 COALESCE(pc.nombre, pa.nombre) as paralelo_nombre,
+                 COALESCE(tc.nombre, t.nombre) as turno_nombre,
+                 (m.paralelo_cursado_id IS NOT NULL) as es_caso_especial,
+                 g.nombre as grado_nombre
           FROM matricula m
           INNER JOIN paralelo pa ON m.paralelo_id = pa.id
+          LEFT JOIN turno t ON pa.turno_id = t.id
+          LEFT JOIN paralelo pc ON m.paralelo_cursado_id = pc.id
+          LEFT JOIN turno tc ON pc.turno_id = tc.id
           INNER JOIN grado g ON pa.grado_id = g.id
           WHERE m.estudiante_id = e.id
           ORDER BY m.created_at DESC

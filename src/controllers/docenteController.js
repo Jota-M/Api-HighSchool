@@ -183,8 +183,13 @@ class DocenteController {
 
     if (crear_usuario) {
       username = credenciales?.username || 
-        DocenteController.generarUsername(docente.nombres, docente.apellido_paterno);
-        password_temporal = credenciales?.password || 
+        await DocenteController.generarUsernameUnico(
+          docente.nombres, 
+          docente.apellido_paterno, 
+          docente.apellido_materno, 
+          client
+        );
+      password_temporal = credenciales?.password || 
         DocenteController.generarPassword(docente.ci);
 
       const usuarioExiste = await Usuario.findByUsername(username, client);
@@ -267,8 +272,12 @@ class DocenteController {
           nombres: nuevoDocente.nombres,
           apellidos: `${nuevoDocente.apellido_paterno} ${nuevoDocente.apellido_materno || ''}`.trim(),
           ci: nuevoDocente.ci,
+          celular: nuevoDocente.celular,
           email: nuevoDocente.email,
+          titulo_profesional: nuevoDocente.titulo_profesional,
+          titulo_postgrado: nuevoDocente.titulo_postgrado,
           especialidad: nuevoDocente.especialidad,
+          nivel_formacion: nuevoDocente.nivel_formacion,
           foto_url: nuevoDocente.foto_url,
           cv_url: nuevoDocente.cv_url,
           usuario_id: nuevoDocente.usuario_id
@@ -464,7 +473,7 @@ class DocenteController {
   // ========================================
   static async listar(req, res) {
     try {
-      const { page, limit, search, activo, tipo_contrato, especialidad } = req.query;
+      const { page, limit, search, activo, tipo_contrato, especialidad, simple } = req.query;
 
       const result = await Docente.findAll({
         page: parseInt(page) || 1,
@@ -472,7 +481,8 @@ class DocenteController {
         search,
         activo: activo !== undefined ? activo === 'true' : undefined,
         tipo_contrato,
-        especialidad
+        especialidad,
+        simple: simple === 'true'
       });
 
       res.json({ success: true, data: result });
@@ -595,9 +605,13 @@ class DocenteController {
       }
 
       const finalUsername = username || 
-        DocenteController.generarUsername(docente.nombres, docente.apellido_paterno);
-        const finalPassword = password || DocenteController.generarPassword(docente.ci); 
-        const finalEmail = email || docente.email || `${finalUsername}@docente.edu.bo`;
+        await DocenteController.generarUsernameUnico(
+          docente.nombres, 
+          docente.apellido_paterno, 
+          docente.apellido_materno
+        );
+      const finalPassword = password || DocenteController.generarPassword(docente.ci); 
+      const finalEmail = email || docente.email || `${finalUsername}@docente.edu.bo`;
 
       const usuarioExiste = await Usuario.findByCredential(finalUsername);
       if (usuarioExiste) {
@@ -654,28 +668,82 @@ class DocenteController {
   }
 
   // ========================================
-// MÉTODOS AUXILIARES
-// ========================================
-static generarUsername(nombres, apellido) {
-  // Tomar primer nombre y primer apellido, sin espacios ni caracteres especiales
-  const nombreLimpio = nombres.split(' ')[0]
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z]/g, '');
-  
-  const apellidoLimpio = apellido
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z]/g, '');
-  
-  // Capitalizar primera letra de cada parte
-  const nombreCapital = nombreLimpio.charAt(0).toUpperCase() + nombreLimpio.slice(1);
-  const apellidoCapital = apellidoLimpio.charAt(0).toUpperCase() + apellidoLimpio.slice(1);
-  
-  return `${nombreCapital}${apellidoCapital}`;
-}
+  // MÉTODOS AUXILIARES
+  // ========================================
+  static limpiarParteUsername(texto) {
+    if (!texto) return '';
+    return texto
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]/g, '');
+  }
+
+  /**
+   * Genera un username único para docentes con el prefijo "Prof." verificando contra la base de datos.
+   * Estrategia de candidatos (ej: Susana Dalia Ramirez Ari):
+   *  1. Prof.SusanaRamirez           (Prof. + PrimerNombre + Paterno)
+   *  2. Prof.SusanaDRamirez          (Prof. + PrimerNombre + InicialSegundoNombre + Paterno)
+   *  3. Prof.SusanaRamirezA          (Prof. + PrimerNombre + Paterno + InicialMaterno)
+   *  4. Prof.SusanaRamirezAri        (Prof. + PrimerNombre + Paterno + Materno)
+   *  5. Prof.SusanaRamirez1, ...2... (sufijo numérico como último recurso)
+   */
+  static async generarUsernameUnico(nombres, apellidoPaterno, apellidoMaterno = '', client = null) {
+    const db = client || pool;
+    const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : '');
+    const limpiar = DocenteController.limpiarParteUsername;
+
+    const partes = (nombres || '').trim().split(/\s+/);
+    const primerNombre = limpiar(partes[0] || '');
+    const segundoNombre = limpiar(partes[1] || '');
+    const paterno = limpiar(apellidoPaterno || '');
+    const materno = limpiar(apellidoMaterno || '');
+
+    const prefijo = 'Prof.';
+
+    // Candidatos en orden de prioridad
+    const candidatos = [
+      // 1. Prof.SusanaRamirez
+      `${prefijo}${cap(primerNombre)}${cap(paterno)}`,
+    ];
+
+    // 2. Prof.SusanaDRamirez (si tiene segundo nombre)
+    if (segundoNombre) {
+      candidatos.push(`${prefijo}${cap(primerNombre)}${segundoNombre.charAt(0).toUpperCase()}${cap(paterno)}`);
+    }
+
+    // 3. Prof.SusanaRamirezA (si tiene apellido materno)
+    if (materno) {
+      candidatos.push(`${prefijo}${cap(primerNombre)}${cap(paterno)}${materno.charAt(0).toUpperCase()}`);
+    }
+
+    // 4. Prof.SusanaRamirezAri (si tiene apellido materno completo)
+    if (materno) {
+      candidatos.push(`${prefijo}${cap(primerNombre)}${cap(paterno)}${cap(materno)}`);
+    }
+
+    // Probar candidatos
+    for (const username of candidatos) {
+      if (username) {
+        const existe = await Usuario.findByUsername(username, db);
+        if (!existe) {
+          return username;
+        }
+      }
+    }
+
+    // 5. Sufijos numéricos como último recurso
+    const base = `${prefijo}${cap(primerNombre)}${cap(paterno)}`;
+    for (let n = 1; n <= 999; n++) {
+      const username = `${base}${n}`;
+      const existe = await Usuario.findByUsername(username, db);
+      if (!existe) {
+        return username;
+      }
+    }
+
+    throw new Error(`No se pudo generar un username único para el docente ${nombres} ${apellidoPaterno}`);
+  }
 
 static generarPassword(ci = null) {
   // Si viene CI, usarlo como contraseña

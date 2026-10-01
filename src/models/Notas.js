@@ -1,5 +1,6 @@
 // models/Notas.js
 import { pool } from '../db/pool.js';
+import { parseToLocalTimestamp } from '../utils/dateUtils.js';
 
 // =============================================
 // PERIODO EVALUACION
@@ -95,25 +96,49 @@ class Evaluacion {
   static async create(data) {
     const {
       asignacion_docente_id, dimension_evaluacion_id, periodo_evaluacion_id,
-      nombre, tipo, descripcion, fecha, puntaje_maximo, peso_en_dimension,
+      nombre, tipo, descripcion, fecha, fecha_limite, puntaje_maximo, peso_en_dimension,
       visible_para_padres,
-      tema_id          // ← NUEVO
+      tema_id,
+      modalidad, duracion_minutos,
+      fecha_hora_inicio, fecha_hora_fin, intentos_permitidos, orden_aleatorio,
+      permite_entrega_archivo
     } = data;
+
+    // Validar que el puntaje máximo no supere el tope de la dimensión
+    const dimRes = await pool.query(
+      `SELECT id, nombre, porcentaje_ponderacion FROM dimension_evaluacion WHERE id = $1`,
+      [dimension_evaluacion_id]
+    );
+    const dim = dimRes.rows[0];
+    const maxPermitido = dim ? Number(dim.porcentaje_ponderacion) : 100;
+    const finalPuntajeMax = puntaje_maximo !== undefined && puntaje_maximo !== null ? Number(puntaje_maximo) : maxPermitido;
+
+    if (finalPuntajeMax > maxPermitido) {
+      throw new Error(`El puntaje máximo (${finalPuntajeMax}) no puede superar el límite de la dimensión "${dim?.nombre || dimension_evaluacion_id}" (${maxPermitido} pts)`);
+    }
 
     const result = await pool.query(`
       INSERT INTO evaluacion (
         asignacion_docente_id, dimension_evaluacion_id, periodo_evaluacion_id,
-        nombre, tipo, descripcion, fecha, puntaje_maximo, peso_en_dimension,
+        nombre, tipo, descripcion, fecha, fecha_limite, puntaje_maximo, peso_en_dimension,
         visible_para_padres,
-        tema_id
+        tema_id,
+        modalidad, duracion_minutos,
+        fecha_hora_inicio, fecha_hora_fin, intentos_permitidos, orden_aleatorio,
+        permite_entrega_archivo
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
       RETURNING *
     `, [
       asignacion_docente_id, dimension_evaluacion_id, periodo_evaluacion_id,
       nombre, tipo || null, descripcion || null, fecha || null,
-      puntaje_maximo || 100, peso_en_dimension || 1.00, visible_para_padres ?? false,
-      tema_id || null     // ← NUEVO (posición $11)
+      parseToLocalTimestamp(fecha_limite),
+      finalPuntajeMax, peso_en_dimension || 1.00, visible_para_padres ?? false,
+      tema_id || null,
+      modalidad || 'presencial', duracion_minutos || null,
+      parseToLocalTimestamp(fecha_hora_inicio), parseToLocalTimestamp(fecha_hora_fin),
+      intentos_permitidos || 1, orden_aleatorio ?? false,
+      permite_entrega_archivo ?? false
     ]);
     return result.rows[0];
   }
@@ -202,23 +227,82 @@ class Evaluacion {
 
   static async update(id, data) {
     const {
-      nombre, tipo, descripcion, fecha, puntaje_maximo,
-      peso_en_dimension, visible_para_padres, activo,
-      tema_id           // ← NUEVO
+      nombre, tipo, descripcion, instrucciones, fecha, fecha_limite,
+      puntaje_maximo, peso_en_dimension, visible_para_padres, activo,
+      tema_id, dimension_evaluacion_id,
+      modalidad, duracion_minutos,
+      fecha_hora_inicio, fecha_hora_fin,
+      intentos_permitidos, orden_aleatorio,
+      permite_entrega_archivo
     } = data;
+
+    const current = await Evaluacion.findById(id);
+    if (!current) return null;
+
+    const nuevoNombre = nombre !== undefined ? nombre : current.nombre;
+    const nuevoTipo = tipo !== undefined ? tipo : current.tipo;
+    const nuevaDesc = descripcion !== undefined ? (descripcion || null) : current.descripcion;
+    const nuevasInst = instrucciones !== undefined ? (instrucciones || null) : current.instrucciones;
+    const nuevaFecha = fecha !== undefined ? (fecha || null) : current.fecha;
+    const nuevaFechaLim = fecha_limite !== undefined ? parseToLocalTimestamp(fecha_limite) : current.fecha_limite;
+    const nuevoPuntaje = puntaje_maximo !== undefined ? puntaje_maximo : current.puntaje_maximo;
+    const nuevaDimId = dimension_evaluacion_id !== undefined ? dimension_evaluacion_id : current.dimension_evaluacion_id;
+
+    if (puntaje_maximo !== undefined || dimension_evaluacion_id !== undefined) {
+      const dimRes = await pool.query(
+        `SELECT id, nombre, porcentaje_ponderacion FROM dimension_evaluacion WHERE id = $1`,
+        [nuevaDimId]
+      );
+      const dim = dimRes.rows[0];
+      const maxPermitido = dim ? Number(dim.porcentaje_ponderacion) : 100;
+      if (Number(nuevoPuntaje) > maxPermitido) {
+        throw new Error(`El puntaje máximo (${nuevoPuntaje}) no puede superar el límite de la dimensión "${dim?.nombre || nuevaDimId}" (${maxPermitido} pts)`);
+      }
+    }
+
+    const nuevoPeso = peso_en_dimension !== undefined ? peso_en_dimension : current.peso_en_dimension;
+    const nuevoVisible = visible_para_padres !== undefined ? visible_para_padres : current.visible_para_padres;
+    const nuevoActivo = activo !== undefined ? activo : current.activo;
+    const nuevoTemaId = tema_id !== undefined ? (tema_id || null) : current.tema_id;
+    const nuevaModalidad = modalidad !== undefined ? modalidad : current.modalidad;
+    const nuevaDuracion = duracion_minutos !== undefined ? (duracion_minutos || null) : current.duracion_minutos;
+    const nuevoInicio = fecha_hora_inicio !== undefined ? parseToLocalTimestamp(fecha_hora_inicio) : current.fecha_hora_inicio;
+    const nuevoFin = fecha_hora_fin !== undefined ? parseToLocalTimestamp(fecha_hora_fin) : current.fecha_hora_fin;
+    const nuevosIntentos = intentos_permitidos !== undefined ? (intentos_permitidos || 1) : current.intentos_permitidos;
+    const nuevoOrden = orden_aleatorio !== undefined ? orden_aleatorio : current.orden_aleatorio;
+    const nuevoPermiteEntrega = permite_entrega_archivo !== undefined ? permite_entrega_archivo : current.permite_entrega_archivo;
+
     const result = await pool.query(`
       UPDATE evaluacion SET
-        nombre=$1, tipo=$2, descripcion=$3, fecha=$4, puntaje_maximo=$5,
-        peso_en_dimension=$6, visible_para_padres=$7, activo=$8,
-        tema_id=$9,         -- ← NUEVO ($9)
-        fecha_publicacion = CASE WHEN $7=true AND visible_para_padres=false THEN CURRENT_TIMESTAMP ELSE fecha_publicacion END,
-        updated_at=CURRENT_TIMESTAMP
-      WHERE id = $10        -- ← era $9, ahora $10
+        nombre                  = $1,
+        tipo                    = $2,
+        descripcion             = $3,
+        instrucciones           = $4,
+        fecha                   = $5,
+        fecha_limite            = $6,
+        puntaje_maximo          = $7,
+        peso_en_dimension       = $8,
+        visible_para_padres     = $9,
+        activo                  = $10,
+        tema_id                 = $11,
+        dimension_evaluacion_id = $12,
+        modalidad               = $13,
+        duracion_minutos        = $14,
+        fecha_hora_inicio       = $15,
+        fecha_hora_fin          = $16,
+        intentos_permitidos     = $17,
+        orden_aleatorio         = $18,
+        permite_entrega_archivo = $19,
+        fecha_publicacion       = CASE WHEN $9 = true AND visible_para_padres = false THEN CURRENT_TIMESTAMP ELSE fecha_publicacion END,
+        updated_at              = CURRENT_TIMESTAMP
+      WHERE id = $20
       RETURNING *
-    `, [nombre, tipo, descripcion || null, fecha, puntaje_maximo,
-      peso_en_dimension, visible_para_padres, activo,
-      tema_id || null,    // ← NUEVO
-      id]);
+    `, [
+      nuevoNombre, nuevoTipo, nuevaDesc, nuevasInst, nuevaFecha, nuevaFechaLim,
+      nuevoPuntaje, nuevoPeso, nuevoVisible, nuevoActivo, nuevoTemaId,
+      nuevaDimId, nuevaModalidad, nuevaDuracion, nuevoInicio, nuevoFin,
+      nuevosIntentos, nuevoOrden, nuevoPermiteEntrega, id
+    ]);
     return result.rows[0];
   }
 
@@ -298,6 +382,7 @@ class Evaluacion {
         g.id                            AS grado_id,
         g.nombre                        AS grado_nombre,
         n.nombre                        AS nivel_nombre,
+        n.modalidad_evaluacion,
         -- Paralelo y turno
         p.id                            AS paralelo_id,
         p.nombre                        AS paralelo_nombre,
@@ -316,8 +401,10 @@ class Evaluacion {
         COUNT(DISTINCT CASE WHEN ev.dimension_evaluacion_id = de_ser.id THEN ev.id END) AS evaluaciones_ser,
         COUNT(DISTINCT CASE WHEN ev.dimension_evaluacion_id = de_sab.id THEN ev.id END) AS evaluaciones_saber,
         COUNT(DISTINCT CASE WHEN ev.dimension_evaluacion_id = de_hac.id THEN ev.id END) AS evaluaciones_hacer,
+        COUNT(DISTINCT CASE WHEN ev.dimension_evaluacion_id = de_aut.id THEN ev.id END) AS evaluaciones_auto,
         -- Calificaciones registradas
         COUNT(DISTINCT c.id)            AS calificaciones_registradas,
+        COUNT(DISTINCT c.id)            AS total_calificaciones,
         -- Nota final
         COUNT(DISTINCT cp.matricula_id)                                                 AS estudiantes_con_nota_final,
         COUNT(DISTINCT CASE WHEN cp.aprobado = true  THEN cp.matricula_id END)          AS aprobados,
@@ -335,11 +422,10 @@ class Evaluacion {
       INNER JOIN periodo_academico pa   ON ad.periodo_academico_id  = pa.id
       -- Trimestres del período académico (filtra si viene periodo_evaluacion_id)
       LEFT JOIN periodo_evaluacion pe   ON pe.periodo_academico_id  = pa.id
-                                       AND pe.activo                = true
                                        AND ($2::INTEGER IS NULL OR pe.id = $2)
       -- Matrículas activas
       LEFT JOIN matricula m
-        ON  m.paralelo_id          = ad.paralelo_id
+        ON  COALESCE(m.paralelo_cursado_id, m.paralelo_id) = ad.paralelo_id
         AND m.periodo_academico_id = ad.periodo_academico_id
         AND m.estado               = 'activo'
         AND m.deleted_at           IS NULL
@@ -352,6 +438,7 @@ class Evaluacion {
       LEFT JOIN dimension_evaluacion de_ser ON de_ser.codigo = 'SER'
       LEFT JOIN dimension_evaluacion de_sab ON de_sab.codigo = 'SAB'
       LEFT JOIN dimension_evaluacion de_hac ON de_hac.codigo = 'HAC'
+      LEFT JOIN dimension_evaluacion de_aut ON de_aut.codigo IN ('AUTO', 'AUT')
       -- Calificaciones
       LEFT JOIN calificacion c          ON c.evaluacion_id = ev.id
       -- Nota final del trimestre
@@ -364,12 +451,12 @@ class Evaluacion {
         ad.id, ad.es_titular,
         gm.id,
         mat.id, mat.nombre, mat.codigo, mat.color,
-        g.id, g.nombre, n.nombre,
+        g.id, g.nombre, g.orden, n.nombre, n.modalidad_evaluacion, n.orden,
         p.id, p.nombre,
         t.nombre, t.hora_inicio,
         pa.id, pa.nombre,
         pe.id, pe.nombre, pe.orden
-      ORDER BY pa.nombre, t.hora_inicio, mat.nombre, pe.orden
+      ORDER BY n.orden ASC, g.orden ASC, p.nombre ASC, mat.nombre ASC, pe.orden ASC
     `, [usuario_id, periodo_evaluacion_id || null]);
 
     return result.rows;
@@ -450,15 +537,36 @@ class Calificacion {
     SELECT c.*,
            CAST(c.puntaje_obtenido AS FLOAT8) AS puntaje_obtenido,
            e.codigo AS estudiante_codigo, e.nombres AS estudiante_nombres,
-           e.apellidos AS estudiante_apellidos, e.foto_url AS estudiante_foto, m.id AS matricula_id
+           e.apellidos AS estudiante_apellidos, e.foto_url AS estudiante_foto, m.id AS matricula_id,
+           (m.paralelo_cursado_id IS NOT NULL) AS es_caso_especial,
+           po.nombre AS paralelo_origen_nombre,
+           to_turno.nombre AS turno_origen_nombre,
+           ee.id AS entrega_id,
+           ee.archivo_url AS entrega_archivo_url,
+           ee.archivo_nombre AS entrega_archivo_nombre,
+           ee.archivo_tipo AS entrega_archivo_tipo,
+           ee.archivo_tamano AS entrega_archivo_tamano,
+           COALESCE(
+             ee.archivos,
+             CASE 
+               WHEN ee.archivo_url IS NOT NULL 
+               THEN jsonb_build_array(jsonb_build_object('url', ee.archivo_url, 'nombre', ee.archivo_nombre, 'tipo', ee.archivo_tipo, 'tamano', ee.archivo_tamano))
+               ELSE '[]'::jsonb 
+             END
+           ) AS entrega_archivos,
+           ee.fecha_entrega AS entrega_fecha,
+           ee.comentario_estudiante AS entrega_comentario
     FROM asignacion_docente ad
     INNER JOIN matricula m
-      ON  m.paralelo_id          = ad.paralelo_id
+      ON  COALESCE(m.paralelo_cursado_id, m.paralelo_id) = ad.paralelo_id
       AND m.periodo_academico_id = ad.periodo_academico_id
       AND m.estado               = 'activo'
       AND m.deleted_at           IS NULL
     INNER JOIN estudiante e ON e.id = m.estudiante_id
+    LEFT JOIN paralelo po ON m.paralelo_id = po.id
+    LEFT JOIN turno to_turno ON po.turno_id = to_turno.id
     LEFT JOIN calificacion c ON c.matricula_id = m.id AND c.evaluacion_id = $1
+    LEFT JOIN evaluacion_entrega ee ON ee.evaluacion_id = $1 AND ee.matricula_id = m.id
     WHERE ad.id = (SELECT asignacion_docente_id FROM evaluacion WHERE id = $1)
     ORDER BY e.apellidos, e.nombres
   `, [evaluacion_id]);
@@ -551,19 +659,356 @@ class NotasCalculo {
     return result.rows[0];
   }
 
-  static async aplicarNotaManual(matricula_id, grado_materia_id, periodo_evaluacion_id, { nota_manual, justificacion_manual, aplicado_por }) {
+  static async aplicarNotaManual(matricula_id, grado_materia_id, periodo_evaluacion_id, data = {}) {
+    let mId = matricula_id;
+    let gmId = grado_materia_id;
+    let peId = periodo_evaluacion_id;
+    let notaManual = data?.nota_manual;
+    let justificacion = data?.justificacion_manual;
+    let aplicadoPor = data?.aplicado_por;
+
+    if (typeof matricula_id === 'object' && matricula_id !== null) {
+      mId = matricula_id.matricula_id;
+      gmId = matricula_id.grado_materia_id;
+      peId = matricula_id.periodo_evaluacion_id;
+      notaManual = matricula_id.nota_manual;
+      justificacion = matricula_id.justificacion_manual;
+      aplicadoPor = matricula_id.aplicado_por || matricula_id.usuario_id;
+    }
+
     const notaMinima = (await pool.query(
-      `SELECT nota_minima_aprobacion FROM grado_materia WHERE id = $1`, [grado_materia_id]
+      `SELECT nota_minima_aprobacion FROM grado_materia WHERE id = $1`, [gmId]
     )).rows[0]?.nota_minima_aprobacion || 51;
 
+    const nota = parseFloat(Number(notaManual).toFixed(2));
+    const aprobado = nota >= notaMinima;
+
     const result = await pool.query(`
-      UPDATE calificacion_periodo
-      SET es_nota_manual=true, nota_manual=$1, nota_final=$1, aprobado=$1>=$2,
-          justificacion_manual=$3, cerrado_por=$4, updated_at=CURRENT_TIMESTAMP
-      WHERE matricula_id=$5 AND grado_materia_id=$6 AND periodo_evaluacion_id=$7
+      INSERT INTO calificacion_periodo (
+        matricula_id, grado_materia_id, periodo_evaluacion_id,
+        nota_final, aprobado, es_nota_manual, nota_manual,
+        justificacion_manual, cerrado_por, estado, updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, true, $4, $6, $7, 'activa', CURRENT_TIMESTAMP)
+      ON CONFLICT (matricula_id, grado_materia_id, periodo_evaluacion_id)
+      DO UPDATE SET
+        nota_final = EXCLUDED.nota_final,
+        aprobado = EXCLUDED.aprobado,
+        es_nota_manual = true,
+        nota_manual = EXCLUDED.nota_manual,
+        justificacion_manual = EXCLUDED.justificacion_manual,
+        cerrado_por = EXCLUDED.cerrado_por,
+        updated_at = CURRENT_TIMESTAMP
       RETURNING *
-    `, [nota_manual, notaMinima, justificacion_manual, aplicado_por, matricula_id, grado_materia_id, periodo_evaluacion_id]);
+    `, [mId, gmId, peId, nota, aprobado, justificacion || 'Ajuste administrativo', aplicadoPor]);
     return result.rows[0];
+  }
+
+  // ==========================================
+  // CONSOLIDADO DE NOTAS POR CURSO / PARALELO
+  // ==========================================
+  static async getNotasCurso(paralelo_id, periodo_academico_id = null) {
+    // 1. Obtener info del curso/paralelo
+    const cursoRes = await pool.query(`
+      SELECT p.id AS paralelo_id, p.nombre AS paralelo_nombre, p.aula,
+             g.id AS grado_id, g.nombre AS grado_nombre, g.orden AS grado_orden,
+             n.id AS nivel_id, n.nombre AS nivel_nombre,
+             t.id AS turno_id, t.nombre AS turno_nombre
+      FROM paralelo p
+      INNER JOIN grado g ON p.grado_id = g.id
+      INNER JOIN nivel_academico n ON g.nivel_academico_id = n.id
+      INNER JOIN turno t ON p.turno_id = t.id
+      WHERE p.id = $1
+    `, [paralelo_id]);
+
+    if (!cursoRes.rows[0]) {
+      throw new Error(`Paralelo con ID ${paralelo_id} no encontrado`);
+    }
+    const curso = cursoRes.rows[0];
+
+    // 2. Determinar periodo académico
+    let periodoAcademicoId = periodo_academico_id;
+    if (!periodoAcademicoId) {
+      const paRes = await pool.query(`SELECT id, nombre, codigo FROM periodo_academico WHERE activo = true ORDER BY id DESC LIMIT 1`);
+      if (!paRes.rows[0]) throw new Error('No se encontró un período académico activo');
+      periodoAcademicoId = paRes.rows[0].id;
+    }
+
+    // 3. Obtener los períodos de evaluación (trimestres)
+    const periodosRes = await pool.query(`
+      SELECT id, nombre, codigo, orden, fecha_inicio, fecha_fin, activo
+      FROM periodo_evaluacion
+      WHERE periodo_academico_id = $1
+      ORDER BY orden ASC
+    `, [periodoAcademicoId]);
+    const periodos = periodosRes.rows;
+
+    // 4. Obtener las materias del grado
+    const materiasRes = await pool.query(`
+      SELECT gm.id AS grado_materia_id, gm.nota_minima_aprobacion, gm.peso_porcentual,
+             m.id AS materia_id, m.nombre AS materia_nombre, m.codigo AS materia_codigo,
+             CONCAT(d.nombres, ' ', d.apellidos) AS docente_nombre
+      FROM grado_materia gm
+      INNER JOIN materia m ON gm.materia_id = m.id
+      LEFT JOIN asignacion_docente ad ON ad.grado_materia_id = gm.id 
+                                     AND ad.paralelo_id = $1 
+                                     AND ad.periodo_academico_id = $2 
+                                     AND ad.activo = true
+      LEFT JOIN docente d ON ad.docente_id = d.id
+      WHERE gm.grado_id = $3 AND m.deleted_at IS NULL
+      ORDER BY gm.orden ASC, m.nombre ASC
+    `, [paralelo_id, periodoAcademicoId, curso.grado_id]);
+    const materias = materiasRes.rows;
+
+    // 5. Obtener estudiantes matriculados activos en el paralelo
+    const estRes = await pool.query(`
+      SELECT m.id AS matricula_id, m.numero_matricula, m.estado AS estado_matricula,
+             m.paralelo_id, m.paralelo_cursado_id,
+             (m.paralelo_cursado_id IS NOT NULL) AS es_caso_especial,
+             po.nombre AS paralelo_origen_nombre,
+             to_turno.nombre AS turno_origen_nombre,
+             e.id AS estudiante_id, e.codigo AS estudiante_codigo, e.ci,
+             e.nombres, e.apellido_paterno, e.apellido_materno,
+             CONCAT(e.apellido_paterno, ' ', COALESCE(e.apellido_materno, ''), ' ', e.nombres) AS nombre_completo,
+             e.foto_url, e.genero
+      FROM matricula m
+      INNER JOIN estudiante e ON m.estudiante_id = e.id
+      LEFT JOIN paralelo po ON m.paralelo_id = po.id
+      LEFT JOIN turno to_turno ON po.turno_id = to_turno.id
+      WHERE COALESCE(m.paralelo_cursado_id, m.paralelo_id) = $1
+        AND m.periodo_academico_id = $2
+        AND m.estado = 'activo'
+        AND m.deleted_at IS NULL
+      ORDER BY e.apellido_paterno ASC, e.apellido_materno ASC, e.nombres ASC
+    `, [paralelo_id, periodoAcademicoId]);
+    const estudiantes = estRes.rows;
+
+    // 6. Obtener todas las calificaciones del curso
+    const califRes = await pool.query(`
+      SELECT cp.id, cp.matricula_id, cp.grado_materia_id, cp.periodo_evaluacion_id,
+             cp.nota_final, cp.aprobado, cp.estado,
+             cp.es_nota_manual, cp.nota_manual, cp.justificacion_manual,
+             MAX(CASE WHEN de.codigo = 'SER' THEN nd.nota_promedio END) AS nota_ser,
+             MAX(CASE WHEN de.codigo = 'SAB' THEN nd.nota_promedio END) AS nota_saber,
+             MAX(CASE WHEN de.codigo = 'HAC' THEN nd.nota_promedio END) AS nota_hacer,
+             MAX(CASE WHEN de.codigo IN ('AUT', 'AUTO') THEN nd.nota_promedio END) AS nota_auto
+      FROM calificacion_periodo cp
+      INNER JOIN matricula m ON cp.matricula_id = m.id
+      LEFT JOIN nota_dimension nd ON nd.matricula_id = cp.matricula_id
+                                 AND nd.grado_materia_id = cp.grado_materia_id
+                                 AND nd.periodo_evaluacion_id = cp.periodo_evaluacion_id
+      LEFT JOIN dimension_evaluacion de ON nd.dimension_evaluacion_id = de.id
+      WHERE COALESCE(m.paralelo_cursado_id, m.paralelo_id) = $1
+        AND m.periodo_academico_id = $2
+        AND m.estado = 'activo'
+        AND m.deleted_at IS NULL
+      GROUP BY cp.id, cp.matricula_id, cp.grado_materia_id, cp.periodo_evaluacion_id,
+               cp.nota_final, cp.aprobado, cp.estado, cp.es_nota_manual, cp.nota_manual, cp.justificacion_manual
+    `, [paralelo_id, periodoAcademicoId]);
+    const calificaciones = califRes.rows;
+
+    // Indexar calificaciones por matricula_id + periodo_evaluacion_id + grado_materia_id
+    const califMap = new Map();
+    for (const c of calificaciones) {
+      const key = `${c.matricula_id}_${c.periodo_evaluacion_id}_${c.grado_materia_id}`;
+      califMap.set(key, c);
+    }
+
+    // 7. Mapear estudiantes con sus notas por trimestre y consolidado anual
+    const estudiantesData = estudiantes.map(est => {
+      // Trimestres individuales
+      const trimestres = periodos.map(p => {
+        const materiasPeriodo = materias.map(mat => {
+          const key = `${est.matricula_id}_${p.id}_${mat.grado_materia_id}`;
+          const c = califMap.get(key);
+          const notaFinal = c?.nota_final != null ? Number(c.nota_final) : null;
+          const notaMinima = Number(mat.nota_minima_aprobacion || 51);
+          const aprobado = notaFinal != null ? notaFinal >= notaMinima : null;
+
+          return {
+            materia_id: mat.materia_id,
+            grado_materia_id: mat.grado_materia_id,
+            materia_codigo: mat.materia_codigo,
+            materia_nombre: mat.materia_nombre,
+            nota_minima: notaMinima,
+            nota_final: notaFinal,
+            aprobado,
+            estado: c?.estado || 'sin_registro',
+            nota_ser: c?.nota_ser != null ? Number(c.nota_ser) : null,
+            nota_saber: c?.nota_saber != null ? Number(c.nota_saber) : null,
+            nota_hacer: c?.nota_hacer != null ? Number(c.nota_hacer) : null,
+            nota_auto: c?.nota_auto != null ? Number(c.nota_auto) : null,
+          };
+        });
+
+        const notasValidas = materiasPeriodo.filter(m => m.nota_final != null);
+        const promedio = notasValidas.length > 0
+          ? Math.round(notasValidas.reduce((sum, m) => sum + m.nota_final, 0) / notasValidas.length)
+          : null;
+        const aprobadas = materiasPeriodo.filter(m => m.aprobado === true).length;
+        const reprobadas = materiasPeriodo.filter(m => m.aprobado === false).length;
+        const sinNota = materiasPeriodo.filter(m => m.nota_final == null).length;
+
+        return {
+          periodo_id: p.id,
+          periodo_nombre: p.nombre,
+          periodo_orden: p.orden,
+          materias: materiasPeriodo,
+          promedio,
+          aprobadas,
+          reprobadas,
+          sin_nota: sinNota,
+        };
+      });
+
+      // Consolidado Anual por Materia
+      const materiasAnuales = materias.map(mat => {
+        const trimestresMateria = periodos.map(p => {
+          const key = `${est.matricula_id}_${p.id}_${mat.grado_materia_id}`;
+          const c = califMap.get(key);
+          const notaFinal = c?.nota_final != null ? Number(c.nota_final) : null;
+          const notaMinima = Number(mat.nota_minima_aprobacion || 51);
+          const aprobado = notaFinal != null ? notaFinal >= notaMinima : null;
+          return {
+            periodo_id: p.id,
+            periodo_nombre: p.nombre,
+            periodo_orden: p.orden,
+            nota_final: notaFinal,
+            aprobado,
+          };
+        });
+
+        const notasValidas = trimestresMateria.filter(t => t.nota_final != null);
+        const promedioAnual = notasValidas.length > 0
+          ? Math.round(notasValidas.reduce((sum, t) => sum + t.nota_final, 0) / notasValidas.length)
+          : null;
+        const notaMinima = Number(mat.nota_minima_aprobacion || 51);
+        const aprobadoAnual = promedioAnual != null ? promedioAnual >= notaMinima : null;
+
+        let nivel = 'sin_nota';
+        if (promedioAnual != null) {
+          if (promedioAnual >= 85) nivel = 'excelente';
+          else if (promedioAnual >= 70) nivel = 'bueno';
+          else if (promedioAnual >= 51) nivel = 'regular';
+          else nivel = 'en_riesgo';
+        }
+
+        return {
+          materia_id: mat.materia_id,
+          grado_materia_id: mat.grado_materia_id,
+          materia_codigo: mat.materia_codigo,
+          materia_nombre: mat.materia_nombre,
+          nota_minima: notaMinima,
+          trimestres: trimestresMateria,
+          promedio_anual: promedioAnual,
+          aprobado_anual: aprobadoAnual,
+          nivel,
+        };
+      });
+
+      const materiasConPromedioAnual = materiasAnuales.filter(m => m.promedio_anual != null);
+      const promedioGeneralAnual = materiasConPromedioAnual.length > 0
+        ? Math.round(materiasConPromedioAnual.reduce((sum, m) => sum + m.promedio_anual, 0) / materiasConPromedioAnual.length)
+        : null;
+      const aprobadasAnual = materiasAnuales.filter(m => m.aprobado_anual === true).length;
+      const reprobadasAnual = materiasAnuales.filter(m => m.aprobado_anual === false).length;
+      const sinNotaAnual = materiasAnuales.filter(m => m.promedio_anual == null).length;
+
+      let estadoGeneral = 'regular';
+      if (reprobadasAnual > 1 || (promedioGeneralAnual != null && promedioGeneralAnual < 51)) {
+        estadoGeneral = 'reprobado';
+      } else if (reprobadasAnual === 1 || (promedioGeneralAnual != null && promedioGeneralAnual <= 60)) {
+        estadoGeneral = 'en_riesgo';
+      } else if (promedioGeneralAnual != null && promedioGeneralAnual >= 70) {
+        estadoGeneral = 'aprobado';
+      } else if (promedioGeneralAnual == null) {
+        estadoGeneral = 'sin_nota';
+      }
+
+      return {
+        matricula_id: est.matricula_id,
+        estudiante_id: est.estudiante_id,
+        codigo: est.estudiante_codigo,
+        ci: est.ci,
+        nombres: est.nombres,
+        apellido_paterno: est.apellido_paterno,
+        apellido_materno: est.apellido_materno,
+        nombre_completo: est.nombre_completo,
+        foto_url: est.foto_url,
+        genero: est.genero,
+        trimestres,
+        materias_anuales: materiasAnuales,
+        promedio_general_anual: promedioGeneralAnual,
+        aprobadas_anual: aprobadasAnual,
+        reprobadas_anual: reprobadasAnual,
+        sin_nota_anual: sinNotaAnual,
+        estado_general: estadoGeneral,
+      };
+    });
+
+    // 8. Estadísticas globales del curso
+    const totalEstudiantes = estudiantesData.length;
+    const estConPromedioAnual = estudiantesData.filter(e => e.promedio_general_anual != null);
+    const promedioGeneralCurso = estConPromedioAnual.length > 0
+      ? Math.round(estConPromedioAnual.reduce((sum, e) => sum + e.promedio_general_anual, 0) / estConPromedioAnual.length)
+      : null;
+
+    const statsPorPeriodo = periodos.map(p => {
+      const notasPeriodo = [];
+      estudiantesData.forEach(e => {
+        const tri = e.trimestres.find(t => t.periodo_id === p.id);
+        if (tri?.promedio != null) notasPeriodo.push(tri.promedio);
+      });
+      return {
+        periodo_id: p.id,
+        periodo_nombre: p.nombre,
+        promedio_curso: notasPeriodo.length > 0
+          ? Math.round(notasPeriodo.reduce((a, b) => a + b, 0) / notasPeriodo.length)
+          : null,
+      };
+    });
+
+    // Promedios por materia a nivel de curso
+    const promediosMaterias = materias.map(mat => {
+      const notasMateria = [];
+      estudiantesData.forEach(e => {
+        const matAnual = e.materias_anuales.find(m => m.grado_materia_id === mat.grado_materia_id);
+        if (matAnual?.promedio_anual != null) {
+          notasMateria.push(matAnual.promedio_anual);
+        }
+      });
+      const promMat = notasMateria.length > 0
+        ? Math.round(notasMateria.reduce((a, b) => a + b, 0) / notasMateria.length)
+        : null;
+      const aprobadosMat = notasMateria.filter(n => n >= (mat.nota_minima_aprobacion || 51)).length;
+      return {
+        materia_id: mat.materia_id,
+        grado_materia_id: mat.grado_materia_id,
+        materia_codigo: mat.materia_codigo,
+        materia_nombre: mat.materia_nombre,
+        docente_nombre: mat.docente_nombre,
+        promedio_curso: promMat,
+        porcentaje_aprobados: notasMateria.length > 0
+          ? Math.round((aprobadosMat / notasMateria.length) * 100)
+          : null,
+      };
+    });
+
+    return {
+      curso,
+      periodos,
+      materias,
+      estudiantes: estudiantesData,
+      estadisticas: {
+        total_estudiantes: totalEstudiantes,
+        promedio_general_curso: promedioGeneralCurso,
+        aprobados_total: estudiantesData.filter(e => e.estado_general === 'aprobado' || e.estado_general === 'regular').length,
+        en_riesgo_total: estudiantesData.filter(e => e.estado_general === 'en_riesgo').length,
+        reprobados_total: estudiantesData.filter(e => e.estado_general === 'reprobado').length,
+        stats_por_periodo: statsPorPeriodo,
+        promedios_materias: promediosMaterias,
+      }
+    };
   }
 }
 

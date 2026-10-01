@@ -81,12 +81,18 @@ class NotificacionesAcademicas {
       const datos = await this._getDatosCalificacion(calificacion_id, matricula_id, evaluacion_id);
       if (!datos) return;
 
-      const nivel = datos.aprobado === false ? 'urgente' : 'importante';
+      const esFormativo = !datos.puntaje_maximo || parseFloat(datos.puntaje_maximo) === 0;
+      const nivel = esFormativo
+        ? 'informativo'
+        : (datos.aprobado === false ? 'urgente' : 'importante');
       const canales = CANALES_POR_NIVEL[nivel];
 
       const { estudiante, padres } = await this._getDestinatarios(datos.estudiante_id);
 
-      const tituloEst = `📝 Nueva calificación — ${datos.materia_nombre}`;
+      const tituloEst = esFormativo
+        ? `📝 Práctica formativa revisada — ${datos.materia_nombre}`
+        : `📝 Nueva calificación — ${datos.materia_nombre}`;
+
       await this._despachar({
         destinatarios: [estudiante],
         titulo: tituloEst,
@@ -97,7 +103,10 @@ class NotificacionesAcademicas {
         prioridad: nivel === 'urgente' ? 'urgente' : 'normal',
       });
 
-      const tituloPadre = `📝 Calificación de ${datos.estudiante_nombre} — ${datos.materia_nombre}`;
+      const tituloPadre = esFormativo
+        ? `📝 Actividad de ${datos.estudiante_nombre} — ${datos.materia_nombre}`
+        : `📝 Calificación de ${datos.estudiante_nombre} — ${datos.materia_nombre}`;
+
       await this._despachar({
         destinatarios: padres,
         titulo: tituloPadre,
@@ -303,11 +312,19 @@ class NotificacionesAcademicas {
         c.id                   AS calificacion_id,
         c.puntaje_obtenido,
         c.esta_ausente,
+        c.observacion,
         e.nombre               AS evaluacion_nombre,
         e.puntaje_maximo,
         e.tipo                 AS evaluacion_tipo,
-        ROUND((c.puntaje_obtenido / e.puntaje_maximo) * 100, 1) AS porcentaje,
-        (c.puntaje_obtenido >= gm.nota_minima_aprobacion) AS aprobado,
+        CASE
+          WHEN COALESCE(e.puntaje_maximo, 0) > 0
+          THEN ROUND((c.puntaje_obtenido / e.puntaje_maximo) * 100, 1)
+          ELSE 0
+        END AS porcentaje,
+        CASE
+          WHEN COALESCE(e.puntaje_maximo, 0) = 0 THEN true
+          ELSE (c.puntaje_obtenido >= gm.nota_minima_aprobacion)
+        END AS aprobado,
         gm.nota_minima_aprobacion,
         ma.nombre              AS materia_nombre,
         est.id                 AS estudiante_id,
@@ -576,6 +593,23 @@ class NotificacionesAcademicas {
   // ════════════════════════════════════════════════════════════════
 
   _tplCalificacionEstudiante(d) {
+    const esFormativo = !d.puntaje_maximo || parseFloat(d.puntaje_maximo) === 0;
+    if (esFormativo) {
+      return [
+        `📝 *Práctica formativa revisada*`,
+        `🏫 Unidad Educativa La Voz de Cristo`,
+        ``,
+        `📖 Materia: *${d.materia_nombre}*`,
+        `📋 Actividad: ${d.evaluacion_nombre}`,
+        d.observacion ? `🌟 Valoración: *${d.observacion}*` : null,
+        ``,
+        `Podés ver el detalle en tu panel de actividades.`,
+        ``,
+        `📞 _Colegio: +591 69624189_`,
+        `_Este es un mensaje automático._`,
+      ].filter(l => l !== null).join('\n');
+    }
+
     const estado = d.aprobado ? '✅ Aprobado' : '❌ Reprobado';
     return [
       `📝 *Nueva calificación registrada*`,
@@ -596,6 +630,25 @@ class NotificacionesAcademicas {
   }
 
   _tplCalificacionPadre(d) {
+    const esFormativo = !d.puntaje_maximo || parseFloat(d.puntaje_maximo) === 0;
+    if (esFormativo) {
+      return [
+        `📝 *Actividad escolar revisada*`,
+        `🏫 Unidad Educativa La Voz de Cristo`,
+        ``,
+        `👤 Estudiante: *${d.estudiante_nombre}*`,
+        `📚 Grado: ${d.grado_nombre} ${d.paralelo_nombre} — Turno ${d.turno_nombre}`,
+        `📖 Materia: *${d.materia_nombre}*`,
+        `📋 Actividad: ${d.evaluacion_nombre}`,
+        d.observacion ? `🌟 Valoración: *${d.observacion}*` : null,
+        ``,
+        `Podés ver el seguimiento en la plataforma escolar.`,
+        ``,
+        `📞 _Colegio: +591 69624189_`,
+        `_Este es un mensaje automático._`,
+      ].filter(l => l !== null).join('\n');
+    }
+
     const estado = d.aprobado ? '✅ Aprobado' : '❌ Reprobado';
     return [
       `📝 *Calificación registrada*`,
@@ -680,12 +733,33 @@ class NotificacionesAcademicas {
     ].filter(l => l !== null).join('\n');
   }
 
+  _formatearFechaSegura(fecha, opciones = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) {
+    if (!fecha) return '—';
+    if (fecha instanceof Date) {
+      return isNaN(fecha.getTime()) ? '—' : fecha.toLocaleDateString('es-BO', opciones);
+    }
+    const str = String(fecha).trim();
+    if (str.includes('T') || str.includes(' ')) {
+      const d = new Date(str);
+      if (!isNaN(d.getTime())) return d.toLocaleDateString('es-BO', opciones);
+      const datePart = str.split('T')[0];
+      if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+        const [y, m, dNum] = datePart.split('-').map(Number);
+        return new Date(y, m - 1, dNum, 12, 0, 0).toLocaleDateString('es-BO', opciones);
+      }
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+      const [y, m, dNum] = str.split('-').map(Number);
+      return new Date(y, m - 1, dNum, 12, 0, 0).toLocaleDateString('es-BO', opciones);
+    }
+    const d = new Date(str);
+    return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('es-BO', opciones);
+  }
+
   _tplObservacionPadre(d) {
     const nivelIcono = { critico: '🚨', moderado: '⚠️', informativo: 'ℹ️' };
     const icono = nivelIcono[d.nivel_relevancia] || 'ℹ️';
-    const fechaFormateada = new Date(d.fecha_ocurrencia + 'T12:00:00').toLocaleDateString('es-BO', {
-      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-    });
+    const fechaFormateada = this._formatearFechaSegura(d.fecha_ocurrencia);
     return [
       `${icono} *Observación pedagógica*`,
       `🏫 Unidad Educativa La Voz de Cristo`,
@@ -750,9 +824,7 @@ class NotificacionesAcademicas {
 
   _tplAsistencia({ estado, estudiante, materia_nombre, fecha }) {
     const esAusente = estado === 'ausente';
-    const fechaFormateada = new Date(fecha + 'T12:00:00').toLocaleDateString('es-BO', {
-      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-    });
+    const fechaFormateada = this._formatearFechaSegura(fecha);
     return [
       `${esAusente ? '⚠️' : '🕐'} *${esAusente ? 'Inasistencia' : 'Tardanza'} registrada*`,
       `🏫 Unidad Educativa La Voz de Cristo`,

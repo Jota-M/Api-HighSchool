@@ -1,4 +1,5 @@
 // index.js
+process.env.TZ = 'America/La_Paz';
 import dotenv from 'dotenv';
 dotenv.config();
 

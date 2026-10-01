@@ -464,6 +464,11 @@ export async function dispararAsignacionMaterial({
 
       evaluacion = ev;
 
+      // Evaluaciones formativas / sin nota cuantitativa (p. ej. Nivel Inicial)
+      if (parseFloat(ev.puntaje_maximo) <= 0) {
+        return;
+      }
+
       // 2. Calcular nota normalizada
       const puntajeMaximo = parseFloat(ev.puntaje_maximo) || 100;
       notaNormalizada = Math.round((puntajeObtenido / puntajeMaximo) * 100 * 10) / 10;
@@ -869,7 +874,7 @@ export async function cerrarPeriodoClase({
         cp.estado     AS estado_actual
       FROM   asignacion_docente ad
       JOIN   matricula m
-        ON   m.paralelo_id          = ad.paralelo_id
+        ON   COALESCE(m.paralelo_cursado_id, m.paralelo_id) = ad.paralelo_id
         AND  m.periodo_academico_id = ad.periodo_academico_id
         AND  m.estado               = 'activo'
         AND  m.deleted_at           IS NULL

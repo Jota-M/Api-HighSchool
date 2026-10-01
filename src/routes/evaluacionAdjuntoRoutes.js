@@ -98,6 +98,16 @@ router.delete(
   EvaluacionAdjuntoController.eliminarPdf
 );
 
+/**
+ * GET /api/notas/evaluaciones/:id/entregas
+ * Listar entregas de archivos subidos por estudiantes para esta evaluación
+ */
+router.get(
+  '/evaluaciones/:id/entregas',
+  authorize('notas.leer', 'evaluacion.leer'),
+  EvaluacionAdjuntoController.obtenerEntregas
+);
+
 // ==========================================
 // PUBLICACIÓN
 // ==========================================

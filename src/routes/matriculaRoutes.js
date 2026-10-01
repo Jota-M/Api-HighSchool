@@ -90,6 +90,14 @@ router.patch(
   MatriculaController.cambiarEstado
 );
 
+// PATCH /api/matricula/:id/cursado-especial
+router.patch(
+  '/:id/cursado-especial',
+  authorize('matriculacion.actualizar'),
+  logActivity('actualizar_cursado_especial', 'matriculacion'),
+  MatriculaController.actualizarCursadoEspecial
+);
+
 // POST /api/matricula/:id/transferir
 router.post(
   '/:id/transferir',

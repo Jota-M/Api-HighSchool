@@ -246,6 +246,107 @@ class SolicitudPermiso {
 // =============================================
 class Asistencia {
 
+  // Validar si la fecha corresponde al horario de la materia
+  static async validarHorarioClase(asignacion_docente_id, fecha) {
+    const DIAS_NOMBRES = {
+      1: 'Lunes', 2: 'Martes', 3: 'Miércoles', 4: 'Jueves', 5: 'Viernes', 6: 'Sábado', 7: 'Domingo'
+    };
+
+    const diaSemanaRes = await pool.query('SELECT EXTRACT(ISODOW FROM $1::date)::integer AS dia', [fecha]);
+    const diaSemana = diaSemanaRes.rows[0]?.dia;
+
+    if (diaSemana === 7) {
+      return {
+        valida: false,
+        motivo: 'No se pueden registrar asistencias los días domingo.',
+        dia_semana: 7,
+        dia_semana_nombre: 'Domingo',
+        dias_permitidos: []
+      };
+    }
+
+    // Verificar si el paralelo y periodo tienen horario publicado
+    const horarioPubRes = await pool.query(`
+      SELECT h.id
+      FROM asignacion_docente ad
+      INNER JOIN horario h 
+        ON h.paralelo_id = ad.paralelo_id 
+        AND h.periodo_academico_id = ad.periodo_academico_id
+        AND h.estado = 'publicado'
+        AND h.deleted_at IS NULL
+      WHERE ad.id = $1
+      LIMIT 1
+    `, [asignacion_docente_id]);
+
+    // Si aún no existe horario escolar oficial publicado, no se puede tomar asistencia
+    if (horarioPubRes.rows.length === 0) {
+      return {
+        valida: false,
+        sin_horario_publicado: true,
+        motivo: 'El curso no cuenta con un horario escolar oficial publicado. No se puede registrar asistencia sin un horario oficial publicado.',
+        dia_semana: diaSemana,
+        dia_semana_nombre: DIAS_NOMBRES[diaSemana] || 'Día',
+        dias_permitidos: []
+      };
+    }
+
+    // Verificar si esta materia/asignación tiene clase en este dia_semana
+    const claseRes = await pool.query(`
+      SELECT 
+        COUNT(hd.id) AS cantidad_bloques,
+        STRING_AGG(CONCAT(SUBSTRING(bh.hora_inicio::text FROM 1 FOR 5), ' - ', SUBSTRING(bh.hora_fin::text FROM 1 FOR 5)), ', ' ORDER BY bh.hora_inicio) AS horarios_texto,
+        MIN(bh.hora_inicio) AS hora_inicio,
+        MAX(bh.hora_fin) AS hora_fin,
+        STRING_AGG(DISTINCT hd.aula, ', ') AS aula
+      FROM horario_detalle hd
+      INNER JOIN horario h ON hd.horario_id = h.id
+      INNER JOIN bloque_horario bh ON hd.bloque_horario_id = bh.id
+      INNER JOIN asignacion_docente ad ON ad.id = $1
+      WHERE (hd.asignacion_docente_id = ad.id OR (hd.asignacion_docente_id IS NULL AND hd.grado_materia_id = ad.grado_materia_id AND h.paralelo_id = ad.paralelo_id))
+        AND hd.activo = true
+        AND h.estado = 'publicado'
+        AND h.deleted_at IS NULL
+        AND hd.dia_semana = $2
+    `, [asignacion_docente_id, diaSemana]);
+
+    // Obtener todos los días permitidos según horario
+    const diasPermitidosRes = await pool.query(`
+      SELECT DISTINCT hd.dia_semana
+      FROM horario_detalle hd
+      INNER JOIN horario h ON hd.horario_id = h.id
+      INNER JOIN asignacion_docente ad ON ad.id = $1
+      WHERE (hd.asignacion_docente_id = ad.id OR (hd.asignacion_docente_id IS NULL AND hd.grado_materia_id = ad.grado_materia_id AND h.paralelo_id = ad.paralelo_id))
+        AND hd.activo = true
+        AND h.estado = 'publicado'
+        AND h.deleted_at IS NULL
+      ORDER BY hd.dia_semana
+    `, [asignacion_docente_id]);
+
+    const diasPermitidosNums = diasPermitidosRes.rows.map(r => r.dia_semana);
+    const diasPermitidosNombres = diasPermitidosNums.map(d => DIAS_NOMBRES[d] || `Día ${d}`);
+
+    const tieneClase = parseInt(claseRes.rows[0]?.cantidad_bloques || '0') > 0;
+
+    let motivo = null;
+    if (!tieneClase) {
+      if (diasPermitidosNombres.length > 0) {
+        motivo = `La materia no tiene clases programadas los ${DIAS_NOMBRES[diaSemana] || 'este día'} según el horario escolar publicado. Días con clase: ${diasPermitidosNombres.join(', ')}.`;
+      } else {
+        motivo = 'La materia no tiene clases asignadas en el horario escolar oficial publicado.';
+      }
+    }
+
+    return {
+      valida: tieneClase,
+      motivo,
+      dia_semana: diaSemana,
+      dia_semana_nombre: DIAS_NOMBRES[diaSemana] || 'Día',
+      dias_permitidos: diasPermitidosNombres,
+      horarios_texto: claseRes.rows[0]?.horarios_texto || null,
+      aula: claseRes.rows[0]?.aula || null
+    };
+  }
+
   // Registrar asistencia (individual)
   static async create(data) {
     const {
@@ -253,6 +354,12 @@ class Asistencia {
       solicitud_permiso_id, justificacion, marcado_por,
       hora_marcacion, dispositivo, observaciones
     } = data;
+
+    // Validar según horario escolar
+    const validacion = await this.validarHorarioClase(asignacion_docente_id, fecha);
+    if (!validacion.valida) {
+      throw new Error(validacion.motivo);
+    }
 
     const query = `
       INSERT INTO asistencia (
@@ -287,6 +394,12 @@ class Asistencia {
   // Registrar asistencia masiva (lista completa de un paralelo/materia)
   // data.registros = [{ matricula_id, estado, observaciones? }, ...]
   static async registrarMasivo({ asignacion_docente_id, fecha, marcado_por, dispositivo, registros }) {
+    // Validar según horario escolar
+    const validacion = await this.validarHorarioClase(asignacion_docente_id, fecha);
+    if (!validacion.valida) {
+      throw new Error(validacion.motivo);
+    }
+
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -301,7 +414,7 @@ class Asistencia {
         FROM matricula m
         INNER JOIN asignacion_docente ad ON ad.id = $1
         WHERE m.id                   = ANY($2::int[])
-          AND m.paralelo_id          = ad.paralelo_id
+          AND COALESCE(m.paralelo_cursado_id, m.paralelo_id) = ad.paralelo_id
           AND m.periodo_academico_id = ad.periodo_academico_id
           AND m.estado               = 'activo'
           AND m.deleted_at           IS NULL
@@ -514,7 +627,7 @@ class Asistencia {
       FROM asignacion_docente ad
       -- Con el JOIN directo obtenemos paralelo_id Y periodo_academico_id en un solo paso
       INNER JOIN matricula m
-        ON  m.paralelo_id          = ad.paralelo_id
+        ON  COALESCE(m.paralelo_cursado_id, m.paralelo_id) = ad.paralelo_id
         AND m.periodo_academico_id = ad.periodo_academico_id
         AND m.estado               = 'activo'
         AND m.deleted_at           IS NULL
@@ -531,7 +644,12 @@ class Asistencia {
     const result = await pool.query(query, [asignacion_docente_id, fecha]);
     return result.rows;
   }
-  static async getMisAsignaciones({ usuario_id, fecha }) {
+  static async getMisAsignaciones({ usuario_id, fecha, solo_del_dia = false }) {
+    let whereExtra = '';
+    if (solo_del_dia) {
+      whereExtra = 'AND COALESCE(h_dia.cantidad_bloques, 0) > 0';
+    }
+
     const query = `
       SELECT
         ad.id                     AS asignacion_id,
@@ -558,19 +676,28 @@ class Asistencia {
         pa.nombre                 AS periodo_nombre,
         pe.id                     AS periodo_evaluacion_id,
         -- Resumen del día para esta asignación
-        COUNT(m.id)               AS total_estudiantes,
-        COUNT(a.id)               AS total_marcados,
-        COUNT(m.id) - COUNT(a.id) AS total_pendientes,
-        COUNT(CASE WHEN a.estado = 'presente'      THEN 1 END) AS presentes,
-        COUNT(CASE WHEN a.estado = 'ausente'       THEN 1 END) AS ausentes,
-        COUNT(CASE WHEN a.estado = 'tardanza'      THEN 1 END) AS tardanzas,
-        COUNT(CASE WHEN a.estado = 'justificado'   THEN 1 END) AS justificados,
-        COUNT(CASE WHEN a.estado = 'falta_parcial' THEN 1 END) AS faltas_parciales,
+        COUNT(DISTINCT m.id)      AS total_estudiantes,
+        COUNT(DISTINCT a.id)      AS total_marcados,
+        COUNT(DISTINCT m.id) - COUNT(DISTINCT a.id) AS total_pendientes,
+        COUNT(DISTINCT CASE WHEN a.estado = 'presente'      THEN a.id END) AS presentes,
+        COUNT(DISTINCT CASE WHEN a.estado = 'ausente'       THEN a.id END) AS ausentes,
+        COUNT(DISTINCT CASE WHEN a.estado = 'tardanza'      THEN a.id END) AS tardanzas,
+        COUNT(DISTINCT CASE WHEN a.estado = 'justificado'   THEN a.id END) AS justificados,
+        COUNT(DISTINCT CASE WHEN a.estado = 'falta_parcial' THEN a.id END) AS faltas_parciales,
         -- ¿Ya se tomó asistencia hoy? (true si todos están marcados)
         CASE
-          WHEN COUNT(m.id) > 0 AND COUNT(m.id) = COUNT(a.id) THEN true
+          WHEN COUNT(DISTINCT m.id) > 0 AND COUNT(DISTINCT m.id) = COUNT(DISTINCT a.id) THEN true
           ELSE false
-        END                       AS asistencia_completa
+        END                       AS asistencia_completa,
+        -- Información del Horario
+        COALESCE(h_dia.cantidad_bloques, 0) > 0 AS tiene_clase_hoy,
+        COALESCE(h_dia.cantidad_bloques, 0)     AS total_bloques_dia,
+        h_dia.horarios_texto                    AS horarios_dia,
+        h_dia.hora_inicio                       AS hora_inicio_dia,
+        h_dia.hora_fin                          AS hora_fin_dia,
+        h_dia.aula_horario                      AS aula_dia,
+        COALESCE(h_gen.dias_con_clase, '{}')    AS dias_con_clase,
+        h_gen.dias_texto                        AS dias_texto
       FROM docente d
       INNER JOIN asignacion_docente ad  ON ad.docente_id          = d.id
                                        AND ad.activo              = true
@@ -582,13 +709,13 @@ class Asistencia {
       INNER JOIN paralelo p             ON ad.paralelo_id         = p.id
       INNER JOIN turno t                ON p.turno_id             = t.id
       INNER JOIN periodo_academico pa   ON ad.periodo_academico_id = pa.id
-      INNER JOIN periodo_evaluacion pe
-      ON  pe.periodo_academico_id = pa.id
-      AND pe.activo               = true
-      AND CURRENT_DATE BETWEEN pe.fecha_inicio AND pe.fecha_fin
+      LEFT JOIN periodo_evaluacion pe
+        ON  pe.periodo_academico_id = pa.id
+        AND pe.activo               = true
+        AND CURRENT_DATE BETWEEN pe.fecha_inicio AND pe.fecha_fin
       -- Matrículas activas de ese paralelo/período
       LEFT JOIN matricula m
-        ON  m.paralelo_id          = ad.paralelo_id
+        ON  COALESCE(m.paralelo_cursado_id, m.paralelo_id) = ad.paralelo_id
         AND m.periodo_academico_id = ad.periodo_academico_id
         AND m.estado               = 'activo'
         AND m.deleted_at           IS NULL
@@ -597,16 +724,53 @@ class Asistencia {
         ON  a.matricula_id          = m.id
         AND a.asignacion_docente_id = ad.id
         AND a.fecha                 = $2
+      LEFT JOIN LATERAL (
+        SELECT 
+          COUNT(hd.id) AS cantidad_bloques,
+          STRING_AGG(CONCAT(SUBSTRING(bh.hora_inicio::text FROM 1 FOR 5), ' - ', SUBSTRING(bh.hora_fin::text FROM 1 FOR 5)), ', ' ORDER BY bh.hora_inicio) AS horarios_texto,
+          MIN(bh.hora_inicio) AS hora_inicio,
+          MAX(bh.hora_fin) AS hora_fin,
+          STRING_AGG(DISTINCT hd.aula, ', ') AS aula_horario
+        FROM horario_detalle hd
+        JOIN horario h ON hd.horario_id = h.id
+        JOIN bloque_horario bh ON hd.bloque_horario_id = bh.id
+        WHERE (hd.asignacion_docente_id = ad.id OR (hd.asignacion_docente_id IS NULL AND hd.grado_materia_id = ad.grado_materia_id AND h.paralelo_id = ad.paralelo_id))
+          AND hd.activo = true
+          AND h.estado = 'publicado'
+          AND h.deleted_at IS NULL
+          AND hd.dia_semana = EXTRACT(ISODOW FROM $2::date)::integer
+      ) h_dia ON true
+      LEFT JOIN LATERAL (
+        SELECT 
+          ARRAY_AGG(DISTINCT hd.dia_semana ORDER BY hd.dia_semana) AS dias_con_clase,
+          STRING_AGG(DISTINCT 
+            CASE hd.dia_semana 
+              WHEN 1 THEN 'Lun' 
+              WHEN 2 THEN 'Mar' 
+              WHEN 3 THEN 'Mié' 
+              WHEN 4 THEN 'Jue' 
+              WHEN 5 THEN 'Vie' 
+              WHEN 6 THEN 'Sáb' 
+            END, ', ') AS dias_texto
+        FROM horario_detalle hd
+        JOIN horario h ON hd.horario_id = h.id
+        WHERE (hd.asignacion_docente_id = ad.id OR (hd.asignacion_docente_id IS NULL AND hd.grado_materia_id = ad.grado_materia_id AND h.paralelo_id = ad.paralelo_id))
+          AND hd.activo = true
+          AND h.estado = 'publicado'
+          AND h.deleted_at IS NULL
+      ) h_gen ON true
       WHERE d.usuario_id = $1
+        ${whereExtra}
       GROUP BY
         ad.id, ad.es_titular,
         mat.id, mat.nombre, mat.codigo, mat.color,
-        g.id, g.nombre, n.nombre,
+        g.id, g.nombre, g.orden, n.nombre, n.orden,
         p.id, p.nombre, p.aula,
         t.nombre, t.hora_inicio, t.hora_fin,
-        pa.id, pa.nombre
-        , pe.id
-      ORDER BY t.hora_inicio, mat.nombre
+        pa.id, pa.nombre, pe.id,
+        h_dia.cantidad_bloques, h_dia.horarios_texto, h_dia.hora_inicio, h_dia.hora_fin, h_dia.aula_horario,
+        h_gen.dias_con_clase, h_gen.dias_texto
+      ORDER BY n.orden ASC, g.orden ASC, p.nombre ASC, mat.nombre ASC
     `;
 
     const result = await pool.query(query, [usuario_id, fecha]);

@@ -35,10 +35,12 @@ import registroCompletoRoutes from './routes/registroCompletoRoutes.js';
 import matriculaRoutes from './routes/matriculaRoutes.js';
 import matriculacionRoutes from './routes/matriculacionRoutes.js';
 import autoMatriculacionRoutes from './routes/autoMatriculacionRoutes.js';
+import reservaCupoRoutes from './routes/reservaCupoRoutes.js';
 import cursosVacacionalesRoutes from './routes/cursoVacacionalRoutes.js';
 import reportesRoutes from './routes/reportesRoutes.js';
 import paymentRoutes from './routes/paymentRoutes.js';
 import materialRoutes from './routes/materialRoutes.js';
+import examenRoutes from './routes/examenRoutes.js';
 import galeriaRoutes from './routes/galeriaRoutes.js';
 
 //Rutas modulo transporte
@@ -71,6 +73,8 @@ import productoRoutes from './routes/productoRoutes.js';
 import padreProductoRoutes from './routes/padreProductoRoutes.js';
 import solicitudFacturaRoutes from './routes/solicitudFacturaRoutes.js';
 import ocrRoutes from './routes/ocrRoutes.js';
+import migracionMensualidadesRoutes from './routes/migracionMensualidadesRoutes.js';
+import inicialRoutes from './routes/inicialRoutes.js';
 
 // Modelo y servicio para limpiezas periódicas
 import Sesion from './models/Sesion.js';
@@ -112,6 +116,7 @@ app.use((req, res, next) => {
   res.header('Access-Control-Allow-Credentials', 'true');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Refresh-Token');
+  res.header('Access-Control-Max-Age', '86400'); // Cachear preflight OPTIONS por 24 horas en el navegador
 
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
@@ -214,10 +219,13 @@ app.use('/registro-completo', registroCompletoRoutes);
 app.use('/matricula', matriculaRoutes);
 app.use('/matriculacion', matriculacionRoutes);
 app.use('/auto-matriculacion', autoMatriculacionRoutes);
+app.use('/reserva-cupo', reservaCupoRoutes);
+app.use('/api/reserva-cupo', reservaCupoRoutes);
 app.use('/docente', docenteRoutes);
 app.use('/asignacion-docente', asignacionDocenteRoutes);
 app.use('/cursos-vacacionales', cursosVacacionalesRoutes);
 app.use('/api', paymentRoutes);
+app.use('/api/migracion-mensualidades', migracionMensualidadesRoutes);
 
 // ------------------------------
 // Rutas del módulo de notas y asistencia
@@ -226,6 +234,8 @@ app.use('/notas', notasRoutes);
 app.use('/asistencia', asistenciaRoutes);
 app.use('/permisos', asistenciaRoutes);
 app.use('/materiales', materialRoutes);
+app.use('/examenes', examenRoutes);
+app.use('/api/examenes', examenRoutes);
 app.use('/galeria', galeriaRoutes);
 
 // ------------------------------
@@ -239,6 +249,7 @@ app.use('/api/egreso', egresoRoutes);
 app.use('/api/financiero', financieroRoutes);
 
 app.use('/estudianted', estudiantedRoutes);
+app.use('/estudiante', estudiantedRoutes);
 app.use('/reportes/asistencia', reportesAsistenciaRoutes);
 app.use('/reportes/notas', reportesNotasRoutes);
 app.use('/horarios', horarioRoutes);
@@ -260,6 +271,8 @@ app.use('/padre-p', padreTransportePagoRoutes);
 app.use('/padre-p', padreProductoRoutes);
 app.use('/solicitudes-factura', solicitudFacturaRoutes);
 app.use('/ocr', ocrRoutes);
+app.use('/api/inicial', inicialRoutes);
+app.use('/inicial', inicialRoutes);
 
 // ------------------------------
 // Rutas API antiguas

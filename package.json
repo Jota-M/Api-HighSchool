@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node --watch --env-file .env index.js",
     "start": "node --env-file .env index.js",
-    "seed": "node --env-file .env ./scripts/migration_galeria_institucional.js"
+    "seed": "node --env-file .env ./scripts/cargarInformesCualitativosInicial.js ./data/2doTrim/informes_inicial_segundo_a.json --periodo-evaluacion-id=2"
   },
   "keywords": [],
   "author": "",

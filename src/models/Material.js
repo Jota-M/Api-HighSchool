@@ -19,7 +19,12 @@ class UnidadTematica {
 
     if (grado_materia_id) { where.push(`u.grado_materia_id = $${p++}`); params.push(grado_materia_id); }
     if (periodo_evaluacion_id) { where.push(`u.periodo_evaluacion_id = $${p++}`); params.push(periodo_evaluacion_id); }
-    if (activo !== undefined) { where.push(`u.activo = $${p++}`); params.push(activo); }
+    if (activo !== undefined) {
+      where.push(`u.activo = $${p++}`);
+      params.push(activo);
+    } else {
+      where.push(`u.activo = true`);
+    }
 
     const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
@@ -58,38 +63,50 @@ class UnidadTematica {
     const result = await pool.query(`
       SELECT
         u.*,
-        mat.nombre AS materia_nombre,
-        mat.codigo AS materia_codigo,
-        g.nombre   AS grado_nombre,
-        pe.nombre  AS periodo_evaluacion_nombre
+        mat.nombre          AS materia_nombre,
+        mat.codigo          AS materia_codigo,
+        g.nombre            AS grado_nombre,
+        pe.nombre           AS periodo_evaluacion_nombre,
+        COUNT(DISTINCT t.id) AS total_temas
       FROM unidad_tematica u
-      INNER JOIN grado_materia gm  ON u.grado_materia_id = gm.id
+      INNER JOIN grado_materia gm ON u.grado_materia_id = gm.id
       INNER JOIN materia mat       ON gm.materia_id = mat.id
       INNER JOIN grado g           ON gm.grado_id = g.id
       LEFT JOIN  periodo_evaluacion pe ON u.periodo_evaluacion_id = pe.id
+      LEFT JOIN  tema t            ON u.id = t.unidad_tematica_id AND t.activo = true
       WHERE u.id = $1
+      GROUP BY u.id, mat.nombre, mat.codigo, g.nombre, pe.nombre
     `, [id]);
     return result.rows[0];
   }
 
   static async create(data) {
     const {
-      grado_materia_id, periodo_evaluacion_id, numero_unidad,
-      titulo, descripcion, objetivos, orden,
+      grado_materia_id, periodo_evaluacion_id, numero_unidad, titulo,
+      descripcion, objetivos, orden,
       fecha_inicio_prevista, fecha_fin_prevista
     } = data;
 
+    let numUnidad = numero_unidad;
+    if (!numUnidad) {
+      const maxRes = await pool.query(
+        'SELECT COALESCE(MAX(numero_unidad), 0) + 1 AS next FROM unidad_tematica WHERE grado_materia_id = $1 AND activo = true',
+        [grado_materia_id]
+      );
+      numUnidad = maxRes.rows[0].next;
+    }
+
     const result = await pool.query(`
       INSERT INTO unidad_tematica (
-        grado_materia_id, periodo_evaluacion_id, numero_unidad,
-        titulo, descripcion, objetivos, orden,
+        grado_materia_id, periodo_evaluacion_id, numero_unidad, titulo,
+        descripcion, objetivos, orden,
         fecha_inicio_prevista, fecha_fin_prevista
       )
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       RETURNING *
     `, [
-      grado_materia_id, periodo_evaluacion_id || null, numero_unidad,
-      titulo, descripcion || null, objetivos || null, orden || 1,
+      grado_materia_id, periodo_evaluacion_id || null, numUnidad, titulo,
+      descripcion || null, objetivos || null, orden || 1,
       fecha_inicio_prevista || null, fecha_fin_prevista || null
     ]);
     return result.rows[0];
@@ -107,11 +124,11 @@ class UnidadTematica {
         periodo_evaluacion_id = COALESCE($1, periodo_evaluacion_id),
         numero_unidad         = COALESCE($2, numero_unidad),
         titulo                = COALESCE($3, titulo),
-        descripcion           = $4,
-        objetivos             = $5,
+        descripcion           = COALESCE($4, descripcion),
+        objetivos             = COALESCE($5, objetivos),
         orden                 = COALESCE($6, orden),
-        fecha_inicio_prevista = $7,
-        fecha_fin_prevista    = $8,
+        fecha_inicio_prevista = COALESCE($7, fecha_inicio_prevista),
+        fecha_fin_prevista    = COALESCE($8, fecha_fin_prevista),
         activo                = COALESCE($9, activo),
         updated_at            = CURRENT_TIMESTAMP
       WHERE id = $10
@@ -127,11 +144,28 @@ class UnidadTematica {
   }
 
   static async softDelete(id) {
-    const result = await pool.query(`
-      UPDATE unidad_tematica SET activo = false, updated_at = CURRENT_TIMESTAMP
-      WHERE id = $1 RETURNING *
-    `, [id]);
-    return result.rows[0];
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await client.query(`
+        UPDATE unidad_tematica SET activo = false, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1 RETURNING *
+      `, [id]);
+
+      // Desactivar en cascada los temas asociados a la unidad
+      await client.query(`
+        UPDATE tema SET activo = false, updated_at = CURRENT_TIMESTAMP
+        WHERE unidad_tematica_id = $1
+      `, [id]);
+
+      await client.query('COMMIT');
+      return result.rows[0];
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   // Retorna el temario completo (unidades + temas) usando el stored procedure
@@ -158,7 +192,12 @@ class Tema {
     let p = 1;
 
     if (unidad_tematica_id) { where.push(`t.unidad_tematica_id = $${p++}`); params.push(unidad_tematica_id); }
-    if (activo !== undefined) { where.push(`t.activo = $${p++}`); params.push(activo); }
+    if (activo !== undefined) {
+      where.push(`t.activo = $${p++}`);
+      params.push(activo);
+    } else {
+      where.push(`t.activo = true`);
+    }
     if (nivel_dificultad) { where.push(`t.nivel_dificultad = $${p++}`); params.push(nivel_dificultad); }
 
     const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
@@ -212,6 +251,15 @@ class Tema {
       es_obligatorio, orden, nivel_dificultad
     } = data;
 
+    let numTema = numero_tema;
+    if (!numTema) {
+      const maxRes = await pool.query(
+        'SELECT COALESCE(MAX(numero_tema), 0) + 1 AS next FROM tema WHERE unidad_tematica_id = $1 AND activo = true',
+        [unidad_tematica_id]
+      );
+      numTema = maxRes.rows[0].next;
+    }
+
     const result = await pool.query(`
       INSERT INTO tema (
         unidad_tematica_id, numero_tema, titulo, descripcion,
@@ -221,7 +269,7 @@ class Tema {
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       RETURNING *
     `, [
-      unidad_tematica_id, numero_tema, titulo,
+      unidad_tematica_id, numTema, titulo,
       descripcion || null, contenido || null,
       palabras_clave ? `{${palabras_clave.map(k => `"${k}"`).join(',')}}` : null,
       duracion_estimada || null, es_obligatorio ?? true,
@@ -333,6 +381,11 @@ class MaterialAcademico {
     const result = await pool.query(`
       SELECT
         m.*,
+        (m.fecha_publicacion IS NOT NULL 
+          AND m.fecha_publicacion <= CURRENT_TIMESTAMP 
+          AND (m.fecha_despublicacion IS NULL OR m.fecha_despublicacion > CURRENT_TIMESTAMP)) AS es_publicado,
+        GREATEST(COALESCE(m.contador_vistas, 0), (SELECT COUNT(*) FROM acceso_material am WHERE am.material_academico_id = m.id AND am.tipo_accion = 'visualizacion'))::integer AS total_vistas,
+        GREATEST(COALESCE(m.contador_descargas, 0), (SELECT COUNT(*) FROM acceso_material am WHERE am.material_academico_id = m.id AND am.tipo_accion = 'descarga'))::integer AS total_descargas,
         tm.nombre   AS tipo_material_nombre,
         tm.icono    AS tipo_material_icono,
         tm.color    AS tipo_material_color,
@@ -340,8 +393,8 @@ class MaterialAcademico {
         mat.codigo  AS materia_codigo,
         d.nombres   AS docente_nombres,
         d.apellidos AS docente_apellidos,
-        COUNT(DISTINCT cm.id) AS total_comentarios,
-        COUNT(DISTINCT fm.id) AS total_favoritos
+        COUNT(DISTINCT cm.id)::integer AS total_comentarios,
+        COUNT(DISTINCT fm.id)::integer AS total_favoritos
       FROM material_academico m
       INNER JOIN tipo_material tm      ON m.tipo_material_id = tm.id
       INNER JOIN asignacion_docente ad ON m.asignacion_docente_id = ad.id
@@ -366,6 +419,11 @@ class MaterialAcademico {
     const result = await pool.query(`
       SELECT
         m.*,
+        (m.fecha_publicacion IS NOT NULL 
+          AND m.fecha_publicacion <= CURRENT_TIMESTAMP 
+          AND (m.fecha_despublicacion IS NULL OR m.fecha_despublicacion > CURRENT_TIMESTAMP)) AS es_publicado,
+        GREATEST(COALESCE(m.contador_vistas, 0), (SELECT COUNT(*) FROM acceso_material am WHERE am.material_academico_id = m.id AND am.tipo_accion = 'visualizacion'))::integer AS total_vistas,
+        GREATEST(COALESCE(m.contador_descargas, 0), (SELECT COUNT(*) FROM acceso_material am WHERE am.material_academico_id = m.id AND am.tipo_accion = 'descarga'))::integer AS total_descargas,
         tm.nombre   AS tipo_material_nombre,
         tm.icono    AS tipo_material_icono,
         tm.color    AS tipo_material_color,
@@ -375,8 +433,8 @@ class MaterialAcademico {
         d.nombres   AS docente_nombres,
         d.apellidos AS docente_apellidos,
         u.username  AS subido_por_username,
-        COUNT(DISTINCT cm.id) AS total_comentarios,
-        COUNT(DISTINCT fm.id) AS total_favoritos
+        COUNT(DISTINCT cm.id)::integer AS total_comentarios,
+        COUNT(DISTINCT fm.id)::integer AS total_favoritos
       FROM material_academico m
       INNER JOIN tipo_material tm      ON m.tipo_material_id = tm.id
       INNER JOIN asignacion_docente ad ON m.asignacion_docente_id = ad.id
@@ -411,8 +469,22 @@ class MaterialAcademico {
         visible_para_estudiantes, fecha_publicacion, fecha_despublicacion,
         requiere_descarga, es_destacado
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-      RETURNING *
+      VALUES (
+        $1, $2, $3, $4,
+        $5, $6, $7, $8,
+        $9, $10, $11,
+        $12,
+        CASE 
+          WHEN $13::timestamp IS NOT NULL THEN $13::timestamp 
+          WHEN $12::boolean = true THEN CURRENT_TIMESTAMP 
+          ELSE NULL 
+        END,
+        $14::timestamp, $15, $16
+      )
+      RETURNING *,
+        (fecha_publicacion IS NOT NULL 
+          AND fecha_publicacion <= CURRENT_TIMESTAMP 
+          AND (fecha_despublicacion IS NULL OR fecha_despublicacion > CURRENT_TIMESTAMP)) AS es_publicado
     `, [
       asignacion_docente_id, tipo_material_id, titulo, descripcion || null,
       es_enlace_externo ?? false, url_archivo || null, url_externa || null,
@@ -430,36 +502,42 @@ class MaterialAcademico {
       tipo_material_id, titulo, descripcion,
       url_archivo, url_externa, nombre_archivo, tamano_bytes, tipo_mime,
       visible_para_estudiantes, fecha_publicacion, fecha_despublicacion,
-      requiere_descarga, es_destacado
+      requiere_descarga, es_destacado, es_enlace_externo, despublicar
     } = data;
 
     const result = await pool.query(`
       UPDATE material_academico SET
         tipo_material_id         = COALESCE($1,  tipo_material_id),
         titulo                   = COALESCE($2,  titulo),
-        descripcion              = $3,
+        descripcion              = COALESCE($3,  descripcion),
         url_archivo              = COALESCE($4,  url_archivo),
-        url_externa              = $5,
+        url_externa              = COALESCE($5,  url_externa),
         nombre_archivo           = COALESCE($6,  nombre_archivo),
         tamano_bytes             = COALESCE($7,  tamano_bytes),
         tipo_mime                = COALESCE($8,  tipo_mime),
         visible_para_estudiantes = COALESCE($9,  visible_para_estudiantes),
-        fecha_publicacion        = $10,
-        fecha_despublicacion     = $11,
+        fecha_publicacion        = CASE WHEN $16::boolean = true THEN NULL ELSE COALESCE($10::timestamp, fecha_publicacion) END,
+        fecha_despublicacion     = CASE WHEN $16::boolean = true THEN NULL ELSE COALESCE($11::timestamp, fecha_despublicacion) END,
         requiere_descarga        = COALESCE($12, requiere_descarga),
         es_destacado             = COALESCE($13, es_destacado),
+        es_enlace_externo        = COALESCE($15, es_enlace_externo),
         updated_at               = CURRENT_TIMESTAMP
       WHERE id = $14 AND activo = true AND deleted_at IS NULL
-      RETURNING *
+      RETURNING *,
+        (fecha_publicacion IS NOT NULL 
+          AND fecha_publicacion <= CURRENT_TIMESTAMP 
+          AND (fecha_despublicacion IS NULL OR fecha_despublicacion > CURRENT_TIMESTAMP)) AS es_publicado
     `, [
-      tipo_material_id || null, titulo || null, descripcion || null,
-      url_archivo || null, url_externa || null,
+      tipo_material_id || null, titulo || null, descripcion !== undefined ? descripcion : null,
+      url_archivo || null, url_externa !== undefined ? url_externa : null,
       nombre_archivo || null, tamano_bytes || null, tipo_mime || null,
       visible_para_estudiantes !== undefined ? visible_para_estudiantes : null,
       fecha_publicacion || null, fecha_despublicacion || null,
       requiere_descarga !== undefined ? requiere_descarga : null,
       es_destacado !== undefined ? es_destacado : null,
-      id
+      id,
+      es_enlace_externo !== undefined ? es_enlace_externo : null,
+      despublicar === true || despublicar === 'true'
     ]);
     return result.rows[0];
   }
@@ -475,15 +553,28 @@ class MaterialAcademico {
   }
 
   // Publicar / despublicar
-  static async publicar(id, fecha_publicacion, fecha_despublicacion = null) {
+  static async publicar(id, fecha_publicacion = null, fecha_despublicacion = null, despublicar = false) {
+    if (despublicar) {
+      const result = await pool.query(`
+        UPDATE material_academico SET
+          fecha_publicacion        = NULL,
+          fecha_despublicacion     = NULL,
+          updated_at               = CURRENT_TIMESTAMP
+        WHERE id = $1 AND activo = true
+        RETURNING *, false AS es_publicado
+      `, [id]);
+      return result.rows[0];
+    }
+
     const result = await pool.query(`
       UPDATE material_academico SET
-        fecha_publicacion    = $1,
-        fecha_despublicacion = $2,
-        updated_at           = CURRENT_TIMESTAMP
+        fecha_publicacion        = COALESCE($1, CURRENT_TIMESTAMP),
+        fecha_despublicacion     = $2,
+        visible_para_estudiantes = true,
+        updated_at               = CURRENT_TIMESTAMP
       WHERE id = $3 AND activo = true
-      RETURNING *
-    `, [fecha_publicacion, fecha_despublicacion, id]);
+      RETURNING *, true AS es_publicado
+    `, [fecha_publicacion || null, fecha_despublicacion || null, id]);
     return result.rows[0];
   }
 
@@ -496,12 +587,25 @@ class MaterialAcademico {
     return result.rows;
   }
 
-  // Estadísticas de un material
+  // Estadísticas completas de un material
   static async getEstadisticas(material_id, fecha_inicio = null, fecha_fin = null) {
-    const result = await pool.query(
-      `SELECT * FROM estadisticas_material($1, $2, $3)`,
-      [material_id, fecha_inicio, fecha_fin]
-    );
+    const result = await pool.query(`
+      SELECT
+        m.id AS material_id,
+        m.titulo,
+        GREATEST(COALESCE(m.contador_vistas, 0), (SELECT COUNT(*) FROM acceso_material am WHERE am.material_academico_id = m.id AND am.tipo_accion = 'visualizacion' AND ($2::timestamp IS NULL OR am.created_at >= $2::timestamp) AND ($3::timestamp IS NULL OR am.created_at <= $3::timestamp)))::integer AS total_vistas,
+        GREATEST(COALESCE(m.contador_descargas, 0), (SELECT COUNT(*) FROM acceso_material am WHERE am.material_academico_id = m.id AND am.tipo_accion = 'descarga' AND ($2::timestamp IS NULL OR am.created_at >= $2::timestamp) AND ($3::timestamp IS NULL OR am.created_at <= $3::timestamp)))::integer AS total_descargas,
+        (SELECT COUNT(*) FROM acceso_material am WHERE am.material_academico_id = m.id AND am.tipo_accion = 'compartido' AND ($2::timestamp IS NULL OR am.created_at >= $2::timestamp) AND ($3::timestamp IS NULL OR am.created_at <= $3::timestamp))::integer AS total_compartidos,
+        (SELECT COUNT(*) FROM acceso_material am WHERE am.material_academico_id = m.id AND am.tipo_accion = 'impresion' AND ($2::timestamp IS NULL OR am.created_at >= $2::timestamp) AND ($3::timestamp IS NULL OR am.created_at <= $3::timestamp))::integer AS total_impresiones,
+        (SELECT COUNT(*) FROM acceso_material am WHERE am.material_academico_id = m.id AND am.completado = true AND ($2::timestamp IS NULL OR am.created_at >= $2::timestamp) AND ($3::timestamp IS NULL OR am.created_at <= $3::timestamp))::integer AS total_completados,
+        (SELECT COUNT(DISTINCT am.matricula_id) FROM acceso_material am WHERE am.material_academico_id = m.id AND am.matricula_id IS NOT NULL AND ($2::timestamp IS NULL OR am.created_at >= $2::timestamp) AND ($3::timestamp IS NULL OR am.created_at <= $3::timestamp))::integer AS estudiantes_unicos,
+        COALESCE((SELECT ROUND(AVG(am.duracion_segundos))::integer FROM acceso_material am WHERE am.material_academico_id = m.id AND am.duracion_segundos IS NOT NULL AND ($2::timestamp IS NULL OR am.created_at >= $2::timestamp) AND ($3::timestamp IS NULL OR am.created_at <= $3::timestamp)), 0) AS promedio_duracion_segundos,
+        (SELECT COUNT(*) FROM comentario_material cm WHERE cm.material_academico_id = m.id AND cm.activo = true AND ($2::timestamp IS NULL OR cm.created_at >= $2::timestamp) AND ($3::timestamp IS NULL OR cm.created_at <= $3::timestamp))::integer AS total_comentarios,
+        (SELECT COUNT(*) FROM comentario_material cm WHERE cm.material_academico_id = m.id AND cm.es_duda = true AND cm.es_resuelto = false AND cm.activo = true AND ($2::timestamp IS NULL OR cm.created_at >= $2::timestamp) AND ($3::timestamp IS NULL OR cm.created_at <= $3::timestamp))::integer AS total_dudas_abiertas,
+        (SELECT COUNT(*) FROM favorito_material fm WHERE fm.material_academico_id = m.id AND ($2::timestamp IS NULL OR fm.created_at >= $2::timestamp) AND ($3::timestamp IS NULL OR fm.created_at <= $3::timestamp))::integer AS total_favoritos
+      FROM material_academico m
+      WHERE m.id = $1
+    `, [material_id, fecha_inicio, fecha_fin]);
     return result.rows[0];
   }
 
@@ -799,7 +903,7 @@ class ProgresoEstudiante {
     FROM matricula m
     LEFT JOIN progreso_estudiante pe
       ON pe.matricula_id = m.id AND pe.tema_id = $1
-    WHERE m.paralelo_id = $2
+    WHERE COALESCE(m.paralelo_cursado_id, m.paralelo_id) = $2
       AND m.periodo_academico_id = $3
       AND m.estado = 'activo'
       AND m.deleted_at IS NULL
@@ -890,6 +994,57 @@ class TemaQuiz {
     const result = await pool.query(`SELECT * FROM tema_quiz WHERE id = $1`, [id]);
     return result.rows[0];
   }
+
+  static async create(tema_id, data) {
+    const { pregunta, opciones, respuesta_correcta, explicacion, orden } = data;
+    const maxOrdenRes = await pool.query(
+      `SELECT COALESCE(MAX(orden), 0) + 1 AS siguiente_orden FROM tema_quiz WHERE tema_id = $1 AND activo = true`,
+      [tema_id]
+    );
+    const ord = orden !== undefined ? orden : maxOrdenRes.rows[0].siguiente_orden;
+
+    const result = await pool.query(`
+      INSERT INTO tema_quiz (tema_id, pregunta, opciones, respuesta_correcta, explicacion, orden, activo, generado_por_ia)
+      VALUES ($1, $2, $3, $4, $5, $6, true, false)
+      RETURNING *
+    `, [
+      tema_id, pregunta.trim(), JSON.stringify(opciones),
+      parseInt(respuesta_correcta), explicacion ? explicacion.trim() : null, ord
+    ]);
+    return result.rows[0];
+  }
+
+  static async update(id, data) {
+    const { pregunta, opciones, respuesta_correcta, explicacion, orden } = data;
+    const result = await pool.query(`
+      UPDATE tema_quiz SET
+        pregunta           = COALESCE($2, pregunta),
+        opciones           = COALESCE($3, opciones),
+        respuesta_correcta = COALESCE($4, respuesta_correcta),
+        explicacion        = $5,
+        orden              = COALESCE($6, orden),
+        updated_at         = CURRENT_TIMESTAMP
+      WHERE id = $1 AND activo = true
+      RETURNING *
+    `, [
+      id,
+      pregunta ? pregunta.trim() : null,
+      opciones ? JSON.stringify(opciones) : null,
+      respuesta_correcta !== undefined ? parseInt(respuesta_correcta) : null,
+      explicacion !== undefined ? (explicacion ? explicacion.trim() : null) : null,
+      orden !== undefined ? parseInt(orden) : null
+    ]);
+    return result.rows[0];
+  }
+
+  static async delete(id) {
+    const result = await pool.query(`
+      UPDATE tema_quiz SET activo = false, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1
+      RETURNING *
+    `, [id]);
+    return result.rows[0];
+  }
 }
 
 // =============================================
@@ -943,7 +1098,7 @@ class IntentoQuiz {
         FROM intento_quiz iq
         INNER JOIN matricula m ON iq.matricula_id = m.id
         WHERE iq.tema_id = $1
-          AND m.paralelo_id = $2
+          AND COALESCE(m.paralelo_cursado_id, m.paralelo_id) = $2
           AND m.periodo_academico_id = $3
           AND m.estado = 'activo'
           AND m.deleted_at IS NULL
@@ -951,7 +1106,7 @@ class IntentoQuiz {
       )
       SELECT
         (SELECT COUNT(*) FROM matricula
-          WHERE paralelo_id = $2 AND periodo_academico_id = $3
+          WHERE COALESCE(paralelo_cursado_id, paralelo_id) = $2 AND periodo_academico_id = $3
             AND estado = 'activo' AND deleted_at IS NULL)  AS total_estudiantes,
         COUNT(mejores.matricula_id)                         AS total_intentaron,
         COALESCE(ROUND(AVG(mejores.mejor_puntaje), 1), 0)   AS promedio_puntaje,
@@ -968,11 +1123,175 @@ class IntentoQuiz {
       aprobados: parseInt(row.aprobados),
     };
   }
+
+  // Cuenta la cantidad de intentos realizados por un estudiante para un tema
+  static async contarIntentos(tema_id, matricula_id) {
+    const result = await pool.query(`
+      SELECT COUNT(*)::INTEGER AS total
+      FROM intento_quiz
+      WHERE tema_id = $1 AND matricula_id = $2
+    `, [tema_id, matricula_id]);
+    return parseInt(result.rows[0]?.total || 0);
+  }
+
+  // Lista detallada de estudiantes del paralelo y su estado/resultados en el quiz
+  static async getEstudiantesPorTema(tema_id, paralelo_id, periodo_academico_id) {
+    const result = await pool.query(`
+      WITH intentos_agg AS (
+        SELECT
+          iq.matricula_id,
+          COUNT(iq.id)::INTEGER AS total_intentos,
+          MAX(iq.puntaje) AS mejor_puntaje,
+          MAX(iq.created_at) AS ultimo_intento_fecha,
+          (ARRAY_AGG(iq.id ORDER BY iq.created_at DESC))[1] AS ultimo_intento_id
+        FROM intento_quiz iq
+        WHERE iq.tema_id = $1
+        GROUP BY iq.matricula_id
+      )
+      SELECT
+        m.id                                      AS matricula_id,
+        m.numero_matricula,
+        e.id                                      AS estudiante_id,
+        e.codigo                                  AS estudiante_codigo,
+        e.nombres                                 AS estudiante_nombres,
+        COALESCE(NULLIF(TRIM(CONCAT_WS(' ', e.apellido_paterno, e.apellido_materno)), ''), e.apellidos, '') AS estudiante_apellidos,
+        e.foto_url                                AS estudiante_foto,
+        CASE WHEN ia.matricula_id IS NOT NULL THEN true ELSE false END AS ha_resuelto,
+        COALESCE(ia.total_intentos, 0)::INTEGER   AS total_intentos,
+        ia.mejor_puntaje::FLOAT8                  AS mejor_puntaje,
+        ia.ultimo_intento_fecha,
+        iq_ultimo.puntaje::FLOAT8                 AS ultimo_puntaje,
+        iq_ultimo.correctas                       AS correctas,
+        iq_ultimo.total_preguntas                 AS total_preguntas,
+        iq_ultimo.respuestas                      AS ultimas_respuestas
+      FROM matricula m
+      INNER JOIN estudiante e ON m.estudiante_id = e.id
+      LEFT JOIN intentos_agg ia ON ia.matricula_id = m.id
+      LEFT JOIN intento_quiz iq_ultimo ON iq_ultimo.id = ia.ultimo_intento_id
+      WHERE COALESCE(m.paralelo_cursado_id, m.paralelo_id) = $2
+        AND m.periodo_academico_id = $3
+        AND m.estado = 'activo'
+        AND m.deleted_at IS NULL
+      ORDER BY
+        ha_resuelto DESC,
+        ia.mejor_puntaje DESC NULLS LAST,
+        e.apellido_paterno,
+        e.apellido_materno,
+        e.nombres
+    `, [tema_id, paralelo_id, periodo_academico_id]);
+
+    const rows = result.rows;
+    const total = rows.length;
+    const total_resolvieron = rows.filter(r => r.ha_resuelto).length;
+    const total_pendientes = total - total_resolvieron;
+
+    return {
+      estudiantes: rows,
+      total,
+      total_resolvieron,
+      total_pendientes,
+    };
+  }
+}
+
+// =============================================
+// TEMA QUIZ CONFIG (Control de fechas, intentos y cierre)
+// =============================================
+class TemaQuizConfig {
+
+  static async getConfig(tema_id, paralelo_id) {
+    const result = await pool.query(`
+      SELECT * FROM tema_quiz_config
+      WHERE tema_id = $1 AND paralelo_id = $2
+    `, [tema_id, paralelo_id]);
+
+    const row = result.rows[0];
+    const now = new Date();
+
+    if (!row) {
+      return {
+        tema_id: parseInt(tema_id),
+        paralelo_id: parseInt(paralelo_id),
+        activo: true,
+        fecha_inicio: null,
+        fecha_fin: null,
+        limite_intentos: 1,
+        estado_calculado: 'abierto',
+        puede_responder: true,
+        motivo_bloqueo: null
+      };
+    }
+
+    const activo = row.activo !== false;
+    const fechaInicio = row.fecha_inicio ? new Date(row.fecha_inicio) : null;
+    const fechaFin = row.fecha_fin ? new Date(row.fecha_fin) : null;
+    const limiteIntentos = row.limite_intentos !== undefined && row.limite_intentos !== null ? parseInt(row.limite_intentos) : 1;
+
+    let estadoCalculado = 'abierto';
+    let puedeResponder = true;
+    let motivoBloqueo = null;
+
+    if (!activo) {
+      estadoCalculado = 'cerrado';
+      puedeResponder = false;
+      motivoBloqueo = 'El quiz ha sido cerrado por el docente.';
+    } else if (fechaInicio && now < fechaInicio) {
+      estadoCalculado = 'programado';
+      puedeResponder = false;
+      motivoBloqueo = `El quiz estará disponible a partir del ${fechaInicio.toLocaleString('es-ES')}.`;
+    } else if (fechaFin && now > fechaFin) {
+      estadoCalculado = 'vencido';
+      puedeResponder = false;
+      motivoBloqueo = 'El plazo para responder este quiz ha finalizado.';
+    }
+
+    return {
+      id: row.id,
+      tema_id: parseInt(tema_id),
+      paralelo_id: parseInt(paralelo_id),
+      activo,
+      fecha_inicio: row.fecha_inicio,
+      fecha_fin: row.fecha_fin,
+      limite_intentos: limiteIntentos,
+      estado_calculado: estadoCalculado,
+      puede_responder: puedeResponder,
+      motivo_bloqueo: motivoBloqueo,
+      created_at: row.created_at,
+      updated_at: row.updated_at
+    };
+  }
+
+  static async upsertConfig(tema_id, paralelo_id, data) {
+    const { activo, fecha_inicio, fecha_fin, limite_intentos } = data;
+
+    await pool.query(`
+      INSERT INTO tema_quiz_config (
+        tema_id, paralelo_id, activo, fecha_inicio, fecha_fin, limite_intentos, updated_at
+      )
+      VALUES ($1, $2, COALESCE($3, true), $4, $5, COALESCE($6, 1), CURRENT_TIMESTAMP)
+      ON CONFLICT (tema_id, paralelo_id) DO UPDATE SET
+        activo          = COALESCE($3, tema_quiz_config.activo),
+        fecha_inicio    = $4,
+        fecha_fin       = $5,
+        limite_intentos = COALESCE($6, tema_quiz_config.limite_intentos),
+        updated_at      = CURRENT_TIMESTAMP
+    `, [
+      tema_id,
+      paralelo_id,
+      activo !== undefined ? activo : null,
+      fecha_inicio || null,
+      fecha_fin || null,
+      limite_intentos !== undefined ? limite_intentos : null
+    ]);
+
+    return this.getConfig(tema_id, paralelo_id);
+  }
 }
 
 export {
   TemaQuiz,
   IntentoQuiz,
+  TemaQuizConfig,
   UnidadTematica,
   Tema,
   TipoMaterial,

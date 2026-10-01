@@ -12,7 +12,7 @@ import {
   TemaQuizController
 } from '../controllers/materialController.js';
 import { authenticate, authorize, logActivity } from '../Middlewares/auth.js';
-import { upload, handleMulterError } from '../Middlewares/uploadMiddleware.js';
+import { uploadMaterial, handleMulterError } from '../Middlewares/uploadMiddleware.js';
 
 const router = express.Router();
 
@@ -280,7 +280,7 @@ router.get(
 router.post(
   '/',
   authorize('material.crear'),
-  upload.single('archivo'),
+  uploadMaterial.single('archivo'),
   handleMulterError,
   logActivity('crear', 'material'),
   MaterialAcademicoController.crear
@@ -294,7 +294,7 @@ router.post(
 router.put(
   '/:id',
   authorize('material.actualizar'),
-  upload.single('archivo'),
+  uploadMaterial.single('archivo'),
   handleMulterError,
   logActivity('actualizar', 'material'),
   MaterialAcademicoController.actualizar
@@ -506,6 +506,36 @@ router.get(
 );
 
 /**
+ * POST /api/materiales/temas/:id/quiz/preguntas
+ * Agrega una nueva pregunta al quiz manualmente.
+ */
+router.post(
+  '/temas/:id/quiz/preguntas',
+  authorize('tema.actualizar'),
+  TemaQuizController.crearPregunta
+);
+
+/**
+ * PUT /api/materiales/temas/:id/quiz/preguntas/:pregunta_id
+ * Modifica una pregunta existente del quiz.
+ */
+router.put(
+  '/temas/:id/quiz/preguntas/:pregunta_id',
+  authorize('tema.actualizar'),
+  TemaQuizController.actualizarPregunta
+);
+
+/**
+ * DELETE /api/materiales/temas/:id/quiz/preguntas/:pregunta_id
+ * Elimina una pregunta del quiz.
+ */
+router.delete(
+  '/temas/:id/quiz/preguntas/:pregunta_id',
+  authorize('tema.actualizar'),
+  TemaQuizController.eliminarPregunta
+);
+
+/**
  * POST /api/materiales/temas/:id/quiz/responder
  * El estudiante envía respuestas y recibe calificación inmediata.
  * Body: { matricula_id, respuestas: [{ quiz_id, respuesta_dada }] }
@@ -535,4 +565,36 @@ router.get(
   authorize('progreso.leer'),
   TemaQuizController.getResumen
 );
+
+/**
+ * GET /api/materiales/temas/:id/quiz/estudiantes?paralelo_id=X&periodo_academico_id=Y
+ * Lista detallada de estudiantes del paralelo y sus resultados/intentos en el quiz.
+ */
+router.get(
+  '/temas/:id/quiz/estudiantes',
+  authorize('progreso.leer'),
+  TemaQuizController.getEstudiantes
+);
+
+/**
+ * GET /api/materiales/temas/:id/quiz/config?paralelo_id=X
+ * Configuración de fechas, estado de cierre y límite de intentos del quiz.
+ */
+router.get(
+  '/temas/:id/quiz/config',
+  authorize('tema.leer'),
+  TemaQuizController.getConfig
+);
+
+/**
+ * PUT /api/materiales/temas/:id/quiz/config
+ * Actualizar fechas, estado (abierto/cerrado) y límite de intentos del quiz.
+ * Body: { paralelo_id, activo, fecha_inicio, fecha_fin, limite_intentos }
+ */
+router.put(
+  '/temas/:id/quiz/config',
+  authorize('tema.actualizar'),
+  TemaQuizController.guardarConfig
+);
+
 export default router;

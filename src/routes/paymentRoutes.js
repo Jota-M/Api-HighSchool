@@ -12,11 +12,18 @@ import {
 } from '../controllers/paymentControllers.js';
 import PagoMensualidadPDFController from '../controllers/pagoMensualidadPDFController.js';
 import ReportesPagosControlleer from '../controllers/reportesPagosController.js';
+import VerificarReciboController from '../controllers/verificarReciboController.js';
 import { authenticate, authorize, logActivity } from '../Middlewares/auth.js';
 
 const router = express.Router();
 
-// Todas las rutas requieren autenticación
+// =============================================
+// RUTAS PÚBLICAS (Para verificación de recibos mediante QR)
+// =============================================
+router.get('/publico/verificar-recibo/:codigo', VerificarReciboController.verificar);
+router.get('/publico/recibo-pdf/:codigo', PagoMensualidadPDFController.generarPDFPublicoPorCodigo);
+
+// Todas las rutas a continuación requieren autenticación
 router.use(authenticate);
 
 // =============================================
@@ -183,6 +190,14 @@ router.get(
   PagoAnualCompletoController.listar
 );
 
+// GET /api/pago-anual/resumen/:matricula_id - Previsualizar resumen del pago anual
+// Devuelve cuánto debe pagar el padre (considera cuotas ya pagadas + descuento 10%)
+router.get(
+  '/pago-anual/resumen/:matricula_id',
+  authorize('pago_mensualidad.leer'),
+  PagoAnualCompletoController.calcularResumen
+);
+
 // GET /api/pago-anual/:id - Obtener por ID
 router.get(
   '/pago-anual/:id',
@@ -191,6 +206,7 @@ router.get(
 );
 
 // POST /api/pago-anual - Registrar pago anual
+// Soporta pago fraccionado: padre pudo haber pagado N cuotas antes y completar ahora
 router.post(
   '/pago-anual',
   authorize('pago_mensualidad.crear'),

@@ -73,14 +73,28 @@ class AsignacionDocente {
   // Listar asignaciones con filtros
   static async findAll(filters = {}) {
     const {
-      page = 1, limit = 20, docente_id, grado_id, materia_id,
-      paralelo_id, periodo_academico_id, activo
+      page = 1, limit = 12, docente_id, grado_id, materia_id,
+      paralelo_id, periodo_academico_id, activo, search
     } = filters;
     const offset = (page - 1) * limit;
 
     let whereConditions = ['ad.deleted_at IS NULL'];
     let queryParams = [];
     let paramCounter = 1;
+
+    if (search && search.trim()) {
+      whereConditions.push(`(
+        d.nombres ILIKE $${paramCounter} OR 
+        d.apellidos ILIKE $${paramCounter} OR 
+        d.codigo ILIKE $${paramCounter} OR
+        m.nombre ILIKE $${paramCounter} OR
+        m.codigo ILIKE $${paramCounter} OR
+        g.nombre ILIKE $${paramCounter} OR
+        p.nombre ILIKE $${paramCounter}
+      )`);
+      queryParams.push(`%${search.trim()}%`);
+      paramCounter++;
+    }
 
     if (docente_id) {
       whereConditions.push(`ad.docente_id = $${paramCounter}`);
@@ -123,7 +137,11 @@ class AsignacionDocente {
     // Contar total
     const countQuery = `
       SELECT COUNT(*) FROM asignacion_docente ad
+      INNER JOIN docente d ON ad.docente_id = d.id
       INNER JOIN grado_materia gm ON ad.grado_materia_id = gm.id
+      INNER JOIN materia m ON gm.materia_id = m.id
+      INNER JOIN grado g ON gm.grado_id = g.id
+      INNER JOIN paralelo p ON ad.paralelo_id = p.id
       WHERE ${whereClause}
     `;
     const countResult = await pool.query(countQuery, queryParams);

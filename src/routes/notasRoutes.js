@@ -271,6 +271,16 @@ router.post(
 // ==========================================
 
 /**
+ * GET /api/notas/curso/:paralelo_id
+ * Consolidado de notas finales de todos los estudiantes de un curso en sus 3 trimestres
+ */
+router.get(
+  '/curso/:paralelo_id',
+  authorize('notas.boletin', 'notas.leer'),
+  NotasCalculoController.getNotasCurso
+);
+
+/**
  * GET /api/notas/boletin/:matricula_id/:periodo_evaluacion_id
  * Boletín completo: nota por materia con desglose Ser/Saber/Hacer
  */
@@ -328,7 +338,7 @@ router.get(
  */
 router.patch(
   '/nota-manual',
-  authorize('notas.manual'),
+  authorize('notas.manual', 'notas.actualizar', 'notas.crear'),
   logActivity('nota_manual', 'notas'),
   NotasCalculoController.aplicarNotaManual
 );

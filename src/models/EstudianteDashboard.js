@@ -16,13 +16,16 @@ class EstudianteDashboard {
     const result = await pool.query(`
       SELECT
         m.id                    AS matricula_id,
-        m.paralelo_id,
+        COALESCE(m.paralelo_cursado_id, m.paralelo_id) AS paralelo_id,
+        m.paralelo_id           AS paralelo_oficial_id,
+        m.paralelo_cursado_id,
+        (m.paralelo_cursado_id IS NOT NULL) AS es_caso_especial,
         p.grado_id,
         m.periodo_academico_id,
         e.id                    AS estudiante_id
       FROM estudiante e
       INNER JOIN matricula m          ON m.estudiante_id = e.id
-      INNER JOIN paralelo p           ON m.paralelo_id = p.id
+      INNER JOIN paralelo p           ON p.id = COALESCE(m.paralelo_cursado_id, m.paralelo_id)
       INNER JOIN periodo_academico pa ON m.periodo_academico_id = pa.id
       WHERE e.usuario_id = $1
         AND m.estado    = 'activo'
@@ -55,6 +58,11 @@ class EstudianteDashboard {
         e.tipo_discapacidad,
         -- Matrícula activa
         m.id                  AS matricula_id,
+        COALESCE(m.paralelo_cursado_id, m.paralelo_id) AS paralelo_id,
+        m.paralelo_id         AS paralelo_oficial_id,
+        m.paralelo_cursado_id,
+        (m.paralelo_cursado_id IS NOT NULL) AS es_caso_especial,
+        m.motivo_cursado_especial,
         m.numero_matricula,
         m.estado              AS estado_matricula,
         m.es_repitente,
@@ -67,16 +75,20 @@ class EstudianteDashboard {
         t.nombre              AS turno,
         t.hora_inicio         AS turno_hora_inicio,
         t.hora_fin            AS turno_hora_fin,
+        po.nombre             AS paralelo_oficial_nombre,
+        to_turno.nombre       AS turno_oficial_nombre,
         -- Periodo académico
         pa.nombre             AS periodo_academico,
         pa.fecha_inicio       AS periodo_inicio,
         pa.fecha_fin          AS periodo_fin
       FROM estudiante e
       INNER JOIN matricula m          ON m.estudiante_id = e.id
-      INNER JOIN paralelo p           ON m.paralelo_id = p.id
+      INNER JOIN paralelo p           ON p.id = COALESCE(m.paralelo_cursado_id, m.paralelo_id)
       INNER JOIN grado g              ON p.grado_id = g.id
       INNER JOIN nivel_academico na   ON g.nivel_academico_id = na.id
       INNER JOIN turno t              ON p.turno_id = t.id
+      LEFT JOIN paralelo po           ON m.paralelo_id = po.id
+      LEFT JOIN turno to_turno        ON po.turno_id = to_turno.id
       INNER JOIN periodo_academico pa ON m.periodo_academico_id = pa.id
       WHERE e.usuario_id = $1
         AND m.estado    = 'activo'
@@ -101,6 +113,9 @@ class EstudianteDashboard {
       SELECT
         ad.id                         AS asignacion_docente_id,
         gm.id                         AS grado_materia_id,
+        -- Grado y Nivel
+        g.id                          AS grado_id,
+        na.nombre                     AS nivel_nombre,
         -- Materia
         mat.id                        AS materia_id,
         mat.codigo                    AS materia_codigo,
@@ -204,6 +219,8 @@ class EstudianteDashboard {
       INNER JOIN materia mat            ON gm.materia_id = mat.id
       INNER JOIN area_conocimiento ac   ON mat.area_conocimiento_id = ac.id
       INNER JOIN docente d              ON ad.docente_id = d.id
+      INNER JOIN grado g                ON gm.grado_id = g.id
+      INNER JOIN nivel_academico na     ON g.nivel_academico_id = na.id
       -- Trimestres del período académico
       LEFT JOIN LATERAL (
         SELECT pe.id, pe.nombre, pe.orden
@@ -765,6 +782,7 @@ class EstudianteDashboard {
         hd.dia_semana,
         hd.aula,
         hd.color                  AS celda_color,
+        hd.etiqueta_personalizada,
         -- Bloque horario
         bh.numero                 AS bloque_numero,
         bh.nombre                 AS bloque_nombre,
@@ -849,68 +867,90 @@ class EstudianteDashboard {
           ev.instrucciones,
           ev.foto_url,
           ev.pdf_url,
+          ev.pdf_nombre,
           ev.fecha                      AS fecha_evaluacion,
           ev.fecha_limite,
           ev.puntaje_maximo,
           ev.peso_en_dimension,
           ev.publicado_en,
- 
+          ev.modalidad,
+          ev.duracion_minutos,
+          ev.fecha_hora_inicio,
+          ev.fecha_hora_fin,
+          ev.intentos_permitidos,
+          ev.permite_entrega_archivo,
+
           -- Dimensión
           de.id                         AS dimension_id,
           de.nombre                     AS dimension_nombre,
           de.codigo                     AS dimension_codigo,
           de.color                      AS dimension_color,
           de.porcentaje_ponderacion,
- 
+
           -- Materia
           mat.nombre                    AS materia_nombre,
           mat.codigo                    AS materia_codigo,
           mat.color                     AS materia_color,
- 
+
           -- Período de evaluación (trimestre)
           pe.nombre                     AS periodo_nombre,
           pe.id                         AS periodo_evaluacion_id,
           pe.orden                      AS periodo_orden,
- 
+
           -- Calificación del estudiante (puede ser NULL si aún no fue registrada)
           c.id                          AS calificacion_id,
           c.puntaje_obtenido,
           c.esta_ausente,
           c.observacion                 AS observacion_docente,
           c.fecha_registro,
- 
+
+          -- Datos de entrega de archivo por el estudiante (si aplica)
+          ee.id                         AS entrega_id,
+          ee.archivo_url                AS entrega_archivo_url,
+          ee.archivo_nombre             AS entrega_archivo_nombre,
+          COALESCE(
+            ee.archivos,
+            CASE 
+              WHEN ee.archivo_url IS NOT NULL 
+              THEN jsonb_build_array(jsonb_build_object('url', ee.archivo_url, 'nombre', ee.archivo_nombre, 'tipo', ee.archivo_tipo, 'tamano', ee.archivo_tamano))
+              ELSE '[]'::jsonb 
+            END
+          )                             AS entrega_archivos,
+          ee.fecha_entrega              AS entrega_fecha,
+          ee.comentario_estudiante      AS entrega_comentario,
+
           -- Nota normalizada 0–100
           CASE
             WHEN c.puntaje_obtenido IS NOT NULL AND ev.puntaje_maximo > 0
             THEN ROUND((c.puntaje_obtenido / ev.puntaje_maximo * 100)::NUMERIC, 1)
             ELSE NULL
           END                           AS nota_sobre_100,
- 
+
           -- Estado calculado
           CASE
             WHEN c.esta_ausente = true                                             THEN 'ausente'
             WHEN c.puntaje_obtenido IS NOT NULL                                    THEN 'entregado'
+            WHEN ee.id IS NOT NULL                                                 THEN 'entregado'
             WHEN ev.fecha_limite IS NOT NULL AND ev.fecha_limite < NOW()           THEN 'atrasado'
             ELSE 'pendiente'
           END                           AS estado_calculado,
- 
+
           -- Días restantes (negativo = ya venció)
           CASE
             WHEN ev.fecha_limite IS NOT NULL
             THEN EXTRACT(DAY FROM ev.fecha_limite - NOW())::INTEGER
             ELSE NULL
           END                           AS dias_restantes
- 
+
         FROM matricula m
         INNER JOIN asignacion_docente ad
-          ON  ad.paralelo_id          = m.paralelo_id
+          ON  ad.paralelo_id          = COALESCE(m.paralelo_cursado_id, m.paralelo_id)
           AND ad.periodo_academico_id = m.periodo_academico_id
           AND ad.activo               = true
           AND ad.deleted_at           IS NULL
         INNER JOIN evaluacion ev
           ON  ev.asignacion_docente_id = ad.id
           AND ev.activo                = true
-          AND ev.visible_para_padres   = true      -- reutilizamos el flag existente
         INNER JOIN dimension_evaluacion de ON ev.dimension_evaluacion_id = de.id
         INNER JOIN periodo_evaluacion pe   ON ev.periodo_evaluacion_id   = pe.id
         INNER JOIN grado_materia gm        ON ad.grado_materia_id        = gm.id
@@ -918,8 +958,12 @@ class EstudianteDashboard {
         LEFT JOIN calificacion c
           ON  c.evaluacion_id = ev.id
           AND c.matricula_id  = m.id
+        LEFT JOIN evaluacion_entrega ee
+          ON  ee.evaluacion_id = ev.id
+          AND ee.matricula_id  = m.id
         WHERE m.id = $1
           AND m.deleted_at IS NULL
+          AND (ev.visible_para_padres = true OR ev.modalidad = 'virtual' OR de.codigo IN ('AUT', 'AUTO') OR ev.permite_entrega_archivo = true)
           ${filtros}
       ) sub
       ${estadoFiltro}
@@ -944,6 +988,91 @@ class EstudianteDashboard {
         ausentes:   tareas.filter(r => r.estado_calculado === 'ausente').length,
       }
     };
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // AUTOEVALUACIÓN POR EL ESTUDIANTE
+  // Permite que el estudiante se asigne su nota (1-5 pts) y reflexión
+  // ─────────────────────────────────────────────────────────────
+  static async registrarAutoevaluacion(usuario_id, { evaluacion_id, puntaje, respuestas, reflexion }) {
+    const matricula = await EstudianteDashboard._getMatriculaActiva(usuario_id);
+    if (!matricula) {
+      throw new Error('No se encontró una matrícula activa para este estudiante');
+    }
+
+    // 1. Obtener la evaluación y validar que pertenece a la materia/paralelo del estudiante y que es de dimensión AUT
+    const evalRes = await pool.query(`
+      SELECT ev.*, de.codigo AS dimension_codigo, ad.grado_materia_id
+      FROM evaluacion ev
+      INNER JOIN dimension_evaluacion de ON ev.dimension_evaluacion_id = de.id
+      INNER JOIN asignacion_docente ad ON ev.asignacion_docente_id = ad.id
+      INNER JOIN matricula m ON m.id = $1
+      WHERE ev.id = $2
+        AND ev.activo = true
+        AND ad.paralelo_id = COALESCE(m.paralelo_cursado_id, m.paralelo_id)
+        AND ad.periodo_academico_id = m.periodo_academico_id
+    `, [matricula.matricula_id, evaluacion_id]);
+
+    if (!evalRes.rows[0]) {
+      throw new Error('La autoevaluación no fue encontrada o no pertenece a tu curso');
+    }
+
+    const evaluacion = evalRes.rows[0];
+    if (!['AUT', 'AUTO'].includes((evaluacion.dimension_codigo || '').toUpperCase())) {
+      throw new Error('Esta evaluación no corresponde a la dimensión de Autoevaluación');
+    }
+
+    // 2. Validar puntaje (escala 1 a 5)
+    const pts = parseFloat(puntaje);
+    const maxPermitido = parseFloat(evaluacion.puntaje_maximo) || 5;
+    if (isNaN(pts) || pts < 1 || pts > maxPermitido) {
+      throw new Error(`El puntaje debe estar entre 1 y ${maxPermitido} puntos`);
+    }
+
+    // 3. Formatear la observación/reflexión
+    let observacionTexto = '';
+    if (respuestas && typeof respuestas === 'object') {
+      const items = [];
+      if (respuestas.p1) items.push(`• Aprendizaje: ${respuestas.p1}`);
+      if (respuestas.p2) items.push(`• Dificultades: ${respuestas.p2}`);
+      if (respuestas.p3) items.push(`• Metas: ${respuestas.p3}`);
+      observacionTexto = items.join('\n');
+    } else if (reflexion && typeof reflexion === 'string') {
+      observacionTexto = reflexion.trim();
+    }
+
+    // 4. Upsert en tabla calificacion
+    const califRes = await pool.query(`
+      INSERT INTO calificacion (
+        evaluacion_id,
+        matricula_id,
+        puntaje_obtenido,
+        esta_ausente,
+        observacion,
+        registrado_por,
+        fecha_registro
+      )
+      VALUES ($1, $2, $3, false, $4, $5, CURRENT_TIMESTAMP)
+      ON CONFLICT (evaluacion_id, matricula_id) DO UPDATE SET
+        puntaje_obtenido = EXCLUDED.puntaje_obtenido,
+        esta_ausente     = false,
+        observacion      = EXCLUDED.observacion,
+        registrado_por   = EXCLUDED.registrado_por,
+        fecha_registro   = CURRENT_TIMESTAMP,
+        updated_at       = CURRENT_TIMESTAMP
+      RETURNING *
+    `, [evaluacion.id, matricula.matricula_id, pts, observacionTexto || null, usuario_id]);
+
+    // 5. Recalcular notas de la dimensión y periodo
+    try {
+      await pool.query(`
+        SELECT calcular_calificacion_periodo($1, $2, $3)
+      `, [matricula.matricula_id, evaluacion.grado_materia_id, evaluacion.periodo_evaluacion_id]);
+    } catch (calcErr) {
+      console.warn('Advertencia al recalcular calificacion_periodo:', calcErr.message);
+    }
+
+    return califRes.rows[0];
   }
 }
 

@@ -12,6 +12,7 @@ import {
   EstudianteTareasController    
 } from '../controllers/estudiantedController.js';
 import { authenticate, authorize } from '../Middlewares/auth.js';
+import { upload, handleMulterError } from '../Middlewares/uploadMiddleware.js';
 import MaterialAsignadoController from '../controllers/materialAsignadoController.js';
 
 const router = express.Router();
@@ -273,6 +274,27 @@ router.get(
   authorize('material.leer'),    // permiso base de estudiante
   EstudianteTareasController.listarTareas
 );
+
+router.post(
+  '/tareas/:id/entrega',
+  authorize('material.leer'),
+  upload.any(),
+  handleMulterError,
+  EstudianteTareasController.entregarTarea
+);
+
+router.delete(
+  '/tareas/:id/entrega',
+  authorize('material.leer'),
+  EstudianteTareasController.eliminarEntregaTarea
+);
+
+router.post(
+  '/autoevaluacion',
+  authorize('material.leer'),    // permiso base de estudiante
+  EstudianteTareasController.registrarAutoevaluacion
+);
+
 router.get(
   '/periodos-evaluacion',
   authorize('material.leer'),

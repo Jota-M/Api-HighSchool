@@ -5,23 +5,26 @@ class Matricula {
   // Crear matrícula
   static async create(data) {
     const {
-      estudiante_id, paralelo_id, periodo_academico_id, numero_matricula,
+      estudiante_id, paralelo_id, paralelo_cursado_id, motivo_cursado_especial,
+      periodo_academico_id, numero_matricula,
       fecha_matricula, estado, es_repitente, es_becado, porcentaje_beca,
       tipo_beca, observaciones
     } = data;
 
     const query = `
       INSERT INTO matricula (
-        estudiante_id, paralelo_id, periodo_academico_id, numero_matricula,
+        estudiante_id, paralelo_id, paralelo_cursado_id, motivo_cursado_especial,
+        periodo_academico_id, numero_matricula,
         fecha_matricula, estado, es_repitente, es_becado, porcentaje_beca,
         tipo_beca, observaciones
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       RETURNING *
     `;
 
     const result = await pool.query(query, [
-      estudiante_id, paralelo_id, periodo_academico_id, numero_matricula,
+      estudiante_id, paralelo_id, paralelo_cursado_id || null, motivo_cursado_especial || null,
+      periodo_academico_id, numero_matricula,
       fecha_matricula || new Date(), estado || 'activo', 
       es_repitente ?? false, es_becado ?? false, porcentaje_beca,
       tipo_beca, observaciones
@@ -148,7 +151,7 @@ class Matricula {
   }
 
   if (paralelo_id) {
-    whereConditions.push(`m.paralelo_id = $${paramCounter}`);
+    whereConditions.push(`(m.paralelo_id = $${paramCounter} OR m.paralelo_cursado_id = $${paramCounter})`);
     queryParams.push(paralelo_id);
     paramCounter++;
   }
@@ -197,7 +200,10 @@ class Matricula {
       p.aula,
       g.nombre as grado_nombre,
       n.nombre as nivel_nombre,
-      t.nombre as turno_nombre
+      t.nombre as turno_nombre,
+      pc.nombre as paralelo_cursado_nombre,
+      tc.nombre as turno_cursado_nombre,
+      (m.paralelo_cursado_id IS NOT NULL) as es_caso_especial
     FROM matricula m
     INNER JOIN estudiante e ON m.estudiante_id = e.id
     INNER JOIN periodo_academico pa ON m.periodo_academico_id = pa.id
@@ -205,6 +211,8 @@ class Matricula {
     INNER JOIN grado g ON p.grado_id = g.id
     INNER JOIN nivel_academico n ON g.nivel_academico_id = n.id
     INNER JOIN turno t ON p.turno_id = t.id
+    LEFT JOIN paralelo pc ON m.paralelo_cursado_id = pc.id
+    LEFT JOIN turno tc ON pc.turno_id = tc.id
     WHERE ${whereClause}
     ORDER BY e.apellido_paterno, e.apellido_materno, e.nombres
     LIMIT $${paramCounter} OFFSET $${paramCounter + 1}
@@ -249,7 +257,10 @@ class Matricula {
         g.nombre as grado_nombre,
         n.id as nivel_id,
         n.nombre as nivel_nombre,
-        t.nombre as turno_nombre
+        t.nombre as turno_nombre,
+        pc.nombre as paralelo_cursado_nombre,
+        tc.nombre as turno_cursado_nombre,
+        (m.paralelo_cursado_id IS NOT NULL) as es_caso_especial
       FROM matricula m
       INNER JOIN estudiante e ON m.estudiante_id = e.id
       INNER JOIN periodo_academico pa ON m.periodo_academico_id = pa.id
@@ -257,6 +268,8 @@ class Matricula {
       INNER JOIN grado g ON p.grado_id = g.id
       INNER JOIN nivel_academico n ON g.nivel_academico_id = n.id
       INNER JOIN turno t ON p.turno_id = t.id
+      LEFT JOIN paralelo pc ON m.paralelo_cursado_id = pc.id
+      LEFT JOIN turno tc ON pc.turno_id = tc.id
       WHERE m.id = $1 AND m.deleted_at IS NULL
     `;
 
@@ -266,23 +279,40 @@ class Matricula {
 
   // Actualizar matrícula
   static async update(id, data) {
-    const {
-      paralelo_id, estado, es_repitente, es_becado, 
-      porcentaje_beca, tipo_beca, observaciones
-    } = data;
+    const matriculaExistente = await this.findById(id);
+    if (!matriculaExistente) return null;
+
+    const paralelo_id = data.paralelo_id !== undefined ? data.paralelo_id : matriculaExistente.paralelo_id;
+    const paralelo_cursado_id = data.paralelo_cursado_id !== undefined ? data.paralelo_cursado_id : matriculaExistente.paralelo_cursado_id;
+    const motivo_cursado_especial = data.motivo_cursado_especial !== undefined ? data.motivo_cursado_especial : matriculaExistente.motivo_cursado_especial;
+    const estado = data.estado !== undefined ? data.estado : matriculaExistente.estado;
+    const es_repitente = data.es_repitente !== undefined ? data.es_repitente : matriculaExistente.es_repitente;
+    const es_becado = data.es_becado !== undefined ? data.es_becado : matriculaExistente.es_becado;
+    const porcentaje_beca = data.porcentaje_beca !== undefined ? data.porcentaje_beca : matriculaExistente.porcentaje_beca;
+    const tipo_beca = data.tipo_beca !== undefined ? data.tipo_beca : matriculaExistente.tipo_beca;
+    const observaciones = data.observaciones !== undefined ? data.observaciones : matriculaExistente.observaciones;
 
     const query = `
       UPDATE matricula
-      SET paralelo_id = $1, estado = $2, es_repitente = $3,
-          es_becado = $4, porcentaje_beca = $5, tipo_beca = $6,
-          observaciones = $7, updated_at = CURRENT_TIMESTAMP
-      WHERE id = $8 AND deleted_at IS NULL
+      SET paralelo_id = $1,
+          paralelo_cursado_id = $2,
+          motivo_cursado_especial = $3,
+          estado = $4,
+          es_repitente = $5,
+          es_becado = $6,
+          porcentaje_beca = $7,
+          tipo_beca = $8,
+          observaciones = $9,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = $10 AND deleted_at IS NULL
       RETURNING *
     `;
 
     const result = await pool.query(query, [
-      paralelo_id, estado, es_repitente, es_becado,
-      porcentaje_beca, tipo_beca, observaciones, id
+      paralelo_id, paralelo_cursado_id, motivo_cursado_especial,
+      estado, es_repitente, es_becado,
+      porcentaje_beca, tipo_beca, observaciones,
+      id
     ]);
 
     return result.rows[0];
@@ -322,6 +352,7 @@ class Matricula {
       SELECT 
         COUNT(*) as total_matriculas,
         COUNT(CASE WHEN estado = 'activo' THEN 1 END) as activas,
+        COUNT(CASE WHEN estado = 'inactivo' THEN 1 END) as inactivas,
         COUNT(CASE WHEN estado = 'retirado' THEN 1 END) as retirados,
         COUNT(CASE WHEN es_becado = true THEN 1 END) as becados,
         COUNT(CASE WHEN es_repitente = true THEN 1 END) as repitentes,
@@ -334,15 +365,21 @@ class Matricula {
     return result.rows[0];
   }
 
-  // Listar estudiantes por paralelo
+  // Obtener estudiantes por paralelo
   static async findByParalelo(paralelo_id, periodo_academico_id, estado = 'activo') {
     const query = `
       SELECT m.id as matricula_id, m.numero_matricula, m.estado, m.es_becado,
+        m.paralelo_id, m.paralelo_cursado_id, m.motivo_cursado_especial,
+        (m.paralelo_cursado_id IS NOT NULL) as es_caso_especial,
+        po.nombre as paralelo_origen_nombre,
+        to_turno.nombre as turno_origen_nombre,
         e.id, e.codigo, e.nombres, e.apellido_paterno, e.apellido_materno,
         e.fecha_nacimiento, e.foto_url, e.telefono
       FROM matricula m
       INNER JOIN estudiante e ON m.estudiante_id = e.id
-      WHERE m.paralelo_id = $1 
+      LEFT JOIN paralelo po ON m.paralelo_id = po.id
+      LEFT JOIN turno to_turno ON po.turno_id = to_turno.id
+      WHERE COALESCE(m.paralelo_cursado_id, m.paralelo_id) = $1 
         AND m.periodo_academico_id = $2
         AND m.estado = $3
         AND m.deleted_at IS NULL

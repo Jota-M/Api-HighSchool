@@ -158,65 +158,128 @@ async function migrate() {
 
     await client.query(`
       CREATE OR REPLACE FUNCTION registrar_pago_anual_completo(
-        p_matricula_id       integer,
-        p_monto_pagado       numeric,
-        p_metodo_pago        character varying,
-        p_registrado_por     integer,
-        p_numero_comprobante character varying DEFAULT NULL,
-        p_entrego_factura    boolean           DEFAULT false,
-        p_numero_factura     character varying DEFAULT NULL,
-        p_observaciones      text              DEFAULT NULL
+        p_matricula_id       INTEGER,
+        p_monto_pagado       NUMERIC,
+        p_metodo_pago        VARCHAR,
+        p_registrado_por     INTEGER,
+        p_numero_comprobante VARCHAR DEFAULT NULL,
+        p_entrego_factura    BOOLEAN DEFAULT false,
+        p_numero_factura     VARCHAR DEFAULT NULL,
+        p_observaciones      TEXT DEFAULT NULL
       )
-      RETURNS integer LANGUAGE plpgsql SECURITY INVOKER AS $$
+      RETURNS INTEGER LANGUAGE plpgsql SECURITY INVOKER AS $$
       DECLARE
-        v_mensualidad     RECORD; v_ingreso_id      integer;
-        v_codigo_ingreso  character varying(50); v_codigo_pago character varying(50);
-        v_tipo_ingreso_id integer; v_total_cuotas    integer;
-        v_periodo_id      integer; v_estudiante_id   integer;
-        v_padre_id        integer; v_monto_por_cuota numeric;
+        v_codigo_pago               VARCHAR(50);
+        v_monto_total_sin_descuento NUMERIC(10,2);
+        v_monto_total_con_beca      NUMERIC(10,2);
+        v_monto_beca_total          NUMERIC(10,2);
+        v_descuento_porcentaje      NUMERIC(5,2);
+        v_monto_descuento           NUMERIC(10,2);
+        v_monto_esperado            NUMERIC(10,2);
+        v_pago_id                   INTEGER;
+        v_cantidad_pendientes       INTEGER;
+        v_cantidad_pagadas          INTEGER;
+        v_total_cuotas              INTEGER;
+        v_ya_pagado                 NUMERIC(10,2);
       BEGIN
-        SELECT m.periodo_academico_id, m.estudiante_id INTO v_periodo_id, v_estudiante_id
-          FROM matricula m WHERE m.id = p_matricula_id;
-        IF NOT FOUND THEN RAISE EXCEPTION 'Matrícula no encontrada: %', p_matricula_id; END IF;
+        -- Contar cuotas pendientes/vencidas y ya pagadas por separado
+        SELECT COUNT(*) INTO v_cantidad_pendientes
+          FROM mensualidad
+         WHERE matricula_id = p_matricula_id
+           AND estado IN ('pendiente', 'parcial', 'vencido');
 
-        SELECT pf.id INTO v_padre_id FROM padre_familia pf
-          JOIN estudiante_tutor et ON et.padre_familia_id = pf.id
-         WHERE et.estudiante_id = v_estudiante_id AND et.es_principal = true LIMIT 1;
+        SELECT COUNT(*) INTO v_cantidad_pagadas
+          FROM mensualidad
+         WHERE matricula_id = p_matricula_id
+           AND estado = 'pagado';
 
-        SELECT id INTO v_tipo_ingreso_id FROM tipo_ingreso WHERE codigo = 'ING-ANUAL' AND activo = true LIMIT 1;
-        IF NOT FOUND THEN RAISE EXCEPTION 'No se encontró tipo_ingreso con codigo=ING-ANUAL'; END IF;
+        v_total_cuotas := v_cantidad_pendientes + v_cantidad_pagadas;
 
-        SELECT COUNT(*) INTO v_total_cuotas FROM mensualidad
-         WHERE matricula_id = p_matricula_id AND estado IN ('pendiente','parcial') AND anulado = false;
-        IF v_total_cuotas = 0 THEN
-          RAISE EXCEPTION 'No hay mensualidades pendientes para la matrícula %', p_matricula_id;
+        -- El total de cuotas activas (pagadas + pendientes) debe ser exactamente 10
+        IF v_total_cuotas != 10 THEN
+          RAISE EXCEPTION 'Se necesitan 10 cuotas en total (pagadas + pendientes), pero hay % cuotas registradas', v_total_cuotas;
         END IF;
 
-        v_monto_por_cuota := ROUND(p_monto_pagado / v_total_cuotas, 2);
-        v_codigo_ingreso  := 'ING-' || to_char(CURRENT_TIMESTAMP,'YYYYMMDD-HH24MISS') || '-' || p_matricula_id;
+        IF v_cantidad_pendientes = 0 THEN
+          RAISE EXCEPTION 'Todas las cuotas ya están pagadas, no es necesario un pago anual';
+        END IF;
 
-        INSERT INTO ingreso (codigo_ingreso, tipo_ingreso_id, periodo_academico_id,
-          estudiante_id, padre_familia_id, matricula_id, monto, monto_neto,
-          metodo_pago, numero_comprobante, factura_emitida, numero_factura,
-          estado, verificado, observaciones, registrado_por, created_at, updated_at)
-        VALUES (v_codigo_ingreso, v_tipo_ingreso_id, v_periodo_id,
-          v_estudiante_id, v_padre_id, p_matricula_id, p_monto_pagado, p_monto_pagado,
-          p_metodo_pago, p_numero_comprobante, p_entrego_factura, p_numero_factura,
-          'registrado', true, p_observaciones, p_registrado_por, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        RETURNING id INTO v_ingreso_id;
+        -- Obtener porcentaje de descuento (10% por defecto = 1 mes gratis)
+        SELECT cm.descuento_pago_completo INTO v_descuento_porcentaje
+          FROM mensualidad m
+          INNER JOIN matricula mat ON m.matricula_id = mat.id
+          INNER JOIN costo_mensualidad cm ON 
+            cm.periodo_academico_id = mat.periodo_academico_id AND
+            cm.activo = true
+         WHERE m.matricula_id = p_matricula_id
+         LIMIT 1;
 
-        FOR v_mensualidad IN
-          SELECT id, monto_final FROM mensualidad
-           WHERE matricula_id = p_matricula_id AND estado IN ('pendiente','parcial') AND anulado = false
-           ORDER BY numero_cuota
-        LOOP
-          v_codigo_pago := 'PAG-' || to_char(CURRENT_TIMESTAMP,'YYYYMMDD-HH24MISS') || '-' || v_mensualidad.id;
-          INSERT INTO pago_mensualidad (codigo_pago, mensualidad_id, ingreso_id, monto_pagado,
-            metodo_pago, numero_comprobante, fecha_pago, registrado_por, anulado, created_at, updated_at)
-          VALUES (v_codigo_pago, v_mensualidad.id, v_ingreso_id, v_monto_por_cuota,
-            p_metodo_pago, p_numero_comprobante, CURRENT_TIMESTAMP, p_registrado_por, false, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
-        END LOOP;
-        RETURN v_ingreso_id;
+        IF v_descuento_porcentaje IS NULL THEN
+          v_descuento_porcentaje := 10.00;
+        END IF;
+
+        -- Calcular el TOTAL ANUAL COMPLETO sobre las 10 cuotas (pagadas + pendientes)
+        SELECT 
+          SUM(monto_original),
+          SUM(monto_final),
+          SUM(monto_beca)
+        INTO 
+          v_monto_total_sin_descuento,
+          v_monto_total_con_beca,
+          v_monto_beca_total
+          FROM mensualidad
+         WHERE matricula_id = p_matricula_id
+           AND estado IN ('pendiente', 'parcial', 'vencido', 'pagado');
+
+        -- Descuento se aplica sobre el TOTAL ANUAL de 10 meses (no solo los pendientes)
+        v_monto_descuento := ROUND((v_monto_total_con_beca * v_descuento_porcentaje / 100), 2);
+
+        -- Sumar lo que el padre ya pagó en cuotas mensuales anteriores
+        SELECT COALESCE(SUM(pm.monto_pagado), 0) INTO v_ya_pagado
+          FROM pago_mensualidad pm
+          INNER JOIN mensualidad m ON pm.mensualidad_id = m.id
+         WHERE m.matricula_id = p_matricula_id
+           AND NOT pm.anulado;
+
+        -- Monto esperado = total anual con descuento - lo que ya pagó mensualmente
+        v_monto_esperado := v_monto_total_con_beca - v_monto_descuento - v_ya_pagado;
+
+        -- Validar monto (permitir 1 Bs de diferencia por redondeos)
+        IF ABS(p_monto_pagado - v_monto_esperado) > 1.00 THEN
+          RAISE EXCEPTION 'Monto incorrecto. Esperado: Bs % (Total anual: Bs %, Descuento %: Bs %, Ya pagado antes: Bs %)', 
+            v_monto_esperado, v_monto_total_con_beca, v_descuento_porcentaje, v_monto_descuento, v_ya_pagado;
+        END IF;
+
+        -- Generar código único para el pago anual
+        v_codigo_pago := 'ANUAL-' || TO_CHAR(CURRENT_DATE, 'YYYY') || '-' || 
+                        LPAD(NEXTVAL('pago_anual_completo_id_seq')::TEXT, 5, '0');
+
+        -- Registrar el pago anual en pago_anual_completo
+        INSERT INTO pago_anual_completo (
+          codigo_pago, matricula_id, monto_total_sin_descuento, monto_descuento,
+          monto_beca_total, monto_pagado, metodo_pago, numero_comprobante, 
+          entrego_factura, numero_factura, registrado_por, observaciones
+        ) VALUES (
+          v_codigo_pago, p_matricula_id, v_monto_total_sin_descuento, v_monto_descuento,
+          v_monto_beca_total, p_monto_pagado, p_metodo_pago, p_numero_comprobante, 
+          p_entrego_factura, p_numero_factura, p_registrado_por, 
+          COALESCE(
+            p_observaciones,
+            'Pago anual completo - ' || v_descuento_porcentaje || '% descuento' ||
+            CASE WHEN v_cantidad_pagadas > 0 
+              THEN ' (completado: ' || v_cantidad_pagadas || ' cuota(s) pagada(s) mensualmente antes)'
+              ELSE ''
+            END
+          )
+        ) RETURNING id INTO v_pago_id;
+
+        -- Marcar solo las cuotas PENDIENTES/PARCIALES/VENCIDAS como pagadas
+        UPDATE mensualidad
+           SET estado = 'pagado', updated_at = CURRENT_TIMESTAMP
+         WHERE matricula_id = p_matricula_id
+           AND estado IN ('pendiente', 'parcial', 'vencido');
+
+        RETURN v_pago_id;
       END; $$;
     `);
     console.log('   ✅ registrar_pago_anual_completo');
@@ -881,11 +944,15 @@ async function migrate() {
         p_periodo_evaluacion_id integer, p_dimension_evaluacion_id integer
       )
       RETURNS numeric LANGUAGE plpgsql AS $$
-      DECLARE v_nota_promedio numeric(5,2); v_total_evs integer; v_total_peso numeric;
+      DECLARE v_nota_promedio numeric(5,2); v_total_evs integer; v_total_peso numeric; v_dim_peso numeric;
       BEGIN
+        SELECT COALESCE(porcentaje_ponderacion, 0) INTO v_dim_peso
+        FROM dimension_evaluacion WHERE id = p_dimension_evaluacion_id;
+        IF v_dim_peso IS NULL OR v_dim_peso <= 0 THEN v_dim_peso := 100; END IF;
+
         SELECT
-          ROUND(COALESCE(SUM((c.puntaje_obtenido/e.puntaje_maximo*100)*e.peso_en_dimension)/NULLIF(SUM(e.peso_en_dimension),0),0)::numeric,2),
-          COUNT(c.id), SUM(e.peso_en_dimension)
+          ROUND(COALESCE(SUM((c.puntaje_obtenido / NULLIF(e.puntaje_maximo, 0) * v_dim_peso) * e.peso_en_dimension) / NULLIF(SUM(e.peso_en_dimension), 0), 0)::numeric, 2),
+          COUNT(c.id), COALESCE(SUM(e.peso_en_dimension), 0)
         INTO v_nota_promedio, v_total_evs, v_total_peso
         FROM evaluacion e
         INNER JOIN asignacion_docente ad ON e.asignacion_docente_id = ad.id
@@ -914,13 +981,14 @@ async function migrate() {
         PERFORM calcular_nota_dimension(p_matricula_id, p_grado_materia_id, p_periodo_evaluacion_id, de.id)
           FROM dimension_evaluacion de WHERE de.activo = true;
 
-        SELECT ROUND(COALESCE(SUM(nd.nota_promedio*de.porcentaje_ponderacion)/100,0)::numeric,2)
+        SELECT ROUND(COALESCE(SUM(nd.nota_promedio), 0)::numeric, 2)
           INTO v_nota_final
           FROM nota_dimension nd INNER JOIN dimension_evaluacion de ON nd.dimension_evaluacion_id = de.id
-         WHERE nd.matricula_id = p_matricula_id AND nd.grado_materia_id = p_grado_materia_id AND nd.periodo_evaluacion_id = p_periodo_evaluacion_id;
+         WHERE nd.matricula_id = p_matricula_id AND nd.grado_materia_id = p_grado_materia_id AND nd.periodo_evaluacion_id = p_periodo_evaluacion_id
+           AND de.activo = true;
 
         SELECT nota_minima_aprobacion INTO v_nota_minima FROM grado_materia WHERE id = p_grado_materia_id;
-        v_aprobado := COALESCE(v_nota_final,0) >= COALESCE(v_nota_minima,51);
+        v_aprobado := COALESCE(v_nota_final, 0) >= COALESCE(v_nota_minima, 51);
 
         INSERT INTO calificacion_periodo (matricula_id, grado_materia_id, periodo_evaluacion_id, nota_final, aprobado)
         VALUES (p_matricula_id, p_grado_materia_id, p_periodo_evaluacion_id, v_nota_final, v_aprobado)
@@ -964,11 +1032,12 @@ async function migrate() {
       END; $$;
     `);
 
+    await client.query(`DROP FUNCTION IF EXISTS boletin_notas(integer, integer);`);
     await client.query(`
       CREATE OR REPLACE FUNCTION boletin_notas(p_matricula_id integer, p_periodo_evaluacion_id integer)
       RETURNS TABLE(
         materia_nombre varchar, materia_codigo varchar,
-        nota_ser numeric, nota_saber numeric, nota_hacer numeric,
+        nota_ser numeric, nota_saber numeric, nota_hacer numeric, nota_auto numeric,
         nota_final numeric, nota_minima numeric, aprobado boolean, estado_periodo varchar
       ) LANGUAGE plpgsql AS $$
       BEGIN
@@ -977,6 +1046,7 @@ async function migrate() {
           MAX(CASE WHEN de.codigo = 'SER' THEN nd.nota_promedio END),
           MAX(CASE WHEN de.codigo = 'SAB' THEN nd.nota_promedio END),
           MAX(CASE WHEN de.codigo = 'HAC' THEN nd.nota_promedio END),
+          MAX(CASE WHEN de.codigo IN ('AUT', 'AUTO') THEN nd.nota_promedio END),
           cp.nota_final, gm.nota_minima_aprobacion, cp.aprobado, cp.estado::varchar
         FROM calificacion_periodo cp
         INNER JOIN grado_materia gm ON cp.grado_materia_id = gm.id

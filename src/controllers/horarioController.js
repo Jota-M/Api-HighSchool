@@ -261,6 +261,9 @@ class HorarioController {
       }
 
       const horario = await Horario.cambiarEstado(id, estado, req.user.id);
+      if (!horario) {
+        return res.status(404).json({ success: false, message: 'No se pudo actualizar el horario' });
+      }
 
       const reqInfo = RequestInfo.extract(req);
       await ActividadLog.create({
@@ -538,6 +541,202 @@ class HorarioDetalleController {
       res.json({ success: true, message: 'Celda eliminada exitosamente' });
     } catch (error) {
       res.status(500).json({ success: false, message: 'Error al eliminar celda: ' + error.message });
+    }
+  }
+
+  static async agregarBatch(req, res) {
+    const client = await pool.connect();
+    try {
+      const { id: horario_id } = req.params;
+      const { celdas, sobrescribir = true } = req.body;
+
+      if (!Array.isArray(celdas) || celdas.length === 0) {
+        return res.status(400).json({ success: false, message: 'Se requiere una lista de celdas a asignar' });
+      }
+
+      const horario = await Horario.findById(horario_id);
+      if (!horario) return res.status(404).json({ success: false, message: 'Horario no encontrado' });
+
+      if (horario.estado === 'archivado') {
+        return res.status(400).json({ success: false, message: 'No se pueden modificar celdas de un horario archivado' });
+      }
+
+      await client.query('BEGIN');
+
+      const creadas = [];
+      const errores = [];
+
+      for (const item of celdas) {
+        const { dia_semana, bloque_horario_id, grado_materia_id, asignacion_docente_id, aula, color, observaciones, etiqueta_personalizada } = item;
+
+        if (!dia_semana || !bloque_horario_id || !grado_materia_id) {
+          errores.push({ item, error: 'Campos requeridos incompletos' });
+          continue;
+        }
+
+        if (asignacion_docente_id) {
+          const conflicto = await HorarioDetalle.verificarConflictoDocente({
+            asignacion_docente_id,
+            dia_semana,
+            bloque_horario_id,
+            periodo_academico_id: horario.periodo_academico_id,
+          });
+          if (conflicto) {
+            errores.push({
+              item,
+              error: `Conflicto: Docente con clase en ${DIAS_SEMANA[dia_semana] || dia_semana} (${conflicto.paralelo_nombre})`
+            });
+            continue;
+          }
+        }
+
+        const checkExisting = await client.query(
+          `SELECT id FROM horario_detalle WHERE horario_id = $1 AND dia_semana = $2 AND bloque_horario_id = $3 AND activo = true`,
+          [horario_id, dia_semana, bloque_horario_id]
+        );
+
+        if (checkExisting.rows.length > 0) {
+          if (sobrescribir) {
+            const detId = checkExisting.rows[0].id;
+            const updated = await client.query(`
+              UPDATE horario_detalle
+              SET grado_materia_id = $1,
+                  asignacion_docente_id = $2,
+                  aula = COALESCE($3, aula),
+                  color = COALESCE($4, color),
+                  observaciones = COALESCE($5, observaciones),
+                  etiqueta_personalizada = $6,
+                  updated_at = CURRENT_TIMESTAMP
+              WHERE id = $7
+              RETURNING *
+            `, [grado_materia_id, asignacion_docente_id || null, aula || null, color || null, observaciones || null, etiqueta_personalizada || null, detId]);
+            creadas.push(updated.rows[0]);
+          }
+        } else {
+          const inserted = await client.query(`
+            INSERT INTO horario_detalle
+              (horario_id, dia_semana, bloque_horario_id, grado_materia_id, asignacion_docente_id, aula, color, observaciones, etiqueta_personalizada)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            RETURNING *
+          `, [horario_id, dia_semana, bloque_horario_id, grado_materia_id, asignacion_docente_id || null, aula || null, color || null, observaciones || null, etiqueta_personalizada || null]);
+          creadas.push(inserted.rows[0]);
+        }
+      }
+
+      await client.query('COMMIT');
+
+      res.status(201).json({
+        success: true,
+        message: `${creadas.length} celdas asignadas exitosamente`,
+        data: { creadas, total_procesadas: creadas.length, errores }
+      });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      console.error('Error al agregar batch:', error);
+      res.status(500).json({ success: false, message: 'Error al agregar batch: ' + error.message });
+    } finally {
+      client.release();
+    }
+  }
+
+  static async clonarDia(req, res) {
+    const client = await pool.connect();
+    try {
+      const { id: horario_id } = req.params;
+      const { dia_origen, dias_destino, sobrescribir = true } = req.body;
+
+      if (!dia_origen || !Array.isArray(dias_destino) || dias_destino.length === 0) {
+        return res.status(400).json({ success: false, message: 'dia_origen y dias_destino (array) son requeridos' });
+      }
+
+      const horario = await Horario.findById(horario_id);
+      if (!horario) return res.status(404).json({ success: false, message: 'Horario no encontrado' });
+
+      if (horario.estado === 'archivado') {
+        return res.status(400).json({ success: false, message: 'No se puede modificar un horario archivado' });
+      }
+
+      const celdasOrigenRes = await client.query(
+        `SELECT * FROM horario_detalle WHERE horario_id = $1 AND dia_semana = $2 AND activo = true`,
+        [horario_id, dia_origen]
+      );
+      const celdasOrigen = celdasOrigenRes.rows;
+
+      if (celdasOrigen.length === 0) {
+        return res.status(400).json({ success: false, message: `El día origen (${DIAS_SEMANA[dia_origen] || dia_origen}) no tiene celdas para copiar` });
+      }
+
+      await client.query('BEGIN');
+
+      let clonadas = 0;
+      const conflictos = [];
+
+      for (const destDia of dias_destino) {
+        if (destDia === dia_origen) continue;
+
+        for (const c of celdasOrigen) {
+          if (c.asignacion_docente_id) {
+            const conflicto = await HorarioDetalle.verificarConflictoDocente({
+              asignacion_docente_id: c.asignacion_docente_id,
+              dia_semana: destDia,
+              bloque_horario_id: c.bloque_horario_id,
+              periodo_academico_id: horario.periodo_academico_id,
+            });
+            if (conflicto) {
+              conflictos.push({
+                dia: destDia,
+                bloque_id: c.bloque_horario_id,
+                docente: conflicto.docente_nombres,
+                error: `Docente ocupado en ${DIAS_SEMANA[destDia] || destDia} (${conflicto.paralelo_nombre})`
+              });
+              continue;
+            }
+          }
+
+          const checkExisting = await client.query(
+            `SELECT id FROM horario_detalle WHERE horario_id = $1 AND dia_semana = $2 AND bloque_horario_id = $3 AND activo = true`,
+            [horario_id, destDia, c.bloque_horario_id]
+          );
+
+          if (checkExisting.rows.length > 0) {
+            if (sobrescribir) {
+              await client.query(`
+                UPDATE horario_detalle
+                SET grado_materia_id = $1,
+                    asignacion_docente_id = $2,
+                    aula = $3,
+                    color = $4,
+                    observaciones = $5,
+                    etiqueta_personalizada = $6,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = $7
+              `, [c.grado_materia_id, c.asignacion_docente_id, c.aula, c.color, c.observaciones, c.etiqueta_personalizada, checkExisting.rows[0].id]);
+              clonadas++;
+            }
+          } else {
+            await client.query(`
+              INSERT INTO horario_detalle
+                (horario_id, dia_semana, bloque_horario_id, grado_materia_id, asignacion_docente_id, aula, color, observaciones, etiqueta_personalizada)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            `, [horario_id, destDia, c.bloque_horario_id, c.grado_materia_id, c.asignacion_docente_id, c.aula, c.color, c.observaciones, c.etiqueta_personalizada]);
+            clonadas++;
+          }
+        }
+      }
+
+      await client.query('COMMIT');
+
+      res.json({
+        success: true,
+        message: `Se clonaron ${clonadas} celdas exitosamente`,
+        data: { clonadas, conflictos }
+      });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      console.error('Error al clonar día:', error);
+      res.status(500).json({ success: false, message: 'Error al clonar día: ' + error.message });
+    } finally {
+      client.release();
     }
   }
 

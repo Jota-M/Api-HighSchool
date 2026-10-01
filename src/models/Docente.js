@@ -68,7 +68,7 @@ class Docente {
 
   // Listar docentes con filtros y paginación
   static async findAll(filters = {}) {
-    const { page = 1, limit = 10, search, activo, tipo_contrato, especialidad } = filters;
+    const { page = 1, limit = 10, search, activo, tipo_contrato, especialidad, simple = false } = filters;
     const offset = (page - 1) * limit;
 
     let whereConditions = ['d.deleted_at IS NULL'];
@@ -113,7 +113,13 @@ class Docente {
     const total = parseInt(countResult.rows[0].count);
 
     // Obtener datos
-    const dataQuery = `
+    const dataQuery = simple ? `
+      SELECT d.id, d.codigo, d.nombres, d.apellidos, d.especialidad, d.foto_url
+      FROM docente d
+      WHERE ${whereClause}
+      ORDER BY d.apellidos, d.nombres
+      LIMIT $${paramCounter} OFFSET $${paramCounter + 1}
+    ` : `
       SELECT d.*,
         u.username,
         u.email as usuario_email,

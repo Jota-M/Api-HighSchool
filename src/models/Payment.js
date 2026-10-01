@@ -500,6 +500,72 @@ class PagoMensualidad {
     return result.rows[0];
   }
 
+  // Buscar por código de pago con detalles completos
+  static async findByCodigo(codigo_pago) {
+    const query = `
+      SELECT pm.*,
+        m.numero_cuota,
+        m.mes_correspondiente,
+        m.monto_final as monto_mensualidad,
+        mat.numero_matricula,
+        e.codigo as estudiante_codigo,
+        e.nombres,
+        e.apellidos,
+        g.nombre as grado_nombre,
+        p.nombre as paralelo_nombre,
+        pa.nombre as periodo_nombre,
+        u.username as registrado_por_username,
+        ua.username as anulado_por_username
+      FROM pago_mensualidad pm
+      INNER JOIN mensualidad m ON pm.mensualidad_id = m.id
+      INNER JOIN matricula mat ON m.matricula_id = mat.id
+      INNER JOIN estudiante e ON mat.estudiante_id = e.id
+      LEFT JOIN paralelo p ON mat.paralelo_id = p.id
+      LEFT JOIN grado g ON p.grado_id = g.id
+      LEFT JOIN periodo_academico pa ON mat.periodo_academico_id = pa.id
+      INNER JOIN usuarios u ON pm.registrado_por = u.id
+      LEFT JOIN usuarios ua ON pm.anulado_por = ua.id
+      WHERE pm.codigo_pago = $1
+    `;
+
+    const result = await pool.query(query, [codigo_pago]);
+    if (!result.rows[0]) return null;
+
+    const pagoPrincipal = result.rows[0];
+
+    // Si tiene transaccion_id, buscar todos los pagos asociados a la misma transacción
+    if (pagoPrincipal.transaccion_id) {
+      const queryTransaccion = `
+        SELECT pm.*,
+          m.numero_cuota,
+          m.mes_correspondiente,
+          m.monto_final as monto_mensualidad,
+          mat.numero_matricula,
+          e.codigo as estudiante_codigo,
+          e.nombres,
+          e.apellidos,
+          g.nombre as grado_nombre,
+          p.nombre as paralelo_nombre,
+          pa.nombre as periodo_nombre
+        FROM pago_mensualidad pm
+        INNER JOIN mensualidad m ON pm.mensualidad_id = m.id
+        INNER JOIN matricula mat ON m.matricula_id = mat.id
+        INNER JOIN estudiante e ON mat.estudiante_id = e.id
+        LEFT JOIN paralelo p ON mat.paralelo_id = p.id
+        LEFT JOIN grado g ON p.grado_id = g.id
+        LEFT JOIN periodo_academico pa ON mat.periodo_academico_id = pa.id
+        WHERE pm.transaccion_id = $1
+        ORDER BY pm.id ASC
+      `;
+      const resultGrupo = await pool.query(queryTransaccion, [pagoPrincipal.transaccion_id]);
+      pagoPrincipal.pagos_grupo = resultGrupo.rows;
+    } else {
+      pagoPrincipal.pagos_grupo = [pagoPrincipal];
+    }
+
+    return pagoPrincipal;
+  }
+
   // Listar pagos con filtros
   static async findAll(filters = {}) {
     const {
@@ -782,6 +848,60 @@ class PagoAnualCompleto {
     `;
     const result = await pool.query(query, [matricula_id]);
     return result.rows.length > 0;
+  }
+
+  /**
+   * 🔧 Calcular el resumen del pago anual ANTES de registrarlo.
+   * Soporta el caso donde el padre ya pagó N cuotas mensualmente:
+   *   - Obtiene el total de las 10 cuotas (pagadas + pendientes)
+   *   - Aplica el descuento del 10% sobre ese total
+   *   - Resta lo ya pagado previamente
+   *   - Devuelve el monto restante que el padre debe pagar ahora
+   */
+  static async calcularResumenAnual(matricula_id) {
+    // Totales por estado
+    const estadoQuery = `
+      SELECT 
+        COUNT(*) FILTER (WHERE estado IN ('pendiente','vencido')) AS cantidad_pendientes,
+        COUNT(*) FILTER (WHERE estado = 'pagado')                 AS cantidad_pagadas,
+        COUNT(*) FILTER (WHERE estado != 'anulado')               AS total_cuotas,
+        COALESCE(SUM(monto_final) FILTER (WHERE estado != 'anulado'), 0) AS monto_total_anual
+      FROM mensualidad
+      WHERE matricula_id = $1
+    `;
+    const estadoResult = await pool.query(estadoQuery, [matricula_id]);
+    const { cantidad_pendientes, cantidad_pagadas, total_cuotas, monto_total_anual } = estadoResult.rows[0];
+
+    // Total ya pagado en cuotas mensuales (no anulado)
+    const pagadoQuery = `
+      SELECT COALESCE(SUM(pm.monto_pagado), 0) AS ya_pagado
+      FROM pago_mensualidad pm
+      INNER JOIN mensualidad m ON pm.mensualidad_id = m.id
+      WHERE m.matricula_id = $1
+        AND NOT pm.anulado
+    `;
+    const pagadoResult = await pool.query(pagadoQuery, [matricula_id]);
+    const ya_pagado = parseFloat(pagadoResult.rows[0].ya_pagado);
+
+    // Descuento del 10% sobre el total anual completo
+    const descuento_porcentaje = 10;
+    const monto_total = parseFloat(monto_total_anual);
+    const monto_descuento = parseFloat((monto_total * descuento_porcentaje / 100).toFixed(2));
+    const monto_con_descuento = parseFloat((monto_total - monto_descuento).toFixed(2));
+    const monto_a_pagar_ahora = parseFloat((monto_con_descuento - ya_pagado).toFixed(2));
+
+    return {
+      total_cuotas: parseInt(total_cuotas),
+      cantidad_pendientes: parseInt(cantidad_pendientes),
+      cantidad_pagadas: parseInt(cantidad_pagadas),
+      monto_total_anual: monto_total,        // Total bruto de 10 meses
+      descuento_porcentaje,
+      monto_descuento,                       // 1 mes de descuento
+      monto_con_descuento,                   // Lo que cuesta el año completo con descuento
+      ya_pagado,                             // Lo que ya pagó en cuotas mensuales
+      monto_a_pagar_ahora,                   // Exacto monto que debe ingresar ahora
+      es_valido: parseInt(total_cuotas) === 10 && parseInt(cantidad_pendientes) > 0
+    };
   }
 }
 // =============================================

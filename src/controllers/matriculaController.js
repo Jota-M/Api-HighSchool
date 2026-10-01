@@ -3,6 +3,7 @@ import { Estudiante } from '../models/Estudiantes.js';
 import ActividadLog from '../models/actividadLog.js';
 import RequestInfo from '../utils/requestInfo.js';
 import UploadImage from '../utils/uploadImage.js';
+import { pool } from '../db/pool.js';
 
 class MatriculaController {
   // Listar matrículas
@@ -229,7 +230,7 @@ class MatriculaController {
         });
       }
 
-      const estadosValidos = ['activo', 'retirado', 'trasladado', 'graduado', 'suspendido', 'congelado'];
+      const estadosValidos = ['activo', 'inactivo', 'retirado', 'trasladado', 'graduado', 'suspendido', 'congelado'];
       if (!estadosValidos.includes(estado)) {
         return res.status(400).json({
           success: false,
@@ -674,6 +675,72 @@ class MatriculaController {
       res.status(500).json({
         success: false,
         message: 'Error al eliminar documento: ' + error.message
+      });
+    }
+  }
+
+  // PATCH /api/matricula/:id/cursado-especial
+  static async actualizarCursadoEspecial(req, res) {
+    try {
+      const { id } = req.params;
+      const { paralelo_cursado_id, motivo_cursado_especial } = req.body;
+
+      const matriculaExistente = await Matricula.findById(id);
+      if (!matriculaExistente) {
+        return res.status(404).json({
+          success: false,
+          message: 'Matrícula no encontrada'
+        });
+      }
+
+      if (paralelo_cursado_id) {
+        const paraleloDestino = await pool.query('SELECT * FROM paralelo WHERE id = $1', [paralelo_cursado_id]);
+        if (!paraleloDestino.rows[0]) {
+          return res.status(404).json({
+            success: false,
+            message: 'El paralelo de cursado destino no existe'
+          });
+        }
+      }
+
+      const matricula = await Matricula.update(id, {
+        paralelo_cursado_id: paralelo_cursado_id || null,
+        motivo_cursado_especial: motivo_cursado_especial || null
+      });
+
+      const reqInfo = RequestInfo.extract(req);
+      await ActividadLog.create({
+        usuario_id: req.user.id,
+        accion: 'actualizar_cursado_especial',
+        modulo: 'matricula',
+        tabla_afectada: 'matricula',
+        registro_id: matricula.id,
+        datos_anteriores: {
+          paralelo_cursado_id: matriculaExistente.paralelo_cursado_id,
+          motivo_cursado_especial: matriculaExistente.motivo_cursado_especial
+        },
+        datos_nuevos: {
+          paralelo_cursado_id: matricula.paralelo_cursado_id,
+          motivo_cursado_especial: matricula.motivo_cursado_especial
+        },
+        ip_address: reqInfo.ip,
+        user_agent: reqInfo.userAgent,
+        resultado: 'exitoso',
+        mensaje: `Cursado especial actualizado para matrícula: ${matricula.numero_matricula}`
+      });
+
+      res.json({
+        success: true,
+        message: paralelo_cursado_id 
+          ? 'Cursado especial asignado exitosamente' 
+          : 'Cursado especial restablecido al paralelo oficial',
+        data: { matricula }
+      });
+    } catch (error) {
+      console.error('Error al actualizar cursado especial:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al actualizar cursado especial: ' + error.message
       });
     }
   }

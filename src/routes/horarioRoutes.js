@@ -199,6 +199,28 @@ router.put(
 );
 
 /**
+ * POST /api/horarios/:id/detalle/batch
+ * Asignar múltiples celdas en bloque
+ */
+router.post(
+  '/:id/detalle/batch',
+  authorize('horario.actualizar'),
+  logActivity('crear_batch', 'horario_detalle'),
+  HorarioDetalleController.agregarBatch
+);
+
+/**
+ * POST /api/horarios/:id/detalle/clonar-dia
+ * Clonar las celdas de un día a otros días
+ */
+router.post(
+  '/:id/detalle/clonar-dia',
+  authorize('horario.actualizar'),
+  logActivity('clonar_dia', 'horario_detalle'),
+  HorarioDetalleController.clonarDia
+);
+
+/**
  * DELETE /api/horarios/:id/detalle/:det_id
  * Eliminar (desactivar) una celda del horario
  */

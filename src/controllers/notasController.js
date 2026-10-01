@@ -336,8 +336,12 @@ class EvaluacionController {
     try {
       const {
         asignacion_docente_id, dimension_evaluacion_id, periodo_evaluacion_id,
-        nombre, tipo, descripcion, fecha, puntaje_maximo, peso_en_dimension,
-        visible_para_padres, tema_id
+        nombre, tipo, descripcion, fecha, fecha_limite, puntaje_maximo, peso_en_dimension,
+        visible_para_padres, tema_id,
+        modalidad, duracion_minutos,
+        fecha_hora_inicio, fecha_hora_fin, intentos_permitidos, orden_aleatorio,
+        permite_entrega_archivo,
+        preguntas
       } = req.body;
 
       if (!asignacion_docente_id || !dimension_evaluacion_id || !periodo_evaluacion_id || !nombre) {
@@ -366,9 +370,18 @@ class EvaluacionController {
 
       const evaluacion = await Evaluacion.create({
         asignacion_docente_id, dimension_evaluacion_id, periodo_evaluacion_id,
-        nombre, tipo, descripcion, fecha, puntaje_maximo, peso_en_dimension,
-        visible_para_padres, tema_id
+        nombre, tipo, descripcion, fecha, fecha_limite, puntaje_maximo, peso_en_dimension,
+        visible_para_padres, tema_id,
+        modalidad, duracion_minutos,
+        fecha_hora_inicio, fecha_hora_fin, intentos_permitidos, orden_aleatorio,
+        permite_entrega_archivo
       });
+
+      // Si se enviaron preguntas para un examen virtual, guardarlas de inmediato
+      if (modalidad === 'virtual' && Array.isArray(preguntas) && preguntas.length > 0) {
+        const { default: Examen } = await import('../models/Examen.js');
+        await Examen.reemplazarPreguntas(evaluacion.id, preguntas);
+      }
 
       const reqInfo = RequestInfo.extract(req);
       await ActividadLog.create({
@@ -402,6 +415,12 @@ class EvaluacionController {
       }
 
       const evaluacion = await Evaluacion.update(id, req.body);
+
+      // Si se enviaron preguntas para un examen virtual, guardarlas/reemplazarlas
+      if (Array.isArray(req.body.preguntas) && req.body.preguntas.length > 0) {
+        const { default: Examen } = await import('../models/Examen.js');
+        await Examen.reemplazarPreguntas(evaluacion.id, req.body.preguntas);
+      }
 
       const reqInfo = RequestInfo.extract(req);
       await ActividadLog.create({
@@ -477,13 +496,32 @@ class MisMateriasController {
         });
       }
 
+      const materiasFormateadas = materias.map(m => {
+        const cal = parseInt(m.calificaciones_registradas, 10) || parseInt(m.total_calificaciones, 10) || 0;
+        return {
+          ...m,
+          total_estudiantes: parseInt(m.total_estudiantes, 10) || 0,
+          total_evaluaciones: parseInt(m.total_evaluaciones, 10) || 0,
+          evaluaciones_ser: parseInt(m.evaluaciones_ser, 10) || 0,
+          evaluaciones_saber: parseInt(m.evaluaciones_saber, 10) || 0,
+          evaluaciones_hacer: parseInt(m.evaluaciones_hacer, 10) || 0,
+          evaluaciones_auto: parseInt(m.evaluaciones_auto, 10) || 0,
+          calificaciones_registradas: cal,
+          total_calificaciones: cal,
+          calificaciones: cal,
+          estudiantes_con_nota_final: parseInt(m.estudiantes_con_nota_final, 10) || 0,
+          aprobados: parseInt(m.aprobados, 10) || 0,
+          reprobados: parseInt(m.reprobados, 10) || 0,
+        };
+      });
+
       res.json({
         success: true,
         data: {
           docente_usuario_id: req.user.id,
           total_materias: [...new Set(materias.map(m => m.asignacion_id))].length,
           periodo_evaluacion_id: periodo_evaluacion_id ? parseInt(periodo_evaluacion_id) : null,
-          materias
+          materias: materiasFormateadas
         }
       });
     } catch (error) {
@@ -609,7 +647,8 @@ class CalificacionController {
   // ✅ Hook de notificación por cada calificación del loop
   static async registrarMasivo(req, res) {
     try {
-      const { evaluacion_id, registros } = req.body;
+      const { evaluacion_id } = req.body;
+      const registros = req.body.registros || req.body.calificaciones;
 
       if (!evaluacion_id || !Array.isArray(registros) || registros.length === 0) {
         return res.status(400).json({
@@ -717,6 +756,27 @@ class NotasCalculoController {
       res.status(500).json({
         success: false,
         message: 'Error al calcular notas: ' + error.message
+      });
+    }
+  }
+
+  // GET /api/notas/curso/:paralelo_id
+  static async getNotasCurso(req, res) {
+    try {
+      const { paralelo_id } = req.params;
+      const { periodo_academico_id } = req.query;
+
+      const datosCurso = await NotasCalculo.getNotasCurso(
+        parseInt(paralelo_id),
+        periodo_academico_id ? parseInt(periodo_academico_id) : null
+      );
+
+      res.json({ success: true, data: datosCurso });
+    } catch (error) {
+      console.error('Error al obtener notas del curso:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al obtener notas del curso: ' + error.message
       });
     }
   }
@@ -900,18 +960,15 @@ class NotasCalculoController {
         });
       }
 
-      if (!justificacion_manual) {
-        return res.status(400).json({
-          success: false,
-          message: 'La justificación es obligatoria para una nota manual'
-        });
-      }
+      const justificacion = (justificacion_manual && justificacion_manual.trim())
+        ? justificacion_manual.trim()
+        : 'Ajuste manual desde panel administrativo';
 
       const calificacion = await NotasCalculo.aplicarNotaManual(
         parseInt(matricula_id),
         parseInt(grado_materia_id),
         parseInt(periodo_evaluacion_id),
-        { nota_manual, justificacion_manual, aplicado_por: req.user.id }
+        { nota_manual: parseFloat(nota_manual), justificacion_manual: justificacion, aplicado_por: req.user.id }
       );
 
       const reqInfo = RequestInfo.extract(req);
@@ -919,10 +976,10 @@ class NotasCalculoController {
         usuario_id: req.user.id, accion: 'nota_manual',
         modulo: 'notas', tabla_afectada: 'calificacion_periodo',
         registro_id: calificacion?.id,
-        datos_nuevos: { nota_manual, justificacion_manual },
+        datos_nuevos: { nota_manual: parseFloat(nota_manual), justificacion_manual: justificacion },
         ip_address: reqInfo.ip, user_agent: reqInfo.userAgent,
         resultado: 'exitoso',
-        mensaje: `Nota manual aplicada: ${nota_manual} — ${justificacion_manual}`
+        mensaje: `Nota manual aplicada: ${nota_manual} — ${justificacion}`
       });
 
       res.json({

@@ -398,18 +398,33 @@ async function crearTablasPayments() {
         v_monto_esperado NUMERIC(10,2);
         v_pago_id INTEGER;
         v_cantidad_pendientes INTEGER;
+        v_cantidad_pagadas INTEGER;
+        v_total_cuotas INTEGER;
+        v_ya_pagado NUMERIC(10,2);
       BEGIN
-        -- 🔧 VALIDACIÓN: Exactamente 10 mensualidades pendientes
+        -- 🔧 Contar cuotas pendientes/vencidas y ya pagadas por separado
         SELECT COUNT(*) INTO v_cantidad_pendientes
         FROM mensualidad
         WHERE matricula_id = p_matricula_id
           AND estado IN ('pendiente', 'vencido');
-        
-        IF v_cantidad_pendientes != 10 THEN
-          RAISE EXCEPTION 'Se esperan 10 mensualidades pendientes, pero hay %', v_cantidad_pendientes;
+
+        SELECT COUNT(*) INTO v_cantidad_pagadas
+        FROM mensualidad
+        WHERE matricula_id = p_matricula_id
+          AND estado = 'pagado';
+
+        v_total_cuotas := v_cantidad_pendientes + v_cantidad_pagadas;
+
+        -- El total de cuotas activas (pagadas + pendientes) debe ser exactamente 10
+        IF v_total_cuotas != 10 THEN
+          RAISE EXCEPTION 'Se necesitan 10 cuotas en total (pagadas + pendientes), pero hay % cuotas registradas', v_total_cuotas;
         END IF;
 
-        -- Obtener porcentaje de descuento (10%)
+        IF v_cantidad_pendientes = 0 THEN
+          RAISE EXCEPTION 'Todas las cuotas ya están pagadas, no es necesario un pago anual';
+        END IF;
+
+        -- Obtener porcentaje de descuento (10% por defecto = 1 mes gratis)
         SELECT cm.descuento_pago_completo INTO v_descuento_porcentaje
         FROM mensualidad m
         INNER JOIN matricula mat ON m.matricula_id = mat.id
@@ -423,34 +438,46 @@ async function crearTablasPayments() {
           v_descuento_porcentaje := 10.00;
         END IF;
 
-        -- Calcular totales
+        -- 🔧 Calcular el TOTAL ANUAL COMPLETO sobre las 10 cuotas (pagadas + pendientes)
         SELECT 
           SUM(monto_original) as total_original,
-          SUM(monto_final) as total_final,
-          SUM(monto_beca) as total_beca
+          SUM(monto_final)    as total_final,
+          SUM(monto_beca)     as total_beca
         INTO 
           v_monto_total_sin_descuento,
           v_monto_total_con_beca,
           v_monto_beca_total
         FROM mensualidad
         WHERE matricula_id = p_matricula_id
-          AND estado IN ('pendiente', 'vencido');
+          AND estado IN ('pendiente', 'vencido', 'pagado');
 
-        -- 🔧 CÁLCULO CORRECTO: Descuento 10% sobre total con beca
+        -- Descuento se aplica sobre el TOTAL ANUAL de 10 meses (no solo los pendientes)
         v_monto_descuento := ROUND((v_monto_total_con_beca * v_descuento_porcentaje / 100), 2);
-        v_monto_esperado := v_monto_total_con_beca - v_monto_descuento;
 
-        -- Validar monto (permitir 1 Bs de diferencia)
+        -- 🔧 Sumar lo que el padre ya pagó en cuotas mensuales anteriores
+        SELECT COALESCE(SUM(pm.monto_pagado), 0) INTO v_ya_pagado
+        FROM pago_mensualidad pm
+        INNER JOIN mensualidad m ON pm.mensualidad_id = m.id
+        WHERE m.matricula_id = p_matricula_id
+          AND NOT pm.anulado;
+
+        -- 🔧 Monto esperado = total anual con descuento - lo que ya pagó mensualmente
+        -- Ejemplo: 10×380=3800, descuento 10%=380, ya pagó 380 → esperado = 3040
+        v_monto_esperado := v_monto_total_con_beca - v_monto_descuento - v_ya_pagado;
+
+        -- Validar monto (permitir 1 Bs de diferencia por redondeos)
         IF ABS(p_monto_pagado - v_monto_esperado) > 1.00 THEN
-          RAISE EXCEPTION 'Monto incorrecto. Esperado: Bs % (Total: Bs %, Descuento %: Bs %, Becas: Bs %)', 
-            v_monto_esperado, v_monto_total_con_beca, v_descuento_porcentaje, v_monto_descuento, v_monto_beca_total;
+          RAISE EXCEPTION 'Monto incorrecto. Esperado: Bs % (Total anual: Bs %, Descuento %: Bs %, Ya pagado antes: Bs %)', 
+            v_monto_esperado, v_monto_total_con_beca, v_descuento_porcentaje, v_monto_descuento, v_ya_pagado;
         END IF;
 
-        -- Generar código
+        -- Generar código único para el pago anual
         v_codigo_pago := 'ANUAL-' || TO_CHAR(CURRENT_DATE, 'YYYY') || '-' || 
                         LPAD(NEXTVAL('pago_anual_completo_id_seq')::TEXT, 5, '0');
 
-        -- Registrar pago
+        -- Registrar el pago anual
+        -- monto_total_sin_descuento = total de las 10 cuotas (referencia histórica)
+        -- monto_pagado = solo el monto ingresado ahora para completar el anual
         INSERT INTO pago_anual_completo (
           codigo_pago, matricula_id, monto_total_sin_descuento, monto_descuento,
           monto_beca_total, monto_pagado, metodo_pago, numero_comprobante, 
@@ -459,10 +486,18 @@ async function crearTablasPayments() {
           v_codigo_pago, p_matricula_id, v_monto_total_sin_descuento, v_monto_descuento,
           v_monto_beca_total, p_monto_pagado, p_metodo_pago, p_numero_comprobante, 
           p_entrego_factura, p_numero_factura, p_registrado_por, 
-          COALESCE(p_observaciones, 'Pago anual completo - 10 meses con ' || v_descuento_porcentaje || '% descuento')
+          COALESCE(
+            p_observaciones,
+            'Pago anual completo - ' || v_descuento_porcentaje || '% descuento' ||
+            CASE WHEN v_cantidad_pagadas > 0 
+              THEN ' (completado: ' || v_cantidad_pagadas || ' cuota(s) pagada(s) mensualmente antes)'
+              ELSE ''
+            END
+          )
         ) RETURNING id INTO v_pago_id;
 
-        -- Marcar como pagadas
+        -- Marcar solo las cuotas PENDIENTES/VENCIDAS como pagadas
+        -- Las que ya tenían estado 'pagado' no se tocan
         UPDATE mensualidad
         SET estado = 'pagado', updated_at = CURRENT_TIMESTAMP
         WHERE matricula_id = p_matricula_id

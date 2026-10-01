@@ -1,7 +1,8 @@
 // controllers/materialController.js
+import { pool } from '../db/pool.js';
 import {
   UnidadTematica, Tema, TipoMaterial, MaterialAcademico,
-  AccesoMaterial, ComentarioMaterial, FavoritoMaterial, ProgresoEstudiante, TemaQuiz, IntentoQuiz
+  AccesoMaterial, ComentarioMaterial, FavoritoMaterial, ProgresoEstudiante, TemaQuiz, IntentoQuiz, TemaQuizConfig
 } from '../models/Material.js';
 import ActividadLog from '../models/actividadLog.js';
 import RequestInfo from '../utils/requestInfo.js';
@@ -36,7 +37,7 @@ class UnidadTematicaController {
       const result = await UnidadTematica.findAll({
         grado_materia_id: grado_materia_id ? parseInt(grado_materia_id) : undefined,
         periodo_evaluacion_id: periodo_evaluacion_id ? parseInt(periodo_evaluacion_id) : undefined,
-        activo: activo !== undefined ? activo === 'true' : undefined,
+        activo: activo !== undefined ? (activo === 'true' || activo === true) : true,
         page: parseInt(page) || 1,
         limit: parseInt(limit) || 50
       });
@@ -199,7 +200,7 @@ class TemaController {
 
       const result = await Tema.findAll({
         unidad_tematica_id: unidad_tematica_id ? parseInt(unidad_tematica_id) : undefined,
-        activo: activo !== undefined ? activo === 'true' : undefined,
+        activo: activo !== undefined ? (activo === 'true' || activo === true) : true,
         nivel_dificultad,
         page: parseInt(page) || 1,
         limit: parseInt(limit) || 50
@@ -336,7 +337,20 @@ class TemaController {
   static async generarContenido(req, res) {
     try {
       const { id } = req.params;
-      const forzar = req.query.forzar === 'true';
+      const forzar = req.query.forzar === 'true' || req.body?.forzar === true;
+      const {
+        instruccionesDocente,
+        enfoque,
+        incluirEjemplos,
+        incluirEjercicios,
+        incluirGlosario,
+        tono,
+        incluirIntroduccion,
+        incluirConceptosClave,
+        incluirDesarrollo,
+        incluirResumen,
+        seccionesPersonalizadas,
+      } = req.body || {};
 
       const tema = await Tema.findById(id);
       if (!tema) {
@@ -344,7 +358,7 @@ class TemaController {
       }
 
       // Si ya tiene contenido y no se forzó la regeneración, devolverlo tal cual
-      if (tema.contenido && !forzar) {
+      if (tema.contenido && !forzar && !instruccionesDocente) {
         return res.json({
           success: true,
           message: 'El tema ya tiene contenido generado',
@@ -367,6 +381,17 @@ class TemaController {
         temaDescripcion: tema.descripcion,
         palabrasClave: tema.palabras_clave,
         nivelDificultad: tema.nivel_dificultad,
+        instruccionesDocente,
+        enfoque,
+        incluirEjemplos,
+        incluirEjercicios,
+        incluirGlosario,
+        tono,
+        incluirIntroduccion,
+        incluirConceptosClave,
+        incluirDesarrollo,
+        incluirResumen,
+        seccionesPersonalizadas,
       });
 
       const temaActualizado = await Tema.update(id, { contenido });
@@ -655,6 +680,22 @@ class MaterialAcademicoController {
 
       let updateData = { ...req.body };
 
+      if (updateData.tipo_material_id !== undefined) {
+        updateData.tipo_material_id = parseInt(updateData.tipo_material_id);
+      }
+      if (updateData.visible_para_estudiantes !== undefined) {
+        updateData.visible_para_estudiantes = updateData.visible_para_estudiantes === true || updateData.visible_para_estudiantes === 'true';
+      }
+      if (updateData.requiere_descarga !== undefined) {
+        updateData.requiere_descarga = updateData.requiere_descarga === true || updateData.requiere_descarga === 'true';
+      }
+      if (updateData.es_destacado !== undefined) {
+        updateData.es_destacado = updateData.es_destacado === true || updateData.es_destacado === 'true';
+      }
+      if (updateData.es_enlace_externo !== undefined) {
+        updateData.es_enlace_externo = updateData.es_enlace_externo === true || updateData.es_enlace_externo === 'true';
+      }
+
       // Si subió un nuevo archivo, reemplazarlo en Cloudinary
       if (req.file) {
         // Eliminar archivo anterior si existe y no es enlace externo
@@ -686,9 +727,22 @@ class MaterialAcademicoController {
         updateData.nombre_archivo = req.file.originalname;
         updateData.tamano_bytes = req.file.size;
         updateData.tipo_mime = req.file.mimetype;
+        updateData.es_enlace_externo = false;
+        updateData.url_externa = null;
       }
 
       const material = await MaterialAcademico.update(id, updateData);
+
+      // Si se enviaron temas para re-vincular
+      if (req.body.temas !== undefined) {
+        const temasArray = typeof req.body.temas === 'string' ? JSON.parse(req.body.temas) : req.body.temas;
+        await pool.query('DELETE FROM material_tema WHERE material_academico_id = $1', [id]);
+        if (Array.isArray(temasArray)) {
+          for (const t of temasArray) {
+            await MaterialAcademico.vincularTema(id, t.tema_id, t.es_principal ?? false, t.orden ?? 1);
+          }
+        }
+      }
 
       const reqInfo = RequestInfo.extract(req);
       await ActividadLog.create({
@@ -758,12 +812,15 @@ class MaterialAcademicoController {
   static async publicar(req, res) {
     try {
       const { id } = req.params;
-      const { fecha_publicacion, fecha_despublicacion } = req.body;
+      const { fecha_publicacion, fecha_despublicacion, despublicar } = req.body;
+
+      const isDespublicar = despublicar === true || despublicar === 'true';
 
       const material = await MaterialAcademico.publicar(
         id,
-        fecha_publicacion || new Date().toISOString(),
-        fecha_despublicacion || null
+        isDespublicar ? null : (fecha_publicacion || null),
+        isDespublicar ? null : (fecha_despublicacion || null),
+        isDespublicar
       );
 
       if (!material) {
@@ -773,20 +830,24 @@ class MaterialAcademicoController {
       const reqInfo = RequestInfo.extract(req);
       await ActividadLog.create({
         usuario_id: req.user.id,
-        accion: 'publicar',
+        accion: isDespublicar ? 'despublicar' : 'publicar',
         modulo: 'material',
         tabla_afectada: 'material_academico',
         registro_id: parseInt(id),
-        datos_nuevos: { fecha_publicacion: material.fecha_publicacion },
+        datos_nuevos: { fecha_publicacion: material.fecha_publicacion, es_publicado: material.es_publicado },
         ip_address: reqInfo.ip,
         user_agent: reqInfo.userAgent,
         resultado: 'exitoso',
-        mensaje: `Material publicado: ${material.titulo}`
+        mensaje: isDespublicar ? `Material despublicado (borrador): ${material.titulo}` : `Material publicado: ${material.titulo}`
       });
 
-      res.json({ success: true, message: 'Material publicado exitosamente', data: { material } });
+      res.json({
+        success: true,
+        message: isDespublicar ? 'Material guardado como borrador' : 'Material publicado exitosamente',
+        data: { material }
+      });
     } catch (error) {
-      res.status(500).json({ success: false, message: 'Error al publicar: ' + error.message });
+      res.status(500).json({ success: false, message: 'Error al actualizar publicación: ' + error.message });
     }
   }
 
@@ -852,6 +913,36 @@ class AccesoMaterialController {
           success: false,
           message: `tipo_accion inválido. Debe ser: ${tiposValidos.join(', ')}`
         });
+      }
+
+      // Las visualizaciones de docentes/administradores NO deben inflar el contador de vistas de estudiantes
+      const esDocenteOAdmin = ['docente', 'admin', 'superadmin', 'director'].includes(req.user.rol);
+      if (esDocenteOAdmin && tipo_accion === 'visualizacion') {
+        return res.status(200).json({
+          success: true,
+          message: 'Visualización de docente no contabilizada en métricas de alumnos',
+          data: { acceso: null }
+        });
+      }
+
+      // Deduplicar visualizaciones: si el mismo usuario ya registró una visualización en los últimos 15 minutos, no duplicar
+      if (tipo_accion === 'visualizacion') {
+        const accesoReciente = await pool.query(`
+          SELECT id FROM acceso_material
+          WHERE material_academico_id = $1
+            AND usuario_id = $2
+            AND tipo_accion = 'visualizacion'
+            AND created_at >= NOW() - INTERVAL '15 minutes'
+          LIMIT 1
+        `, [parseInt(id), req.user.id]);
+
+        if (accesoReciente.rows.length > 0) {
+          return res.status(200).json({
+            success: true,
+            message: 'Visualización reciente ya registrada',
+            data: { acceso: accesoReciente.rows[0] }
+          });
+        }
       }
 
       const reqInfo = RequestInfo.extract(req);
@@ -1237,6 +1328,125 @@ class TemaQuizController {
   }
 
   /**
+   * POST /api/materiales/temas/:id/quiz/preguntas
+   * Crea una nueva pregunta manualmente para el quiz del tema.
+   */
+  static async crearPregunta(req, res) {
+    try {
+      const { id } = req.params;
+      const { pregunta, opciones, respuesta_correcta, explicacion } = req.body;
+
+      if (!pregunta || typeof pregunta !== 'string' || pregunta.trim().length < 3) {
+        return res.status(400).json({ success: false, message: 'La pregunta debe tener al menos 3 caracteres' });
+      }
+
+      if (!Array.isArray(opciones) || opciones.length < 2) {
+        return res.status(400).json({ success: false, message: 'Debe proporcionar al menos 2 opciones de respuesta' });
+      }
+
+      const opcionesLimpias = opciones.map(o => (typeof o === 'string' ? o.trim() : '')).filter(Boolean);
+      if (opcionesLimpias.length < 2) {
+        return res.status(400).json({ success: false, message: 'Las opciones no pueden estar vacías' });
+      }
+
+      const idxCorrecta = parseInt(respuesta_correcta);
+      if (isNaN(idxCorrecta) || idxCorrecta < 0 || idxCorrecta >= opcionesLimpias.length) {
+        return res.status(400).json({ success: false, message: 'Debe seleccionar una respuesta correcta válida' });
+      }
+
+      const nuevaPregunta = await TemaQuiz.create(parseInt(id), {
+        pregunta,
+        opciones: opcionesLimpias,
+        respuesta_correcta: idxCorrecta,
+        explicacion
+      });
+
+      res.status(201).json({
+        success: true,
+        message: 'Pregunta agregada exitosamente',
+        data: { pregunta: nuevaPregunta }
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, message: 'Error al crear pregunta: ' + error.message });
+    }
+  }
+
+  /**
+   * PUT /api/materiales/temas/:id/quiz/preguntas/:pregunta_id
+   * Edita una pregunta existente del quiz.
+   */
+  static async actualizarPregunta(req, res) {
+    try {
+      const { pregunta_id } = req.params;
+      const { pregunta, opciones, respuesta_correcta, explicacion } = req.body;
+
+      const existente = await TemaQuiz.findById(pregunta_id);
+      if (!existente || !existente.activo) {
+        return res.status(404).json({ success: false, message: 'Pregunta no encontrada' });
+      }
+
+      let opcionesLimpias = undefined;
+      if (opciones !== undefined) {
+        if (!Array.isArray(opciones) || opciones.length < 2) {
+          return res.status(400).json({ success: false, message: 'Debe proporcionar al menos 2 opciones' });
+        }
+        opcionesLimpias = opciones.map(o => (typeof o === 'string' ? o.trim() : '')).filter(Boolean);
+        if (opcionesLimpias.length < 2) {
+          return res.status(400).json({ success: false, message: 'Las opciones no pueden estar vacías' });
+        }
+      }
+
+      let idxCorrecta = undefined;
+      if (respuesta_correcta !== undefined) {
+        idxCorrecta = parseInt(respuesta_correcta);
+        const totalOps = opcionesLimpias ? opcionesLimpias.length : existente.opciones.length;
+        if (isNaN(idxCorrecta) || idxCorrecta < 0 || idxCorrecta >= totalOps) {
+          return res.status(400).json({ success: false, message: 'La respuesta correcta seleccionada no es válida' });
+        }
+      }
+
+      const actualizada = await TemaQuiz.update(pregunta_id, {
+        pregunta: pregunta ? pregunta.trim() : undefined,
+        opciones: opcionesLimpias,
+        respuesta_correcta: idxCorrecta,
+        explicacion: explicacion !== undefined ? explicacion : undefined
+      });
+
+      res.json({
+        success: true,
+        message: 'Pregunta actualizada exitosamente',
+        data: { pregunta: actualizada }
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, message: 'Error al actualizar pregunta: ' + error.message });
+    }
+  }
+
+  /**
+   * DELETE /api/materiales/temas/:id/quiz/preguntas/:pregunta_id
+   * Elimina (desactiva) una pregunta del quiz.
+   */
+  static async eliminarPregunta(req, res) {
+    try {
+      const { pregunta_id } = req.params;
+
+      const existente = await TemaQuiz.findById(pregunta_id);
+      if (!existente) {
+        return res.status(404).json({ success: false, message: 'Pregunta no encontrada' });
+      }
+
+      await TemaQuiz.delete(pregunta_id);
+
+      res.json({
+        success: true,
+        message: 'Pregunta eliminada exitosamente'
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, message: 'Error al eliminar pregunta: ' + error.message });
+    }
+  }
+
+  /**
    * POST /api/materiales/temas/:id/quiz/responder
    * El estudiante envía sus respuestas, el backend califica y guarda el intento.
    * Body: {
@@ -1254,6 +1464,28 @@ class TemaQuizController {
           success: false,
           message: 'matricula_id y respuestas (array) son requeridos'
         });
+      }
+
+      // Validar si el quiz está habilitado para el paralelo de esta matrícula
+      const matRes = await pool.query('SELECT paralelo_id FROM matricula WHERE id = $1', [matricula_id]);
+      const paraleloId = matRes.rows[0]?.paralelo_id;
+      if (paraleloId) {
+        const config = await TemaQuizConfig.getConfig(parseInt(id), paraleloId);
+        if (!config.puede_responder) {
+          return res.status(403).json({
+            success: false,
+            message: config.motivo_bloqueo || 'El quiz no está disponible para responder'
+          });
+        }
+        if (config.limite_intentos && config.limite_intentos > 0) {
+          const intentosRealizados = await IntentoQuiz.contarIntentos(parseInt(id), parseInt(matricula_id));
+          if (intentosRealizados >= config.limite_intentos) {
+            return res.status(403).json({
+              success: false,
+              message: `Has alcanzado el límite de intentos permitidos (${config.limite_intentos} intento${config.limite_intentos > 1 ? 's' : ''}).`
+            });
+          }
+        }
       }
 
       const preguntas = await TemaQuiz.findByTema(id);
@@ -1348,6 +1580,104 @@ class TemaQuizController {
       res.json({ success: true, data: { resumen } });
     } catch (error) {
       res.status(500).json({ success: false, message: 'Error al obtener resumen del quiz: ' + error.message });
+    }
+  }
+
+  /**
+   * GET /api/materiales/temas/:id/quiz/estudiantes?paralelo_id=X&periodo_academico_id=Y
+   * Lista detallada de estudiantes del paralelo y sus resultados en el quiz.
+   */
+  static async getEstudiantes(req, res) {
+    try {
+      const { id } = req.params;
+      const { paralelo_id, periodo_academico_id } = req.query;
+
+      if (!paralelo_id || !periodo_academico_id) {
+        return res.status(400).json({
+          success: false,
+          message: 'paralelo_id y periodo_academico_id son requeridos'
+        });
+      }
+
+      const data = await IntentoQuiz.getEstudiantesPorTema(
+        parseInt(id), parseInt(paralelo_id), parseInt(periodo_academico_id)
+      );
+
+      res.json({ success: true, data });
+    } catch (error) {
+      res.status(500).json({ success: false, message: 'Error al obtener estudiantes del quiz: ' + error.message });
+    }
+  }
+
+  /**
+   * GET /api/materiales/temas/:id/quiz/config?paralelo_id=X(&matricula_id=Y)
+   * Configuración de fechas, cierre y límite de intentos del quiz.
+   */
+  static async getConfig(req, res) {
+    try {
+      const { id } = req.params;
+      let { paralelo_id, matricula_id } = req.query;
+
+      if (!paralelo_id && matricula_id) {
+        const mRes = await pool.query('SELECT paralelo_id FROM matricula WHERE id = $1', [matricula_id]);
+        paralelo_id = mRes.rows[0]?.paralelo_id;
+      }
+
+      if (!paralelo_id && req.user?.id) {
+        const estRes = await pool.query(`
+          SELECT m.paralelo_id FROM matricula m
+          INNER JOIN estudiante e ON m.estudiante_id = e.id
+          WHERE e.usuario_id = $1 AND m.estado = 'activo' AND m.deleted_at IS NULL
+          ORDER BY m.created_at DESC LIMIT 1
+        `, [req.user.id]);
+        paralelo_id = estRes.rows[0]?.paralelo_id;
+      }
+
+      if (!paralelo_id) {
+        return res.status(400).json({
+          success: false,
+          message: 'paralelo_id es requerido'
+        });
+      }
+
+      const config = await TemaQuizConfig.getConfig(parseInt(id), parseInt(paralelo_id));
+      res.json({ success: true, data: { config } });
+    } catch (error) {
+      res.status(500).json({ success: false, message: 'Error al obtener configuración del quiz: ' + error.message });
+    }
+  }
+
+  /**
+   * PUT /api/materiales/temas/:id/quiz/config
+   * Actualiza el estado (abierto/cerrado), fechas y límite de intentos.
+   * Body: { paralelo_id, activo, fecha_inicio, fecha_fin, limite_intentos }
+   */
+  static async guardarConfig(req, res) {
+    try {
+      const { id } = req.params;
+      const { paralelo_id, activo, fecha_inicio, fecha_fin, limite_intentos } = req.body;
+
+      if (!paralelo_id) {
+        return res.status(400).json({
+          success: false,
+          message: 'paralelo_id es requerido'
+        });
+      }
+
+      const config = await TemaQuizConfig.upsertConfig(parseInt(id), parseInt(paralelo_id), {
+        activo,
+        fecha_inicio,
+        fecha_fin,
+        limite_intentos: limite_intentos !== undefined ? (limite_intentos === null ? null : parseInt(limite_intentos)) : undefined
+      });
+
+      res.json({
+        success: true,
+        message: 'Configuración del quiz guardada exitosamente',
+        data: { config }
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, message: 'Error al guardar configuración del quiz: ' + error.message });
     }
   }
 }

@@ -1,7 +1,9 @@
 // controllers/estudiantedController.js
 import EstudianteDashboard from '../models/EstudianteDashboard.js';
+import EvaluacionEntrega from '../models/EvaluacionEntrega.js';
 import { AccesoMaterial, ComentarioMaterial, FavoritoMaterial, ProgresoEstudiante } from '../models/Material.js';
 import RequestInfo from '../utils/requestInfo.js';
+import UploadFile from '../utils/uploadFile.js';
 import { pool } from '../db/pool.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -224,6 +226,26 @@ class EstudianteMaterialesController {
       const material = await EstudianteDashboard.getMaterialDetalle(req.user.id, parseInt(material_id));
       if (!material) {
         return res.status(404).json({ success: false, message: 'Material no encontrado o sin acceso' });
+      }
+
+      // Deduplicar visualizaciones: si ya se registró una en los últimos 15 minutos, no duplicar
+      if (tipo_accion === 'visualizacion') {
+        const accesoReciente = await pool.query(`
+          SELECT id FROM acceso_material
+          WHERE material_academico_id = $1
+            AND usuario_id = $2
+            AND tipo_accion = 'visualizacion'
+            AND created_at >= NOW() - INTERVAL '15 minutes'
+          LIMIT 1
+        `, [parseInt(material_id), req.user.id]);
+
+        if (accesoReciente.rows.length > 0) {
+          return res.status(200).json({
+            success: true,
+            message: 'Visualización reciente ya registrada',
+            data: { acceso: accesoReciente.rows[0] }
+          });
+        }
       }
 
       const reqInfo = RequestInfo.extract(req);
@@ -676,7 +698,189 @@ class EstudianteTareasController {
       res.status(500).json({ success: false, message: 'Error al listar tareas: ' + error.message });
     }
   }
-  
+
+  /**
+   * POST /api/estudianted/autoevaluacion
+   * Permite que el estudiante registre su autoevaluación (1-5 pts) y reflexiones
+   * Body: { evaluacion_id, puntaje, respuestas, reflexion }
+   */
+  static async registrarAutoevaluacion(req, res) {
+    try {
+      const { evaluacion_id, puntaje, respuestas, reflexion } = req.body;
+
+      if (!evaluacion_id || puntaje == null) {
+        return res.status(400).json({
+          success: false,
+          message: 'evaluacion_id y puntaje son requeridos',
+        });
+      }
+
+      const calificacion = await EstudianteDashboard.registrarAutoevaluacion(req.user.id, {
+        evaluacion_id: parseInt(evaluacion_id),
+        puntaje: parseFloat(puntaje),
+        respuestas,
+        reflexion,
+      });
+
+      res.status(200).json({
+        success: true,
+        message: '¡Tu autoevaluación ha sido registrada exitosamente!',
+        data: { calificacion },
+      });
+    } catch (error) {
+      console.error('Error al registrar autoevaluación del estudiante:', error);
+      const status = error.message.includes('No se encontró') || error.message.includes('no corresponde') || error.message.includes('puntaje debe estar')
+        ? 400
+        : 500;
+      res.status(status).json({
+        success: false,
+        message: error.message,
+      });
+    }
+  }
+
+  /**
+   * POST /api/estudianted/tareas/:id/entrega
+   * Permite al estudiante subir su trabajo (PDF o foto) para una evaluación
+   */
+  static async entregarTarea(req, res) {
+    try {
+      const { id } = req.params;
+      const evaluacion_id = parseInt(id);
+
+      // Soportar múltiples archivos (req.files) o archivo único (req.file)
+      const rawFiles = req.files && Array.isArray(req.files) && req.files.length > 0
+        ? req.files
+        : (req.file ? [req.file] : []);
+
+      if (rawFiles.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Debe adjuntar al menos una fotografía o archivo (PDF/Imagen)'
+        });
+      }
+
+      if (rawFiles.length > 10) {
+        return res.status(400).json({
+          success: false,
+          message: 'Se permite subir un máximo de 10 fotografías o documentos'
+        });
+      }
+
+      // Obtener matrícula activa del estudiante
+      const matricula = await EstudianteDashboard._getMatriculaActiva(req.user.id);
+      if (!matricula) {
+        return res.status(404).json({
+          success: false,
+          message: 'No se encontró matrícula activa para este estudiante'
+        });
+      }
+
+      // Subir cada archivo a Cloudinary
+      const uploadedArchivos = [];
+      for (let i = 0; i < rawFiles.length; i++) {
+        const file = rawFiles[i];
+        const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+        try {
+          const uploadResult = await UploadFile.uploadFromBuffer(
+            file.buffer,
+            'evaluaciones/entregas_estudiantes',
+            `entrega_${evaluacion_id}_${matricula.matricula_id}_${Date.now()}_${i + 1}_${safeName}`,
+            'auto'
+          );
+          uploadedArchivos.push({
+            url: uploadResult.url,
+            public_id: uploadResult.public_id,
+            nombre: file.originalname,
+            tipo: file.mimetype,
+            tamano: file.size
+          });
+        } catch (uploadError) {
+          console.error(`Error al subir archivo ${file.originalname} a Cloudinary:`, uploadError);
+          // Si alguno falla, limpiamos los que ya se subieron
+          for (const up of uploadedArchivos) {
+            if (up.public_id) {
+              try { await UploadFile.deleteFile(up.public_id, 'auto'); } catch (_) {}
+            }
+          }
+          return res.status(500).json({
+            success: false,
+            message: `Error al subir archivo (${file.originalname}) a la nube: ${uploadError.message}`
+          });
+        }
+      }
+
+      const primerArchivo = uploadedArchivos[0];
+
+      // Guardar entrega en base de datos con lista completa de archivos
+      const entrega = await EvaluacionEntrega.guardarEntrega({
+        evaluacion_id,
+        matricula_id: matricula.matricula_id,
+        archivo_url: primerArchivo.url,
+        archivo_public_id: primerArchivo.public_id,
+        archivo_nombre: primerArchivo.nombre,
+        archivo_tipo: primerArchivo.tipo,
+        archivo_tamano: primerArchivo.tamano,
+        archivos: uploadedArchivos,
+        comentario_estudiante: req.body.comentario || null
+      });
+
+      res.status(201).json({
+        success: true,
+        message: uploadedArchivos.length > 1
+          ? `¡Práctica entregada exitosamente con ${uploadedArchivos.length} fotos/archivos!`
+          : '¡Práctica / Tarea entregada exitosamente!',
+        data: { entrega }
+      });
+    } catch (error) {
+      console.error('Error al entregar tarea:', error);
+      const status = error.message.includes('plazo') || error.message.includes('habilitada') || error.message.includes('No se')
+        ? 400
+        : 500;
+      res.status(status).json({
+        success: false,
+        message: error.message
+      });
+    }
+  }
+
+  /**
+   * DELETE /api/estudianted/tareas/:id/entrega
+   * Permite al estudiante anular su entrega antes de que venza la fecha límite
+   */
+  static async eliminarEntregaTarea(req, res) {
+    try {
+      const { id } = req.params;
+      const evaluacion_id = parseInt(id);
+
+      const matricula = await EstudianteDashboard._getMatriculaActiva(req.user.id);
+      if (!matricula) {
+        return res.status(404).json({
+          success: false,
+          message: 'No se encontró matrícula activa para este estudiante'
+        });
+      }
+
+      await EvaluacionEntrega.eliminarEntrega({
+        evaluacion_id,
+        matricula_id: matricula.matricula_id
+      });
+
+      res.json({
+        success: true,
+        message: 'Entrega anulada correctamente'
+      });
+    } catch (error) {
+      console.error('Error al anular entrega:', error);
+      const status = error.message.includes('plazo') || error.message.includes('No hay')
+        ? 400
+        : 500;
+      res.status(status).json({
+        success: false,
+        message: error.message
+      });
+    }
+  }
 }
  
 

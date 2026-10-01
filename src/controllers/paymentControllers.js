@@ -1,5 +1,5 @@
 // controllers/paymentControllers.js
-import { CostoMensualidad, Mensualidad, PagoMensualidad, PagoAnualCompleto } from '../models/Payment.js';
+import { CostoMensualidad, Mensualidad, PagoMensualidad, PagoAnualCompleto, AjusteCostoMensualidad } from '../models/Payment.js';
 import ActividadLog from '../models/actividadLog.js';
 import RequestInfo from '../utils/requestInfo.js';
 import { pool } from '../db/pool.js';
@@ -675,7 +675,57 @@ class PagoMensualidadController {
 // CONTROLADOR: PagoAnualCompletoController
 // =============================================
 class PagoAnualCompletoController {
+  /**
+   * GET /api/pago-anual/resumen/:matricula_id
+   * Previsualiza el pago anual: cuánto debe pagar el padre considerando
+   * cuotas ya pagadas mensualmente y el descuento del 10%.
+   */
+  static async calcularResumen(req, res) {
+    try {
+      const { matricula_id } = req.params;
+
+      const resumen = await PagoAnualCompleto.calcularResumenAnual(parseInt(matricula_id));
+
+      if (!resumen.es_valido) {
+        return res.status(400).json({
+          success: false,
+          message: resumen.total_cuotas !== 10
+            ? `Esta matrícula tiene ${resumen.total_cuotas} cuotas registradas, se necesitan exactamente 10`
+            : 'Todas las cuotas ya están pagadas'
+        });
+      }
+
+      const existePago = await PagoAnualCompleto.existePagoAnual(parseInt(matricula_id));
+      if (existePago) {
+        return res.status(409).json({
+          success: false,
+          message: 'Ya existe un pago anual completo registrado para esta matrícula'
+        });
+      }
+
+      res.json({
+        success: true,
+        data: {
+          resumen,
+          descripcion: resumen.cantidad_pagadas > 0
+            ? `El padre ya pagó ${resumen.cantidad_pagadas} cuota(s) mensual(es) (Bs ${resumen.ya_pagado}). ` +
+              `El pago anual descontado es Bs ${resumen.monto_con_descuento}. ` +
+              `Debe pagar ahora: Bs ${resumen.monto_a_pagar_ahora}`
+            : `Pago anual completo: Bs ${resumen.monto_con_descuento} (descuento de 1 mes: Bs ${resumen.monto_descuento})`
+        }
+      });
+    } catch (error) {
+      console.error('Error al calcular resumen anual:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al calcular resumen anual: ' + error.message
+      });
+    }
+  }
+
   // POST /api/pago-anual - Registrar pago anual
+  // Soporta pago fraccionado: el padre pudo haber pagado N cuotas mensualmente
+  // y luego completar el total anual para acceder al descuento del 10%.
   static async registrar(req, res) {
     const client = await pool.connect();
 
@@ -685,7 +735,7 @@ class PagoAnualCompletoController {
       const data = req.body;
       data.registrado_por = req.user.id;
 
-      // Verificar que no exista ya un pago anual para esta matrícula
+      // Verificar que no exista ya un pago anual registrado
       const existePago = await PagoAnualCompleto.existePagoAnual(data.matricula_id);
       if (existePago) {
         await client.query('ROLLBACK');
@@ -695,40 +745,49 @@ class PagoAnualCompletoController {
         });
       }
 
-      // Verificar que haya mensualidades pendientes
-      const mensualidades = await Mensualidad.findByMatricula(data.matricula_id);
-      const pendientes = mensualidades.filter(m => m.estado === 'pendiente' || m.estado === 'vencido');
+      // Calcular el resumen para validar y enriquecer el mensaje
+      const resumen = await PagoAnualCompleto.calcularResumenAnual(data.matricula_id);
 
-      if (pendientes.length === 0) {
+      if (!resumen.es_valido) {
         await client.query('ROLLBACK');
         return res.status(400).json({
           success: false,
-          message: 'No hay mensualidades pendientes para esta matrícula'
+          message: resumen.total_cuotas !== 10
+            ? `Esta matrícula tiene ${resumen.total_cuotas} cuotas registradas, se necesitan exactamente 10`
+            : 'Todas las cuotas ya están pagadas'
         });
       }
 
       const pago = await PagoAnualCompleto.registrar(data);
 
       const reqInfo = RequestInfo.extract(req);
+      const mensajePago = resumen.cantidad_pagadas > 0
+        ? `Pago anual completado: ${pago.codigo_pago} - pagó Bs ${pago.monto_pagado} ahora ` +
+          `(ya tenía Bs ${resumen.ya_pagado} pagados en ${resumen.cantidad_pagadas} cuota(s) mensual(es)). ` +
+          `Descuento total: Bs ${pago.monto_descuento}`
+        : `Pago anual registrado: ${pago.codigo_pago} - Bs ${pago.monto_pagado} con descuento de Bs ${pago.monto_descuento}`;
+
       await ActividadLog.create({
         usuario_id: req.user.id,
         accion: 'crear',
         modulo: 'pago_anual_completo',
         tabla_afectada: 'pago_anual_completo',
         registro_id: pago.id,
-        datos_nuevos: pago,
+        datos_nuevos: { ...pago, resumen_calculado: resumen },
         ip_address: reqInfo.ip,
         user_agent: reqInfo.userAgent,
         resultado: 'exitoso',
-        mensaje: `Pago anual registrado: ${pago.codigo_pago} - ${pago.monto_pagado} Bs con descuento de ${pago.monto_descuento} Bs`
+        mensaje: mensajePago
       });
 
       await client.query('COMMIT');
 
       res.status(201).json({
         success: true,
-        message: 'Pago anual completo registrado exitosamente',
-        data: { pago }
+        message: resumen.cantidad_pagadas > 0
+          ? `Pago anual completado exitosamente. Se aplicó el descuento del 10% sobre el año completo considerando las ${resumen.cantidad_pagadas} cuota(s) ya pagadas`
+          : 'Pago anual completo registrado exitosamente',
+        data: { pago, resumen }
       });
     } catch (error) {
       await client.query('ROLLBACK');

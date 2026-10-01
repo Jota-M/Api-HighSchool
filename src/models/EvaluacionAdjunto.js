@@ -109,6 +109,7 @@ class EvaluacionAdjunto {
         ev.fecha,
         ev.fecha_limite,
         ev.puntaje_maximo,
+        ev.permite_entrega_archivo,
         ev.foto_url,
         ev.pdf_url,
         ev.pdf_nombre,
@@ -129,7 +130,7 @@ class EvaluacionAdjunto {
       INNER JOIN grado g                 ON gm.grado_id                = g.id
       INNER JOIN paralelo p              ON ad.paralelo_id             = p.id
       WHERE ev.id = $1
-        AND ev.visible_para_padres = true
+        AND (ev.visible_para_padres = true OR ev.permite_entrega_archivo = true OR ev.modalidad = 'virtual')
         AND ev.activo = true
     `, [evaluacion_id]);
 
@@ -148,6 +149,8 @@ class EvaluacionAdjunto {
 
     // Nota del estudiante (si ya fue calificado)
     let calificacion = null;
+    let entrega = null;
+
     if (matricula_id) {
       const calRes = await pool.query(`
         SELECT
@@ -163,13 +166,30 @@ class EvaluacionAdjunto {
           AND c.matricula_id  = $2
       `, [evaluacion_id, matricula_id]);
       calificacion = calRes.rows[0] || null;
+
+      const entregaRes = await pool.query(`
+        SELECT id, archivo_url, archivo_public_id, archivo_nombre, archivo_tipo,
+               archivo_tamano, comentario_estudiante, fecha_entrega, estado,
+               COALESCE(
+                 archivos,
+                 CASE 
+                   WHEN archivo_url IS NOT NULL 
+                   THEN jsonb_build_array(jsonb_build_object('url', archivo_url, 'nombre', archivo_nombre, 'tipo', archivo_tipo, 'tamano', archivo_tamano))
+                   ELSE '[]'::jsonb 
+                 END
+               ) AS archivos
+        FROM evaluacion_entrega
+        WHERE evaluacion_id = $1 AND matricula_id = $2
+      `, [evaluacion_id, matricula_id]);
+      entrega = entregaRes.rows[0] || null;
     }
 
     return {
       ...evaluacion,
       rubrica:       rubricaRes.rows,
       total_puntos_rubrica: rubricaRes.rows.reduce((s, r) => s + parseFloat(r.puntos_posibles), 0),
-      calificacion   // null si aún no fue calificado
+      calificacion,   // null si aún no fue calificado
+      entrega        // null si no ha subido archivo
     };
   }
 
@@ -264,12 +284,12 @@ class EvaluacionRubrica {
       );
       if (!evalRes.rows[0]) throw new Error('Evaluación no encontrada o inactiva');
 
-      // Validar que la suma de puntos no supere el puntaje máximo
-      const sumaTotal = criterios.reduce((s, c) => s + parseFloat(c.puntos_posibles), 0);
-      if (sumaTotal > parseFloat(evalRes.rows[0].puntaje_maximo)) {
+      // Validar que la suma de puntos de los criterios coincida exactamente con el puntaje máximo
+      const sumaTotal = criterios.reduce((s, c) => s + (parseFloat(c.puntos_posibles) || 0), 0);
+      const puntajeMax = parseFloat(evalRes.rows[0].puntaje_maximo);
+      if (Math.round(sumaTotal * 100) !== Math.round(puntajeMax * 100)) {
         throw new Error(
-          `La suma de puntos de la rúbrica (${sumaTotal}) supera el puntaje máximo ` +
-          `de la evaluación (${evalRes.rows[0].puntaje_maximo})`
+          `La suma de puntos de la rúbrica (${sumaTotal} pts) debe ser exactamente igual al puntaje máximo de la evaluación (${puntajeMax} pts)`
         );
       }
 

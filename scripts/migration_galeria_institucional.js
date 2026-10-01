@@ -52,7 +52,7 @@ async function migrate() {
         // updated_at automático, mismo trigger genérico que ya usás en otras
         // tablas (backup_registro, etc.) — si ya existe la función no rompe.
         await client.query(`
-      CREATE OR REPLACE FUNCTION actualizar_updated_at()
+      CREATE OR REPLACE FUNCTION actualizar_galeria_updated_at()
       RETURNS TRIGGER AS $$
       BEGIN
         NEW.actualizado_en = CURRENT_TIMESTAMP;
@@ -64,7 +64,7 @@ async function migrate() {
         await client.query(`
       CREATE TRIGGER trg_galeria_updated_at
       BEFORE UPDATE ON galeria_institucional
-      FOR EACH ROW EXECUTE FUNCTION actualizar_updated_at()
+      FOR EACH ROW EXECUTE FUNCTION actualizar_galeria_updated_at()
     `);
         console.log('  ✅ Trigger actualizado_en creado');
 

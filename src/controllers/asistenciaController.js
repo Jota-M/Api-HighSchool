@@ -268,18 +268,22 @@ class AsistenciaController {
   static async getMisAsignaciones(req, res) {
     try {
       const fecha = req.query.fecha || new Date().toISOString().split('T')[0];
+      const solo_del_dia = req.query.solo_del_dia === 'true';
 
       const asignaciones = await Asistencia.getMisAsignaciones({
         usuario_id: req.user.id,
-        fecha
+        fecha,
+        solo_del_dia
       });
 
-      if (asignaciones.length === 0) {
+      if (asignaciones.length === 0 && !solo_del_dia) {
         return res.status(404).json({
           success: false,
           message: 'No se encontraron asignaciones activas para este docente'
         });
       }
+
+      const totalConClase = asignaciones.filter(a => a.tiene_clase_hoy).length;
 
       res.json({
         success: true,
@@ -287,6 +291,7 @@ class AsistenciaController {
           fecha,
           docente_usuario_id: req.user.id,
           total_asignaciones: asignaciones.length,
+          total_con_clase_hoy: totalConClase,
           asignaciones
         }
       });
@@ -312,6 +317,8 @@ class AsistenciaController {
         });
       }
 
+      const validacion = await Asistencia.validarHorarioClase(parseInt(asignacion_docente_id), fecha);
+
       const lista = await Asistencia.getListaDia({
         asignacion_docente_id: parseInt(asignacion_docente_id),
         fecha
@@ -323,7 +330,14 @@ class AsistenciaController {
           lista,
           total: lista.length,
           ya_marcados: lista.filter(r => r.estado).length,
-          pendientes: lista.filter(r => !r.estado).length
+          pendientes: lista.filter(r => !r.estado).length,
+          tiene_clase_programada: validacion.valida,
+          dia_semana: validacion.dia_semana,
+          dia_semana_nombre: validacion.dia_semana_nombre,
+          dias_permitidos: validacion.dias_permitidos,
+          mensaje_horario: validacion.motivo,
+          horarios_dia: validacion.horarios_texto,
+          aula_dia: validacion.aula
         }
       });
     } catch (error) {
@@ -400,9 +414,10 @@ class AsistenciaController {
       });
     } catch (error) {
       console.error('Error al registrar asistencia:', error);
-      res.status(500).json({
+      const isClientError = error.message.includes('horario') || error.message.includes('domingo') || error.message.includes('matrículas');
+      res.status(isClientError ? 400 : 500).json({
         success: false,
-        message: 'Error al registrar asistencia: ' + error.message
+        message: error.message
       });
     }
   }
@@ -455,9 +470,10 @@ class AsistenciaController {
       });
     } catch (error) {
       console.error('Error en registro masivo:', error);
-      res.status(500).json({
+      const isClientError = error.message.includes('horario') || error.message.includes('domingo') || error.message.includes('matrículas');
+      res.status(isClientError ? 400 : 500).json({
         success: false,
-        message: 'Error en registro masivo: ' + error.message
+        message: error.message
       });
     }
   }

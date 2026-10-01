@@ -1,5 +1,6 @@
 // controllers/pagoMensualidadPDFController.js - SISTEMA 10 MESES - CON SOPORTE PAGO ANUAL
 import PDFDocument from 'pdfkit';
+import QRCode from 'qrcode';
 import { PagoMensualidad } from '../models/Payment.js';
 import ActividadLog from '../models/actividadLog.js';
 import RequestInfo from '../utils/requestInfo.js';
@@ -82,6 +83,69 @@ class PagoMensualidadPDFController {
 
     } catch (error) {
       console.error('Error al generar PDF:', error);
+      if (!res.headersSent) {
+        res.status(500).json({
+          success: false,
+          message: 'Error al generar PDF: ' + error.message
+        });
+      }
+    }
+  }
+
+  /**
+   * Generar PDF público a partir del código de pago
+   * GET /api/publico/recibo-pdf/:codigo
+   */
+  static async generarPDFPublicoPorCodigo(req, res) {
+    try {
+      const { codigo } = req.params;
+      const { preview = 'true' } = req.query;
+
+      const pago = await PagoMensualidad.findByCodigo(codigo);
+
+      if (!pago) {
+        return res.status(404).json({
+          success: false,
+          message: 'Recibo de pago no encontrado'
+        });
+      }
+
+      const datosEntrega = {
+        nombre: pago.nombre_entrega || `${pago.nombres} ${pago.apellidos}`,
+        ci: pago.ci_entrega || 'N/A'
+      };
+
+      const datosRecibe = {
+        nombre: 'Patricia Ramírez Villca',
+        ci: '5070770'
+      };
+
+      const doc = new PDFDocument({
+        size: 'LETTER',
+        margins: { top: 50, bottom: 50, left: 50, right: 50 }
+      });
+
+      const disposition = preview === 'false' ? 'attachment' : 'inline';
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader(
+        'Content-Disposition',
+        `${disposition}; filename=Recibo_${pago.codigo_pago}.pdf`
+      );
+
+      doc.pipe(res);
+
+      const pagosArray = pago.pagos_grupo && pago.pagos_grupo.length > 0 ? pago.pagos_grupo : [pago];
+
+      await PagoMensualidadPDFController.generatePDFContent(
+        doc,
+        pagosArray,
+        datosEntrega,
+        datosRecibe
+      );
+
+      doc.end();
+    } catch (error) {
+      console.error('Error al generar PDF público:', error);
       if (!res.headersSent) {
         res.status(500).json({
           success: false,
@@ -532,7 +596,7 @@ class PagoMensualidadPDFController {
     y += 6;
 
     // ═══════════════════════════════════════════════════
-    // FIRMAS CON CI
+    // FIRMAS CON CI Y QR DE VERIFICACIÓN
     // ═══════════════════════════════════════════════════
     const firmaY = y;
 
@@ -557,6 +621,43 @@ class PagoMensualidadPDFController {
 
     doc.fontSize(7).font('Helvetica-Bold').fillColor(darkGray)
       .text(datosEntrega.ci, 95, firmaY + 50);
+
+    // CENTRO - QR DE VERIFICACIÓN DIGITAL
+    try {
+      const codigoVerif = todosPagos[0]?.codigo_pago || '';
+      if (codigoVerif) {
+        const frontendBaseUrl = process.env.FRONTEND_URL || 'https://uepclavozdecristo.site';
+        const urlVerificacion = `${frontendBaseUrl}/verificar-recibo/${codigoVerif}`;
+        const qrBuffer = await QRCode.toBuffer(urlVerificacion, {
+          width: 54,
+          margin: 1,
+          color: {
+            dark: darkBlue,
+            light: '#ffffff'
+          }
+        });
+
+        const qrX = 279;
+        const qrY = firmaY - 5;
+
+        // Marco del QR
+        doc.save();
+        doc.rect(qrX - 2, qrY - 2, 58, 58)
+          .lineWidth(0.8)
+          .strokeColor(yellowBorder)
+          .stroke();
+        doc.restore();
+
+        doc.image(qrBuffer, qrX, qrY, { width: 54, height: 54 });
+
+        doc.fontSize(5).font('Helvetica-Bold').fillColor(darkBlue)
+          .text('VERIFICAR RECIBO', qrX - 20, qrY + 56, { width: 94, align: 'center' });
+        doc.fontSize(4.5).font('Helvetica').fillColor(lightGray)
+          .text('Escanee con su celular', qrX - 20, qrY + 63, { width: 94, align: 'center' });
+      }
+    } catch (qrErr) {
+      console.error('Error generando QR de recibo:', qrErr);
+    }
 
     // LADO DERECHO - RECIBÍ CONFORME
     doc.fontSize(6).font('Helvetica-Oblique').fillColor(lightGray)

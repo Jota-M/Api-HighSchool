@@ -1,5 +1,6 @@
 // controllers/evaluacionAdjuntoController.js
 import { EvaluacionAdjunto, EvaluacionRubrica } from '../models/EvaluacionAdjunto.js';
+import EvaluacionEntrega from '../models/EvaluacionEntrega.js';
 import { Evaluacion } from '../models/Notas.js';
 import ActividadLog from '../models/actividadLog.js';
 import RequestInfo from '../utils/requestInfo.js';
@@ -224,6 +225,23 @@ class EvaluacionAdjuntoController {
       res.json({ success: true, message: 'PDF eliminado exitosamente' });
     } catch (error) {
       res.status(500).json({ success: false, message: 'Error al eliminar PDF: ' + error.message });
+    }
+  }
+
+  // GET /api/notas/evaluaciones/:id/entregas (para docente)
+  static async obtenerEntregas(req, res) {
+    try {
+      const { id } = req.params;
+      const entregas = await EvaluacionEntrega.listarEntregasPorEvaluacion(parseInt(id));
+      res.json({
+        success: true,
+        data: {
+          entregas,
+          total: entregas.length
+        }
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, message: 'Error al obtener entregas: ' + error.message });
     }
   }
 

@@ -457,12 +457,21 @@ class WhatsAppService {
 
   // ─── Template del mensaje de asistencia ──────────────────────
   generarMensajeAsistencia({ estado, nombreEstudiante, grado, materia, fecha, turno }) {
-    const fechaFormateada = new Date(fecha + 'T12:00:00').toLocaleDateString('es-BO', {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-    });
+    const fechaFormateada = (() => {
+      if (!fecha) return '—';
+      const str = String(fecha).trim();
+      const datePart = str.split('T')[0];
+      if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+        const [y, m, dNum] = datePart.split('-').map(Number);
+        return new Date(y, m - 1, dNum, 12, 0, 0).toLocaleDateString('es-BO', {
+          weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+        });
+      }
+      const d = new Date(str);
+      return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('es-BO', {
+        weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+      });
+    })();
 
     const esAusente = estado === 'ausente';
 

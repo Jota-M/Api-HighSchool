@@ -584,7 +584,7 @@ class MatriculacionController {
       const { id } = req.params;
       const { estado, motivo } = req.body;
 
-      const estadosPermitidos = ['activo', 'anulado', 'suspendido', 'trasladado'];
+      const estadosPermitidos = ['activo', 'inactivo', 'anulado', 'suspendido', 'trasladado', 'congelado'];
       if (!estado || !estadosPermitidos.includes(estado)) {
         return res.status(400).json({
           success: false,
@@ -955,6 +955,7 @@ class MatriculacionController {
       const porGradoResult = await pool.query(`
         SELECT g.nombre as grado, COUNT(m.id) as total,
           COUNT(CASE WHEN m.estado = 'activo' THEN 1 END) as activos,
+          COUNT(CASE WHEN m.estado = 'inactivo' THEN 1 END) as inactivos,
           COUNT(CASE WHEN m.estado = 'retirado' THEN 1 END) as retirados
         FROM matricula m
         INNER JOIN paralelo p ON m.paralelo_id = p.id

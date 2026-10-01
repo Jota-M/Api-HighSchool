@@ -201,12 +201,22 @@ class Horario {
   static async cambiarEstado(id, estado, usuario_id) {
     const result = await pool.query(`
       UPDATE horario
-  SET 
-    estado        = $1::VARCHAR,
-    publicado_por = CASE WHEN $1::VARCHAR = 'publicado' THEN $3 ELSE publicado_por END
-  WHERE id = $2::INTEGER
-  RETURNING *
-`, [estado, usuario_id, id]);
+      SET 
+        estado        = $1::VARCHAR,
+        publicado_por = CASE 
+          WHEN $1::VARCHAR = 'publicado' THEN $2::INTEGER 
+          WHEN $1::VARCHAR = 'borrador' THEN NULL 
+          ELSE publicado_por 
+        END,
+        publicado_en  = CASE 
+          WHEN $1::VARCHAR = 'publicado' THEN CURRENT_TIMESTAMP 
+          WHEN $1::VARCHAR = 'borrador' THEN NULL 
+          ELSE publicado_en 
+        END,
+        updated_at    = CURRENT_TIMESTAMP
+      WHERE id = $3::INTEGER
+      RETURNING *
+    `, [estado, usuario_id, id]);
 
     return result.rows[0];
   }
@@ -276,25 +286,26 @@ class HorarioDetalle {
   }
 
   static async create(data) {
-    const { horario_id, dia_semana, bloque_horario_id, grado_materia_id, asignacion_docente_id, aula, color, observaciones } = data;
+    const { horario_id, dia_semana, bloque_horario_id, grado_materia_id, asignacion_docente_id, aula, color, observaciones, etiqueta_personalizada } = data;
 
     const result = await pool.query(`
       INSERT INTO horario_detalle
-        (horario_id, dia_semana, bloque_horario_id, grado_materia_id, asignacion_docente_id, aula, color, observaciones)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        (horario_id, dia_semana, bloque_horario_id, grado_materia_id, asignacion_docente_id, aula, color, observaciones, etiqueta_personalizada)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       RETURNING *
-    `, [horario_id, dia_semana, bloque_horario_id, grado_materia_id, asignacion_docente_id || null, aula || null, color || null, observaciones || null]);
+    `, [horario_id, dia_semana, bloque_horario_id, grado_materia_id, asignacion_docente_id || null, aula || null, color || null, observaciones || null, etiqueta_personalizada || null]);
 
     return result.rows[0];
   }
 
   // CORRECCIÓN: asignacion_docente_id distingue entre "no enviado" (conservar) y "null explícito" (borrar)
   static async update(id, data) {
-    const { grado_materia_id, aula, color, observaciones } = data;
+    const { grado_materia_id, aula, color, observaciones, etiqueta_personalizada } = data;
 
     // Si la clave existe en data (aunque sea null), se actualiza. Si no existe, se conserva el valor actual.
     const tieneAsignacion = 'asignacion_docente_id' in data;
     const asignacion_docente_id = tieneAsignacion ? (data.asignacion_docente_id ?? null) : undefined;
+    const tieneEtiqueta = 'etiqueta_personalizada' in data;
 
     const result = await pool.query(`
       UPDATE horario_detalle
@@ -303,8 +314,9 @@ class HorarioDetalle {
           aula                  = COALESCE($4, aula),
           color                 = COALESCE($5, color),
           observaciones         = COALESCE($6, observaciones),
+          etiqueta_personalizada = CASE WHEN $7::boolean THEN $8::varchar ELSE etiqueta_personalizada END,
           updated_at            = CURRENT_TIMESTAMP
-      WHERE id = $7
+      WHERE id = $9
       RETURNING *
     `, [
       grado_materia_id,
@@ -313,6 +325,8 @@ class HorarioDetalle {
       aula,
       color,
       observaciones,
+      tieneEtiqueta,           // $7: flag — ¿se envió etiqueta_personalizada?
+      etiqueta_personalizada || null, // $8: valor
       id
     ]);
 
@@ -375,7 +389,9 @@ class HorarioDetalle {
         m.color         AS materia_color,
         p.nombre        AS paralelo_nombre,
         g.nombre        AS grado_nombre,
-        hd.aula
+        hd.aula,
+        hd.color,
+        hd.etiqueta_personalizada
       FROM horario_detalle hd
       INNER JOIN horario h           ON hd.horario_id = h.id
       INNER JOIN bloque_horario bh   ON hd.bloque_horario_id = bh.id
@@ -417,7 +433,8 @@ class HorarioDetalle {
         d.nombres       AS docente_nombres,
         d.apellidos     AS docente_apellidos,
         hd.aula,
-        hd.color
+        hd.color,
+        hd.etiqueta_personalizada
       FROM horario h
       INNER JOIN horario_detalle hd  ON hd.horario_id = h.id
       INNER JOIN bloque_horario bh   ON hd.bloque_horario_id = bh.id

@@ -1,5 +1,6 @@
 // controllers/pagoMensualidadPDFController.js - SISTEMA 10 MESES - CON SOPORTE PAGO ANUAL
 import PDFDocument from 'pdfkit';
+import QRCode from 'qrcode';
 import { PagoMensualidad } from '../models/Payment.js';
 import ActividadLog from '../models/actividadLog.js';
 import RequestInfo from '../utils/requestInfo.js';
@@ -532,7 +533,7 @@ class PagoMensualidadPDFController {
         y += 6;
 
         // ═══════════════════════════════════════════════════
-        // FIRMAS CON CI
+        // FIRMAS CON CI Y QR DE VERIFICACIÓN
         // ═══════════════════════════════════════════════════
         const firmaY = y;
 
@@ -557,6 +558,43 @@ class PagoMensualidadPDFController {
 
         doc.fontSize(7).font('Helvetica-Bold').fillColor(darkGray)
             .text(datosEntrega.ci, 95, firmaY + 50);
+
+        // CENTRO - QR DE VERIFICACIÓN DIGITAL
+        try {
+            const codigoVerif = todosPagos[0]?.codigo_pago || '';
+            if (codigoVerif) {
+                const frontendBaseUrl = process.env.FRONTEND_URL || 'https://uepclavozdecristo.site';
+                const urlVerificacion = `${frontendBaseUrl}/verificar-recibo/${codigoVerif}`;
+                const qrBuffer = await QRCode.toBuffer(urlVerificacion, {
+                    width: 54,
+                    margin: 1,
+                    color: {
+                        dark: darkBlue,
+                        light: '#ffffff'
+                    }
+                });
+
+                const qrX = 279;
+                const qrY = firmaY - 5;
+
+                // Marco del QR
+                doc.save();
+                doc.rect(qrX - 2, qrY - 2, 58, 58)
+                    .lineWidth(0.8)
+                    .strokeColor(yellowBorder)
+                    .stroke();
+                doc.restore();
+
+                doc.image(qrBuffer, qrX, qrY, { width: 54, height: 54 });
+
+                doc.fontSize(5).font('Helvetica-Bold').fillColor(darkBlue)
+                    .text('VERIFICAR RECIBO', qrX - 20, qrY + 56, { width: 94, align: 'center' });
+                doc.fontSize(4.5).font('Helvetica').fillColor(lightGray)
+                    .text('Escanee con su celular', qrX - 20, qrY + 63, { width: 94, align: 'center' });
+            }
+        } catch (qrErr) {
+            console.error('Error generando QR de recibo:', qrErr);
+        }
 
         // LADO DERECHO - RECIBÍ CONFORME
         doc.fontSize(6).font('Helvetica-Oblique').fillColor(lightGray)

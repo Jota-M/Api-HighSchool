@@ -212,18 +212,19 @@ class AsignacionDocenteController {
     try {
       const {
         page, limit, docente_id, grado_id, materia_id,
-        paralelo_id, periodo_academico_id, activo
+        paralelo_id, periodo_academico_id, activo, search
       } = req.query;
 
       const result = await AsignacionDocente.findAll({
         page: parseInt(page) || 1,
-        limit: parseInt(limit) || 20,
+        limit: parseInt(limit) || 12,
         docente_id: docente_id ? parseInt(docente_id) : undefined,
         grado_id: grado_id ? parseInt(grado_id) : undefined,
         materia_id: materia_id ? parseInt(materia_id) : undefined,
         paralelo_id: paralelo_id ? parseInt(paralelo_id) : undefined,
         periodo_academico_id: periodo_academico_id ? parseInt(periodo_academico_id) : undefined,
-        activo: activo !== undefined ? activo === 'true' : undefined
+        activo: activo !== undefined ? activo === 'true' : undefined,
+        search: search ? search.toString() : undefined
       });
 
       res.json({ success: true, data: result });

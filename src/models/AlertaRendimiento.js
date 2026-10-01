@@ -373,7 +373,7 @@ class AlertaRendimiento {
         AND pe.activo               = true
         AND CURRENT_DATE BETWEEN pe.fecha_inicio AND pe.fecha_fin
       INNER JOIN matricula m
-        ON  m.paralelo_id          = ad.paralelo_id
+        ON  COALESCE(m.paralelo_cursado_id, m.paralelo_id) = ad.paralelo_id
         AND m.periodo_academico_id = pa.id
         AND m.estado               = 'activo'
         AND m.deleted_at           IS NULL
