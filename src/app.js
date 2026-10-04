@@ -170,6 +170,9 @@ app.get('/health', async (req, res) => {
 // Rutas públicas (SIN rate limit)
 // ------------------------------
 app.use('/public/academicos', publicAcademicosRoutes);
+app.use('/api/public/academicos', publicAcademicosRoutes);
+app.use('/public-academicos', publicAcademicosRoutes);
+app.use('/api/public-academicos', publicAcademicosRoutes);
 
 // ------------------------------
 // Auth (SIN rate limit global, cada ruta tiene el suyo)

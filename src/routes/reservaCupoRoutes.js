@@ -17,6 +17,12 @@ const router = express.Router();
 router.post('/validar-estudiante', ReservaCupoController.validarEstudiante);
 
 /**
+ * GET /api/reserva-cupo/disponibilidad-hermano
+ * Consulta disponibilidad inmediata o puesto en lista de espera para hermano nuevo.
+ */
+router.get('/disponibilidad-hermano', ReservaCupoController.consultarDisponibilidadHermano);
+
+/**
  * POST /api/reserva-cupo/confirmar
  * Registra la reserva de cupo con los datos de quien reserva (tutor/familiar).
  */
@@ -33,6 +39,12 @@ router.get('/recibo/:codigo/pdf', ReservaCupoController.generarReciboPDF);
  * Consulta los datos completos de una reserva existente.
  */
 router.get('/consultar/:codigo', ReservaCupoController.consultarPorCodigo);
+
+/**
+ * POST /api/reserva-cupo/solicitar-anulacion
+ * Permite al tutor solicitar la anulación de una reserva confirmada.
+ */
+router.post('/solicitar-anulacion', ReservaCupoController.solicitarAnulacion);
 
 // =============================================
 // RUTAS ADMINISTRATIVAS (Requieren autenticación)
@@ -55,5 +67,47 @@ router.get('/admin/estadisticas', authenticate, ReservaCupoController.obtenerEst
  * Exportación oficial de reservas a Excel o PDF.
  */
 router.get('/admin/exportar', authenticate, ReservaCupoController.exportarReservas);
+
+/**
+ * POST /api/reserva-cupo/admin/:id/anular
+ * Anula una reserva definitivamente desde el panel administrativo.
+ */
+router.post('/admin/:id/anular', authenticate, ReservaCupoController.anularReservaAdmin);
+
+/**
+ * POST /api/reserva-cupo/admin/:id/reactivar
+ * Restablece/reactiva una reserva desde el panel administrativo.
+ */
+router.post('/admin/:id/reactivar', authenticate, ReservaCupoController.reactivarReservaAdmin);
+
+/**
+ * GET /api/reserva-cupo/admin/hermanos
+ * Listado paginado de hermanos registrados (confirmados y en lista de espera).
+ */
+router.get('/admin/hermanos', authenticate, ReservaCupoController.listarHermanosAdmin);
+
+/**
+ * GET /api/reserva-cupo/admin/hermanos/exportar
+ * Exportación oficial del padrón de hermanos postulantes a Excel o PDF.
+ */
+router.get('/admin/hermanos/exportar', authenticate, ReservaCupoController.exportarHermanos);
+
+/**
+ * POST /api/reserva-cupo/admin/hermanos/:id/promover
+ * Promueve a un hermano de lista de espera a cupo confirmado tras liberarse vacante.
+ */
+router.post('/admin/hermanos/:id/promover', authenticate, ReservaCupoController.promoverHermanoAdmin);
+
+/**
+ * POST /api/reserva-cupo/admin/hermanos/:id/anular
+ * Anula la reserva de un hermano desde el panel administrativo (liberando cupo).
+ */
+router.post('/admin/hermanos/:id/anular', authenticate, ReservaCupoController.anularHermanoAdmin);
+
+/**
+ * POST /api/reserva-cupo/admin/hermanos/:id/reactivar
+ * Restablece la reserva de un hermano desde el panel administrativo.
+ */
+router.post('/admin/hermanos/:id/reactivar', authenticate, ReservaCupoController.reactivarHermanoAdmin);
 
 export default router;

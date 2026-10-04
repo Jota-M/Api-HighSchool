@@ -1,5 +1,6 @@
 // models/ReservaCupo.js
 import { pool } from '../db/pool.js';
+import ReservaCupoHermano from './ReservaCupoHermano.js';
 
 class ReservaCupo {
   /**
@@ -116,9 +117,42 @@ class ReservaCupo {
     // Verificar si el estudiante ya tiene una reserva en la Gestión 2027
     const reservaExistente = await ReservaCupo.obtenerPorEstudianteYPeriodo(estudiante.id, periodoDestino.id);
     if (reservaExistente) {
+      // Caso 1: Reserva anulada o cancelada previamente -> NO se puede volver a registrar por web
+      if (reservaExistente.estado === 'anulada' || reservaExistente.estado === 'cancelada') {
+        return {
+          valido: false,
+          error_tipo: 'RESERVA_ANULADA',
+          mensaje: `La reserva para este estudiante fue anulada previamente. Debido a esto, no es posible registrarse nuevamente desde el formulario web. Por favor, acérquese a Secretaría o Dirección para gestionar su cupo de forma presencial.`
+        };
+      }
+
+      // Caso 2: Declaró No Continuidad
+      if (reservaExistente.estado === 'no_continua') {
+        return {
+          valido: true,
+          ya_reservado: true,
+          estado_reserva: 'no_continua',
+          reserva: reservaExistente,
+          mensaje: `El estudiante ya tiene registrada su declaración de No Continuidad para ${periodoDestino.nombre}`
+        };
+      }
+
+      // Caso 3: Solicitud de anulación en trámite
+      if (reservaExistente.estado === 'solicitud_anulacion') {
+        return {
+          valido: true,
+          ya_reservado: true,
+          estado_reserva: 'solicitud_anulacion',
+          reserva: reservaExistente,
+          mensaje: `El estudiante tiene una solicitud de anulación de cupo en trámite ante Secretaría.`
+        };
+      }
+
+      // Caso 4: Confirmada
       return {
         valido: true,
         ya_reservado: true,
+        estado_reserva: 'confirmada',
         reserva: reservaExistente,
         mensaje: `El estudiante ya tiene su cupo reservado para ${periodoDestino.nombre}`
       };
@@ -195,11 +229,12 @@ class ReservaCupo {
   }
 
   /**
-   * Crea reserva para múltiples estudiantes en una sola transacción
+   * Crea reserva para múltiples estudiantes y hermanos en una sola transacción
    */
   static async crearReservaMultiple(datos) {
     const {
-      estudiantes, // Array de { estudiante_id, grado_actual_id, grado_destino_id, turno_destino_id }
+      estudiantes = [], // Array de { estudiante_id, grado_actual_id, grado_destino_id, turno_destino_id, continua, confirma_continuidad, motivo_no_continua }
+      hermanos = [],    // Array de { hermano_regular_id, grado_solicitado_id, turno_solicitado_id, nombres, apellido_paterno, apellido_materno, ci, fecha_nacimiento, genero, observaciones }
       periodo_academico_id,
       tutor_nombre,
       tutor_ci,
@@ -208,8 +243,11 @@ class ReservaCupo {
       observaciones
     } = datos;
 
-    if (!estudiantes || !Array.isArray(estudiantes) || estudiantes.length === 0) {
-      throw new Error('Debe proporcionar al menos un estudiante para la reserva');
+    const listaEstudiantes = Array.isArray(estudiantes) ? estudiantes : [];
+    const listaHermanos = Array.isArray(hermanos) ? hermanos : [];
+
+    if (listaEstudiantes.length === 0 && listaHermanos.length === 0) {
+      throw new Error('Debe proporcionar al menos un estudiante regular o hermano para la reserva');
     }
 
     const client = await pool.connect();
@@ -223,94 +261,147 @@ class ReservaCupo {
       const yearMatch = periodoNombre.match(/\d{4}/);
       const anioPrefijo = yearMatch ? yearMatch[0] : '2027';
 
-      // Bloquear tabla para correlativos
-      await client.query('LOCK TABLE reserva_cupo IN SHARE ROW EXCLUSIVE MODE');
+      // 1. Procesar Estudiantes Regulares
+      const reservasCreadas = [];
 
-      // Buscar último correlativo para ese año
-      const ultimoCodigoResult = await client.query(`
-        SELECT codigo_reserva
-        FROM reserva_cupo
-        WHERE codigo_reserva LIKE $1
-        ORDER BY id DESC
-        LIMIT 1
-      `, [`RES-${anioPrefijo}-%`]);
+      if (listaEstudiantes.length > 0) {
+        // Bloquear tabla para correlativos
+        await client.query('LOCK TABLE reserva_cupo IN SHARE ROW EXCLUSIVE MODE');
 
-      let siguienteNum = 1;
-      if (ultimoCodigoResult.rows.length > 0) {
-        const partes = ultimoCodigoResult.rows[0].codigo_reserva.split('-');
-        const ultNum = parseInt(partes[partes.length - 1], 10);
-        if (!isNaN(ultNum)) {
-          siguienteNum = ultNum + 1;
+        // Buscar último correlativo para ese año (tanto RES como NOC)
+        const ultimoCodigoResult = await client.query(`
+          SELECT codigo_reserva
+          FROM reserva_cupo
+          WHERE codigo_reserva LIKE $1 OR codigo_reserva LIKE $2
+          ORDER BY id DESC
+          LIMIT 1
+        `, [`RES-${anioPrefijo}-%`, `NOC-${anioPrefijo}-%`]);
+
+        let siguienteNum = 1;
+        if (ultimoCodigoResult.rows.length > 0) {
+          const partes = ultimoCodigoResult.rows[0].codigo_reserva.split('-');
+          const ultNum = parseInt(partes[partes.length - 1], 10);
+          if (!isNaN(ultNum)) {
+            siguienteNum = ultNum + 1;
+          }
+        }
+
+        for (const est of listaEstudiantes) {
+          // Verificar si ya existe reserva para este estudiante y periodo
+          const checkExistente = await client.query(`
+            SELECT id, codigo_reserva, codigo_recibo, estado
+            FROM reserva_cupo
+            WHERE estudiante_id = $1 AND periodo_academico_id = $2 AND deleted_at IS NULL
+          `, [est.estudiante_id, periodo_academico_id]);
+
+          if (checkExistente.rows.length > 0) {
+            // Ya tiene registro -> devolver el existente
+            const resExist = await ReservaCupo.obtenerPorId(checkExistente.rows[0].id, client);
+            reservasCreadas.push(resExist);
+            continue;
+          }
+
+          const seqStr = siguienteNum.toString().padStart(4, '0');
+          const continua = est.continua !== false && est.confirma_continuidad !== false;
+          const prefijo = continua ? 'RES' : 'NOC';
+          const codigoReserva = `${prefijo}-${anioPrefijo}-${seqStr}`;
+          const codigoRecibo = `REC-${prefijo}-${anioPrefijo}-${seqStr}`;
+          const estado = continua ? 'confirmada' : 'no_continua';
+          siguienteNum++;
+
+          const insertResult = await client.query(`
+            INSERT INTO reserva_cupo (
+              codigo_reserva,
+              codigo_recibo,
+              estudiante_id,
+              periodo_academico_id,
+              grado_actual_id,
+              grado_destino_id,
+              turno_destino_id,
+              tutor_nombre,
+              tutor_ci,
+              tutor_parentesco,
+              tutor_telefono,
+              observaciones,
+              motivo_no_continua,
+              estado,
+              fecha_reserva
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
+            RETURNING id
+          `, [
+            codigoReserva,
+            codigoRecibo,
+            est.estudiante_id,
+            periodo_academico_id,
+            est.grado_actual_id || null,
+            est.grado_destino_id,
+            est.turno_destino_id,
+            tutor_nombre.trim(),
+            tutor_ci.trim(),
+            tutor_parentesco.trim(),
+            tutor_telefono.trim(),
+            observaciones ? observaciones.trim() : null,
+            !continua ? (est.motivo_no_continua || observaciones || 'Declaración de no continuidad').trim() : null,
+            estado
+          ]);
+
+          const nuevaId = insertResult.rows[0].id;
+          const reservaCompleta = await ReservaCupo.obtenerPorId(nuevaId, client);
+          reservasCreadas.push(reservaCompleta);
         }
       }
 
-      const reservasCreadas = [];
+      // 2. Procesar Hermanos Nuevos (con Prioridad Familiar)
+      const hermanosCreados = [];
 
-      for (const est of estudiantes) {
-        // Verificar si ya existe reserva para este estudiante y periodo
-        const checkExistente = await client.query(`
-          SELECT id, codigo_reserva, codigo_recibo
-          FROM reserva_cupo
-          WHERE estudiante_id = $1 AND periodo_academico_id = $2 AND deleted_at IS NULL
-        `, [est.estudiante_id, periodo_academico_id]);
+      if (listaHermanos.length > 0) {
+        for (const herm of listaHermanos) {
+          // El hermano debe estar respaldado por un regular
+          const hermanoRegularId = herm.hermano_regular_id || (listaEstudiantes[0]?.estudiante_id);
+          if (!hermanoRegularId) {
+            throw new Error(`El hermano ${herm.nombres || ''} debe estar respaldado por un estudiante regular activo.`);
+          }
 
-        if (checkExistente.rows.length > 0) {
-          // Ya tiene reserva -> saltar o registrar
-          const resExist = await ReservaCupo.obtenerPorId(checkExistente.rows[0].id);
-          reservasCreadas.push(resExist);
-          continue;
+          const hermCreado = await ReservaCupoHermano.crearReservaHermanoTransaccional({
+            ...herm,
+            hermano_regular_id: hermanoRegularId,
+            periodo_academico_id: periodo_academico_id,
+            tutor_nombre: tutor_nombre.trim(),
+            tutor_ci: tutor_ci.trim(),
+            tutor_parentesco: tutor_parentesco.trim(),
+            tutor_telefono: tutor_telefono.trim(),
+            observaciones: herm.observaciones || observaciones
+          }, client);
+
+          hermanosCreados.push(hermCreado);
         }
-
-        const seqStr = siguienteNum.toString().padStart(4, '0');
-        const codigoReserva = `RES-${anioPrefijo}-${seqStr}`;
-        const codigoRecibo = `REC-RES-${anioPrefijo}-${seqStr}`;
-        siguienteNum++;
-
-        const insertResult = await client.query(`
-          INSERT INTO reserva_cupo (
-            codigo_reserva,
-            codigo_recibo,
-            estudiante_id,
-            periodo_academico_id,
-            grado_actual_id,
-            grado_destino_id,
-            turno_destino_id,
-            tutor_nombre,
-            tutor_ci,
-            tutor_parentesco,
-            tutor_telefono,
-            observaciones,
-            estado,
-            fecha_reserva
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'confirmada', NOW())
-          RETURNING id
-        `, [
-          codigoReserva,
-          codigoRecibo,
-          est.estudiante_id,
-          periodo_academico_id,
-          est.grado_actual_id || null,
-          est.grado_destino_id,
-          est.turno_destino_id,
-          tutor_nombre.trim(),
-          tutor_ci.trim(),
-          tutor_parentesco.trim(),
-          tutor_telefono.trim(),
-          observaciones ? observaciones.trim() : null
-        ]);
-
-        const nuevaId = insertResult.rows[0].id;
-        const reservaCompleta = await ReservaCupo.obtenerPorId(nuevaId, client);
-        reservasCreadas.push(reservaCompleta);
       }
 
       await client.query('COMMIT');
 
+      const cantContinuaran = reservasCreadas.filter(r => r.estado === 'confirmada').length;
+      const cantNoContinuaran = reservasCreadas.filter(r => r.estado === 'no_continua').length;
+      const cantHermanosConf = hermanosCreados.filter(h => h.estado === 'confirmada').length;
+      const cantHermanosEsp = hermanosCreados.filter(h => h.estado === 'en_espera').length;
+
+      let mensajeExito = `¡Registro procesado exitosamente!`;
+      const partesMsg = [];
+      if (cantContinuaran > 0) partesMsg.push(`${cantContinuaran} regular(es) con cupo confirmado`);
+      if (cantNoContinuaran > 0) partesMsg.push(`${cantNoContinuaran} con constancia de no continuidad`);
+      if (cantHermanosConf > 0) partesMsg.push(`${cantHermanosConf} hermano(s) con cupo confirmado`);
+      if (cantHermanosEsp > 0) partesMsg.push(`${cantHermanosEsp} hermano(s) en lista de espera prioritaria`);
+
+      if (partesMsg.length > 0) {
+        mensajeExito = `¡Registro completado: ${partesMsg.join(', ')}!`;
+      }
+
       return {
         exito: true,
         reservas: reservasCreadas,
-        cantidad: reservasCreadas.length,
-        mensaje: `¡Se confirmó la reserva de cupo para ${reservasCreadas.length} estudiante(s) con éxito!`
+        hermanos: hermanosCreados,
+        cantidad_regulares: reservasCreadas.length,
+        cantidad_hermanos: hermanosCreados.length,
+        mensaje: mensajeExito
       };
 
     } catch (error) {
@@ -546,6 +637,108 @@ class ReservaCupo {
   }
 
   /**
+   * Solicitar anulación de reserva (por el padre/tutor desde el formulario/recibo público)
+   */
+  static async solicitarAnulacion({ codigo, motivo, tutor_ci, estudiante_ci, ci }) {
+    const reserva = await ReservaCupo.obtenerPorCodigo(codigo);
+    if (!reserva) {
+      // Si no es reserva regular, verificar si es reserva de hermano nuevo
+      const hermano = await ReservaCupoHermano.obtenerPorCodigo(codigo);
+      if (hermano) {
+        return await ReservaCupoHermano.solicitarAnulacion({ codigo, motivo, tutor_ci, estudiante_ci, ci });
+      }
+      throw new Error('No se encontró la reserva con el código especificado');
+    }
+
+    if (reserva.estado === 'anulada' || reserva.estado === 'cancelada') {
+      throw new Error('Esta reserva ya se encuentra anulada');
+    }
+
+    if (reserva.estado === 'solicitud_anulacion') {
+      throw new Error('Ya existe una solicitud de anulación en trámite para esta reserva');
+    }
+
+    if (reserva.estado === 'no_continua') {
+      throw new Error('Este registro corresponde a una constancia de no continuidad, no a una reserva activa');
+    }
+
+    // Validación por CI del estudiante (o tutor como respaldo)
+    const ciIngresado = (estudiante_ci || ci || tutor_ci || '').trim().toLowerCase();
+    if (ciIngresado) {
+      const coincideEst = reserva.estudiante_ci && reserva.estudiante_ci.trim().toLowerCase() === ciIngresado;
+      const coincideTutor = reserva.tutor_ci && reserva.tutor_ci.trim().toLowerCase() === ciIngresado;
+      if (!coincideEst && !coincideTutor) {
+        throw new Error('El Carnet de Identidad (CI) ingresado no coincide con el del estudiante en esta reserva');
+      }
+    }
+
+    await pool.query(`
+      UPDATE reserva_cupo
+      SET 
+        estado = 'solicitud_anulacion',
+        motivo_anulacion = $1,
+        fecha_solicitud_anulacion = NOW(),
+        updated_at = NOW()
+      WHERE id = $2
+    `, [motivo ? motivo.trim() : 'Solicitud de anulación por el tutor', reserva.id]);
+
+    return await ReservaCupo.obtenerPorId(reserva.id);
+  }
+
+  /**
+   * Anular reserva definitivamente (por el administrador desde el panel)
+   */
+  static async anularReserva(id, { motivo, usuario_id } = {}) {
+    const reserva = await ReservaCupo.obtenerPorId(id);
+    if (!reserva) {
+      throw new Error('Reserva no encontrada');
+    }
+
+    await pool.query(`
+      UPDATE reserva_cupo
+      SET 
+        estado = 'anulada',
+        motivo_anulacion = COALESCE($1, motivo_anulacion, 'Anulación efectuada por administración'),
+        fecha_anulacion = NOW(),
+        anulado_por_usuario_id = $2,
+        updated_at = NOW()
+      WHERE id = $3
+    `, [motivo ? motivo.trim() : null, usuario_id || null, id]);
+
+    return await ReservaCupo.obtenerPorId(id);
+  }
+
+  /**
+   * Reactivar / Restituir reserva de cupo (por el administrador desde el panel)
+   */
+  static async reactivarReserva(id, { motivo, usuario_id } = {}) {
+    const reserva = await ReservaCupo.obtenerPorId(id);
+    if (!reserva) {
+      throw new Error('Reserva no encontrada');
+    }
+
+    await pool.query(`
+      UPDATE reserva_cupo
+      SET 
+        estado = 'confirmada',
+        fecha_reactivacion = NOW(),
+        reactivado_por_usuario_id = $1,
+        motivo_anulacion = NULL,
+        fecha_solicitud_anulacion = NULL,
+        fecha_anulacion = NULL,
+        observaciones = CASE 
+          WHEN $2::text IS NOT NULL AND $2::text != '' 
+          THEN CONCAT(COALESCE(observaciones, ''), ' [Reactivado por administración: ', $2::text, ']')
+          ELSE observaciones 
+        END,
+        updated_at = NOW()
+      WHERE id = $3
+    `, [usuario_id || null, motivo ? motivo.trim() : null, id]);
+
+    return await ReservaCupo.obtenerPorId(id);
+  }
+
+  /**
    * Estadísticas generales de reservas de cupo para el dashboard administrativo
    */
   static async obtenerEstadisticas(periodoId = null) {
@@ -558,10 +751,14 @@ class ReservaCupo {
 
     const queryResumen = `
       SELECT 
-        COUNT(*)::int as total_reservas,
-        COUNT(CASE WHEN nd.nombre ILIKE '%inicial%' THEN 1 END)::int as total_inicial,
-        COUNT(CASE WHEN nd.nombre ILIKE '%primaria%' THEN 1 END)::int as total_primaria,
-        COUNT(CASE WHEN nd.nombre ILIKE '%secundaria%' THEN 1 END)::int as total_secundaria
+        COUNT(*)::int as total_registros,
+        COUNT(CASE WHEN r.estado = 'confirmada' THEN 1 END)::int as total_confirmadas,
+        COUNT(CASE WHEN r.estado = 'no_continua' THEN 1 END)::int as total_no_continua,
+        COUNT(CASE WHEN r.estado = 'solicitud_anulacion' THEN 1 END)::int as total_solicitud_anulacion,
+        COUNT(CASE WHEN r.estado IN ('anulada', 'cancelada') THEN 1 END)::int as total_anuladas,
+        COUNT(CASE WHEN nd.nombre ILIKE '%inicial%' AND r.estado = 'confirmada' THEN 1 END)::int as total_inicial,
+        COUNT(CASE WHEN nd.nombre ILIKE '%primaria%' AND r.estado = 'confirmada' THEN 1 END)::int as total_primaria,
+        COUNT(CASE WHEN nd.nombre ILIKE '%secundaria%' AND r.estado = 'confirmada' THEN 1 END)::int as total_secundaria
       FROM reserva_cupo r
       INNER JOIN grado gd ON r.grado_destino_id = gd.id
       INNER JOIN nivel_academico nd ON gd.nivel_academico_id = nd.id
@@ -573,7 +770,11 @@ class ReservaCupo {
         gd.id as grado_id,
         gd.nombre as grado_nombre,
         nd.nombre as nivel_nombre,
-        COUNT(r.id)::int as total_reservados
+        COUNT(CASE WHEN r.estado = 'confirmada' THEN 1 END)::int as total_confirmados,
+        COUNT(CASE WHEN r.estado = 'no_continua' THEN 1 END)::int as total_no_continuan,
+        COUNT(CASE WHEN r.estado = 'solicitud_anulacion' THEN 1 END)::int as total_solicitudes_anulacion,
+        COUNT(CASE WHEN r.estado IN ('anulada', 'cancelada') THEN 1 END)::int as total_anuladas,
+        COUNT(r.id)::int as total_registrados
       FROM grado gd
       INNER JOIN nivel_academico nd ON gd.nivel_academico_id = nd.id
       LEFT JOIN reserva_cupo r ON r.grado_destino_id = gd.id AND r.deleted_at IS NULL ${wherePeriodo ? 'AND r.periodo_academico_id = $1' : ''}
@@ -584,12 +785,19 @@ class ReservaCupo {
     const resumenRes = await pool.query(queryResumen, params);
     const porGradoRes = await pool.query(queryPorGrado, params);
 
+    const resumenData = resumenRes.rows[0] || {};
+
     return {
-      resumen: resumenRes.rows[0] || {
-        total_reservas: 0,
-        total_inicial: 0,
-        total_primaria: 0,
-        total_secundaria: 0
+      resumen: {
+        total_reservas: resumenData.total_confirmadas || 0,
+        total_confirmadas: resumenData.total_confirmadas || 0,
+        total_no_continua: resumenData.total_no_continua || 0,
+        total_solicitud_anulacion: resumenData.total_solicitud_anulacion || 0,
+        total_anuladas: resumenData.total_anuladas || 0,
+        total_registros: resumenData.total_registros || 0,
+        total_inicial: resumenData.total_inicial || 0,
+        total_primaria: resumenData.total_primaria || 0,
+        total_secundaria: resumenData.total_secundaria || 0
       },
       por_grado: porGradoRes.rows || []
     };
