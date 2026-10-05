@@ -103,6 +103,24 @@ class ReservaCupo {
 
     const ultimaMatricula = matriculaResult.rows[0];
 
+    // Verificar que la matrícula del estudiante esté activa
+    if (ultimaMatricula.matricula_estado !== 'activo') {
+      const estadoDesc = {
+        retirado: 'se encuentra RETIRADO',
+        inactivo: 'tiene su matrícula INACTIVA',
+        suspendido: 'se encuentra con matrícula SUSPENDIDA',
+        anulado: 'tiene su matrícula ANULADA',
+        trasladado: 'se encuentra TRASLADADO',
+      }[ultimaMatricula.matricula_estado] || `tiene su matrícula en estado "${ultimaMatricula.matricula_estado}"`;
+
+      return {
+        valido: false,
+        error_tipo: 'MATRICULA_INACTIVA',
+        matricula_estado: ultimaMatricula.matricula_estado,
+        mensaje: `El estudiante ${estudiante.nombres} ${estudiante.apellido_paterno} ${estadoDesc}. El formulario de reserva de cupo web está habilitado únicamente para estudiantes regulares con matrícula activa. Por favor, acérquese a Secretaría o Dirección.`
+      };
+    }
+
     // Periodo destino: Gestión 2027
     const periodoDestino = await ReservaCupo.obtenerPeriodoSiguiente();
 
@@ -287,6 +305,20 @@ class ReservaCupo {
         }
 
         for (const est of listaEstudiantes) {
+          // Verificar que el estudiante regular tenga matrícula activa
+          const checkMatricula = await client.query(`
+            SELECT m.estado
+            FROM matricula m
+            INNER JOIN periodo_academico pa ON m.periodo_academico_id = pa.id
+            WHERE m.estudiante_id = $1 AND m.deleted_at IS NULL
+            ORDER BY pa.fecha_inicio DESC
+            LIMIT 1
+          `, [est.estudiante_id]);
+
+          if (checkMatricula.rows.length === 0 || checkMatricula.rows[0].estado !== 'activo') {
+            throw new Error('El estudiante regular seleccionado no cuenta con matrícula activa para registrar su reserva.');
+          }
+
           // Verificar si ya existe reserva para este estudiante y periodo
           const checkExistente = await client.query(`
             SELECT id, codigo_reserva, codigo_recibo, estado
