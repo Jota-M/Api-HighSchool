@@ -584,7 +584,7 @@ class MatriculacionController {
       const { id } = req.params;
       const { estado, motivo } = req.body;
 
-      const estadosPermitidos = ['activo', 'inactivo', 'anulado', 'suspendido', 'trasladado', 'congelado'];
+      const estadosPermitidos = ['activo', 'inactivo', 'retirado', 'trasladado', 'graduado', 'suspendido', 'congelado', 'anulado'];
       if (!estado || !estadosPermitidos.includes(estado)) {
         return res.status(400).json({
           success: false,
@@ -597,9 +597,8 @@ class MatriculacionController {
         return res.status(404).json({ success: false, message: 'Matrícula no encontrada' });
       }
 
-      // No se puede reactivar una matrícula retirada sin motivo claro
-      if (estado === 'activo' && matricula.estado === 'retirado' && !motivo) {
-        return res.status(400).json({ success: false, message: 'Debe indicar motivo para reactivar una matrícula retirada' });
+      if (estado === 'retirado' && !motivo) {
+        return res.status(400).json({ success: false, message: 'Debe especificar el motivo del retiro' });
       }
 
       const updated = await Matricula.changeStatus(id, estado, motivo || null);

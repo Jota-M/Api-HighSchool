@@ -322,9 +322,16 @@ class Matricula {
   static async changeStatus(id, estado, motivo = null) {
     const query = `
       UPDATE matricula
-      SET estado = $1, 
-          fecha_retiro = CASE WHEN $1 IN ('retirado', 'trasladado') THEN CURRENT_DATE ELSE fecha_retiro END,
-          motivo_retiro = $2,
+      SET estado = $1::varchar, 
+          fecha_retiro = CASE 
+            WHEN $1::varchar IN ('retirado', 'trasladado') THEN CURRENT_DATE 
+            WHEN $1::varchar = 'activo' THEN NULL
+            ELSE fecha_retiro 
+          END,
+          motivo_retiro = CASE 
+            WHEN $1::varchar = 'activo' THEN NULL
+            ELSE COALESCE($2, motivo_retiro) 
+          END,
           updated_at = CURRENT_TIMESTAMP
       WHERE id = $3 AND deleted_at IS NULL
       RETURNING *
