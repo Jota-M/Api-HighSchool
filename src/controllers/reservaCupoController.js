@@ -976,7 +976,9 @@ class ReservaCupoController {
         nivel_destino_id,
         turno_destino_id,
         estado,
-        search
+        search,
+        tipo_reporte,
+        titulo_reporte
       } = req.query;
 
       const resultado = await ReservaCupo.listar({
@@ -991,10 +993,6 @@ class ReservaCupoController {
       });
 
       const reservas = resultado.reservas || [];
-
-      const stats = await ReservaCupo.obtenerEstadisticas(
-        periodo_academico_id ? parseInt(periodo_academico_id, 10) : null
-      );
 
       // Metadatos para encabezados (obtenidos del primer registro o a través del modelo)
       let gradoNombre = null;
@@ -1015,12 +1013,91 @@ class ReservaCupoController {
         if (!turnoNombre) turnoNombre = paramsMeta.turnoNombre;
       }
 
-      const meta = { gradoNombre, turnoNombre };
+      // ══ ESTADÍSTICAS CALCULADAS ESPECÍFICAMENTE SOBRE EL REPORTE SELECCIONADO ══
+      const totalConfirmadas = reservas.filter(r => r.estado === 'confirmada').length;
+      const totalNoContinua = reservas.filter(r => r.estado === 'no_continua').length;
+      const totalSolicitudAnulacion = reservas.filter(r => r.estado === 'solicitud_anulacion').length;
+      const totalAnuladas = reservas.filter(r => r.estado === 'anulada' || r.estado === 'cancelada').length;
+
+      const resumen = {
+        total_registros: reservas.length,
+        total_confirmadas: totalConfirmadas,
+        total_no_continua: totalNoContinua,
+        total_solicitud_anulacion: totalSolicitudAnulacion,
+        total_anuladas: totalAnuladas,
+      };
+
+      // Tarjetas dinámicas según el tipo de reporte solicitado
+      let statsCards = [];
+      const tipo = tipo_reporte || '';
+
+      if (tipo === 'no_continua' || estado === 'no_continua') {
+        const manana = reservas.filter(r => (r.turno_destino_nombre || '').toLowerCase().includes('mañana') || r.turno_destino_id === 1).length;
+        const tarde = reservas.filter(r => (r.turno_destino_nombre || '').toLowerCase().includes('tarde') || r.turno_destino_id === 2).length;
+        statsCards = [
+          { label: 'Total No Continuarán', value: reservas.length },
+          { label: 'Turno Mañana', value: manana },
+          { label: 'Turno Tarde', value: tarde },
+          { label: 'Vacantes Liberadas', value: reservas.length },
+        ];
+      } else if (tipo === 'anulaciones' || estado === 'solicitud_anulacion' || estado === 'anulada') {
+        statsCards = [
+          { label: 'Total en Trámite / Bajas', value: reservas.length },
+          { label: 'Solicitud Anulación', value: totalSolicitudAnulacion },
+          { label: 'Anuladas / Canceladas', value: totalAnuladas },
+          { label: 'Plazas Liberadas', value: totalAnuladas },
+        ];
+      } else if (tipo === 'contacto_tutores') {
+        const conTelefono = reservas.filter(r => r.tutor_telefono && r.tutor_telefono.trim().length > 0).length;
+        const conCI = reservas.filter(r => r.tutor_ci && r.tutor_ci.trim().length > 0).length;
+        statsCards = [
+          { label: 'Total Registros', value: reservas.length },
+          { label: 'Confirmadas', value: totalConfirmadas },
+          { label: 'Con Teléfono', value: conTelefono },
+          { label: 'Con CI de Tutor', value: conCI },
+        ];
+      } else if (tipo === 'por_grado') {
+        const manana = reservas.filter(r => r.estado === 'confirmada' && ((r.turno_destino_nombre || '').toLowerCase().includes('mañana') || r.turno_destino_id === 1)).length;
+        const tarde = reservas.filter(r => r.estado === 'confirmada' && ((r.turno_destino_nombre || '').toLowerCase().includes('tarde') || r.turno_destino_id === 2)).length;
+        statsCards = [
+          { label: 'Total Confirmadas', value: totalConfirmadas },
+          { label: 'Turno Mañana', value: manana },
+          { label: 'Turno Tarde', value: tarde },
+          { label: 'No Continuarán', value: totalNoContinua },
+        ];
+      } else {
+        // Reporte consolidado o por grado y turno
+        statsCards = [
+          { label: 'Reservas Confirmadas', value: totalConfirmadas },
+          { label: 'No Continuarán', value: totalNoContinua },
+          { label: 'Solicitud Anulación', value: totalSolicitudAnulacion },
+          { label: 'Anuladas', value: totalAnuladas },
+        ];
+      }
+
+      let tituloReporteFinal = titulo_reporte || null;
+      if (!tituloReporteFinal) {
+        if (tipo === 'no_continua') tituloReporteFinal = 'CONSTANCIAS DE NO CONTINUIDAD 2027';
+        else if (tipo === 'anulaciones') tituloReporteFinal = 'CONTROL DE SOLICITUDES Y BAJAS DE CUPO 2027';
+        else if (tipo === 'por_grado_turno') tituloReporteFinal = 'NÓMINA OFICIAL POR GRADO Y TURNO 2027';
+        else if (tipo === 'por_grado') tituloReporteFinal = 'NÓMINA OFICIAL POR GRADO DESTINO 2027';
+        else if (tipo === 'por_nivel') tituloReporteFinal = 'REPORTE OFICIAL POR NIVEL EDUCATIVO 2027';
+        else if (tipo === 'contacto_tutores') tituloReporteFinal = 'PADRÓN DE CONTACTO DE TUTORES 2027';
+        else tituloReporteFinal = 'REPORTE OFICIAL DE RESERVAS Y NO CONTINUIDAD';
+      }
+
+      const meta = {
+        gradoNombre,
+        turnoNombre,
+        tituloReporte: tituloReporteFinal,
+        tipoReporte: tipo,
+        statsCards,
+      };
 
       if (formato === 'excel') {
-        return await ReservaCupoController._excelReservas(res, reservas, stats.resumen, meta);
+        return await ReservaCupoController._excelReservas(res, reservas, resumen, meta);
       } else {
-        return ReservaCupoController._pdfReservas(res, reservas, stats.resumen, meta);
+        return ReservaCupoController._pdfReservas(res, reservas, resumen, meta);
       }
 
     } catch (error) {
@@ -1048,7 +1125,7 @@ class ReservaCupoController {
     subtituloPartes.push('U.E.P. La Voz de Cristo');
 
     pdf.drawHeader(
-      'REPORTE OFICIAL DE RESERVAS Y NO CONTINUIDAD',
+      (meta.tituloReporte || 'REPORTE OFICIAL DE RESERVAS Y NO CONTINUIDAD').toUpperCase(),
       subtituloPartes.join(' · ')
     );
 
@@ -1071,12 +1148,15 @@ class ReservaCupoController {
     pdf.drawInfoBox(infoItems, 2);
 
     pdf.drawSection('RESUMEN DE REGISTROS');
-    pdf.drawStatsGrid([
-      { label: 'Reservas Confirmadas', value: resumen?.total_confirmadas || 0 },
-      { label: 'No Continuarán', value: resumen?.total_no_continua || 0 },
-      { label: 'Solicitud Anulación', value: resumen?.total_solicitud_anulacion || 0 },
-      { label: 'Anuladas', value: resumen?.total_anuladas || 0 },
-    ], 4);
+    const cardsToDraw = (meta.statsCards && meta.statsCards.length > 0)
+      ? meta.statsCards
+      : [
+          { label: 'Reservas Confirmadas', value: resumen?.total_confirmadas || 0 },
+          { label: 'No Continuarán', value: resumen?.total_no_continua || 0 },
+          { label: 'Solicitud Anulación', value: resumen?.total_solicitud_anulacion || 0 },
+          { label: 'Anuladas', value: resumen?.total_anuladas || 0 },
+        ];
+    pdf.drawStatsGrid(cardsToDraw, cardsToDraw.length);
 
     pdf.drawSection('DETALLE DE ESTUDIANTES');
     const headers = ['#', 'Nº Recibo', 'Cód. Reserva', 'Estudiante', 'CI', 'Grado 2027', 'Turno', 'Decisión / Estado', 'Persona que Tramitó', 'Teléfono'];
@@ -1124,7 +1204,7 @@ class ReservaCupoController {
 
     excel.addTitle(
       ws,
-      'REPORTE OFICIAL DE RESERVAS Y NO CONTINUIDAD',
+      (meta.tituloReporte || 'REPORTE OFICIAL DE RESERVAS Y NO CONTINUIDAD').toUpperCase(),
       subtituloExcel.join(' · ')
     );
 
@@ -1144,12 +1224,15 @@ class ReservaCupoController {
 
     excel.addInfoBox(ws, infoBoxItems);
 
-    excel.addStats(ws, [
-      { label: 'Confirmadas', value: resumen?.total_confirmadas || 0 },
-      { label: 'No Continuarán', value: resumen?.total_no_continua || 0 },
-      { label: 'Solicitud Anulación', value: resumen?.total_solicitud_anulacion || 0 },
-      { label: 'Anuladas', value: resumen?.total_anuladas || 0 },
-    ], 4);
+    const cardsToDrawExcel = (meta.statsCards && meta.statsCards.length > 0)
+      ? meta.statsCards
+      : [
+          { label: 'Confirmadas', value: resumen?.total_confirmadas || 0 },
+          { label: 'No Continuarán', value: resumen?.total_no_continua || 0 },
+          { label: 'Solicitud Anulación', value: resumen?.total_solicitud_anulacion || 0 },
+          { label: 'Anuladas', value: resumen?.total_anuladas || 0 },
+        ];
+    excel.addStats(ws, cardsToDrawExcel, cardsToDrawExcel.length);
 
     const formatearEstado = (est) => {
       switch (est) {
@@ -1221,9 +1304,18 @@ class ReservaCupoController {
       });
 
       const hermanos = resultado.hermanos || [];
-      const resumen = await ReservaCupoHermano.obtenerEstadisticas(
-        periodo_academico_id ? parseInt(periodo_academico_id, 10) : null
-      );
+      const totalConfirmadasHermanos = hermanos.filter(h => h.estado === 'confirmada').length;
+      const totalEnEsperaHermanos = hermanos.filter(h => h.estado === 'en_espera').length;
+      const totalSolAnulacionHermanos = hermanos.filter(h => h.estado === 'solicitud_anulacion').length;
+      const totalAnuladasHermanos = hermanos.filter(h => h.estado === 'anulada' || h.estado === 'cancelada').length;
+
+      const resumen = {
+        total_postulantes: hermanos.length,
+        total_confirmadas: totalConfirmadasHermanos,
+        total_en_espera: totalEnEsperaHermanos,
+        total_solicitud_anulacion: totalSolAnulacionHermanos,
+        total_anuladas: totalAnuladasHermanos,
+      };
 
       if (formato === 'excel') {
         return await ReservaCupoController._excelHermanos(res, hermanos, resumen);

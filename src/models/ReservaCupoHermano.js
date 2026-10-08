@@ -392,6 +392,41 @@ class ReservaCupoHermano {
   }
 
   /**
+   * Obtiene todos los hermanos registrados vinculados a un estudiante regular en un periodo
+   */
+  static async obtenerPorRegularYPeriodo(hermanoRegularId, periodoId, client = null) {
+    const conn = client || pool;
+    const query = `
+      SELECT 
+        rh.*,
+        TO_CHAR(rh.fecha_reserva, 'DD/MM/YYYY HH24:MI') as fecha_reserva_formateada,
+        TO_CHAR(rh.fecha_reserva, 'YYYY-MM-DD') as fecha_reserva_corta,
+        TO_CHAR(rh.fecha_nacimiento, 'YYYY-MM-DD') as fecha_nacimiento_formateada,
+        TRIM(CONCAT(rh.nombres, ' ', rh.apellido_paterno, ' ', COALESCE(rh.apellido_materno, ''))) as nombre_completo,
+        pa.nombre as periodo_nombre,
+        g.nombre as grado_solicitado_nombre,
+        na.nombre as nivel_solicitado_nombre,
+        t.nombre as turno_solicitado_nombre,
+        t.hora_inicio as turno_hora_inicio,
+        t.hora_fin as turno_hora_fin,
+        e.codigo as regular_codigo,
+        e.ci as regular_ci,
+        TRIM(CONCAT(e.nombres, ' ', e.apellido_paterno, ' ', COALESCE(e.apellido_materno, ''))) as regular_nombre_completo,
+        e.foto_url as regular_foto_url
+      FROM reserva_cupo_hermano rh
+      INNER JOIN estudiante e ON rh.hermano_regular_id = e.id
+      INNER JOIN periodo_academico pa ON rh.periodo_academico_id = pa.id
+      INNER JOIN grado g ON rh.grado_solicitado_id = g.id
+      INNER JOIN nivel_academico na ON g.nivel_academico_id = na.id
+      INNER JOIN turno t ON rh.turno_solicitado_id = t.id
+      WHERE rh.hermano_regular_id = $1 AND rh.periodo_academico_id = $2 AND rh.deleted_at IS NULL
+      ORDER BY rh.id ASC
+    `;
+    const res = await conn.query(query, [hermanoRegularId, periodoId]);
+    return res.rows;
+  }
+
+  /**
    * Lista de reservas de hermanos para el panel administrativo
    */
   static async listarAdmin(filtros = {}) {

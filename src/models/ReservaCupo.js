@@ -55,6 +55,39 @@ class ReservaCupo {
     `, [ciLimpio]);
 
     if (estudianteResult.rows.length === 0) {
+      // Verificar si es un hermano postulado directamente
+      const hermanoResult = await pool.query(`
+        SELECT rh.* 
+        FROM reserva_cupo_hermano rh
+        WHERE TRIM(rh.ci) ILIKE $1 AND rh.deleted_at IS NULL
+        ORDER BY rh.id DESC
+        LIMIT 1
+      `, [ciLimpio]);
+
+      if (hermanoResult.rows.length > 0) {
+        const herm = hermanoResult.rows[0];
+        const periodoDestino = await ReservaCupo.obtenerPeriodoSiguiente();
+        const resRegular = herm.hermano_regular_id 
+          ? await ReservaCupo.obtenerPorEstudianteYPeriodo(herm.hermano_regular_id, periodoDestino.id)
+          : null;
+        
+        const grupoFamiliar = resRegular 
+          ? await ReservaCupo.obtenerGrupoFamiliarPorReserva(resRegular, periodoDestino.id)
+          : { reservas: [], hermanos: [herm] };
+
+        const hermanoCompleto = await ReservaCupoHermano.obtenerPorId(herm.id);
+
+        return {
+          valido: true,
+          ya_reservado: true,
+          estado_reserva: herm.estado,
+          reserva: resRegular || hermanoCompleto,
+          todas_las_reservas: grupoFamiliar.reservas,
+          hermanos: grupoFamiliar.hermanos.length > 0 ? grupoFamiliar.hermanos : [hermanoCompleto],
+          mensaje: `Se encontró la reserva con Prioridad Familiar para ${periodoDestino.nombre}`
+        };
+      }
+
       return {
         valido: false,
         error_tipo: 'ESTUDIANTE_NO_ENCONTRADO',
@@ -144,6 +177,9 @@ class ReservaCupo {
         };
       }
 
+      // Obtener todas las reservas de la familia (estudiantes regulares y hermanos vinculados)
+      const grupoFamiliar = await ReservaCupo.obtenerGrupoFamiliarPorReserva(reservaExistente, periodoDestino.id);
+
       // Caso 2: Declaró No Continuidad
       if (reservaExistente.estado === 'no_continua') {
         return {
@@ -151,6 +187,8 @@ class ReservaCupo {
           ya_reservado: true,
           estado_reserva: 'no_continua',
           reserva: reservaExistente,
+          todas_las_reservas: grupoFamiliar.reservas,
+          hermanos: grupoFamiliar.hermanos,
           mensaje: `El estudiante ya tiene registrada su declaración de No Continuidad para ${periodoDestino.nombre}`
         };
       }
@@ -162,6 +200,8 @@ class ReservaCupo {
           ya_reservado: true,
           estado_reserva: 'solicitud_anulacion',
           reserva: reservaExistente,
+          todas_las_reservas: grupoFamiliar.reservas,
+          hermanos: grupoFamiliar.hermanos,
           mensaje: `El estudiante tiene una solicitud de anulación de cupo en trámite ante Secretaría.`
         };
       }
@@ -172,6 +212,8 @@ class ReservaCupo {
         ya_reservado: true,
         estado_reserva: 'confirmada',
         reserva: reservaExistente,
+        todas_las_reservas: grupoFamiliar.reservas,
+        hermanos: grupoFamiliar.hermanos,
         mensaje: `El estudiante ya tiene su cupo reservado para ${periodoDestino.nombre}`
       };
     }
@@ -551,6 +593,101 @@ class ReservaCupo {
     `;
     const result = await pool.query(query, [estudianteId, periodoId]);
     return result.rows[0] || null;
+  }
+
+  /**
+   * Obtiene todas las reservas (regulares y hermanos) pertenecientes al mismo tutor o núcleo familiar
+   */
+  static async obtenerGrupoFamiliarPorReserva(reservaPrincipal, periodoId) {
+    if (!reservaPrincipal) return { reservas: [], hermanos: [] };
+
+    const tutorCi = reservaPrincipal.tutor_ci ? reservaPrincipal.tutor_ci.trim() : null;
+
+    // 1. Obtener todas las reservas regulares del mismo tutor o grupo familiar
+    let reservasRegulares = [reservaPrincipal];
+
+    if (tutorCi) {
+      const resTutor = await pool.query(`
+        SELECT 
+          r.*,
+          TO_CHAR(r.fecha_reserva, 'DD/MM/YYYY HH24:MI') as fecha_reserva_formateada,
+          TO_CHAR(r.fecha_reserva, 'YYYY-MM-DD') as fecha_reserva_corta,
+          e.codigo as estudiante_codigo,
+          e.ci as estudiante_ci,
+          e.nombres as estudiante_nombres,
+          e.apellido_paterno as estudiante_apellido_paterno,
+          e.apellido_materno as estudiante_apellido_materno,
+          TRIM(CONCAT(e.nombres, ' ', e.apellido_paterno, ' ', COALESCE(e.apellido_materno, ''))) as estudiante_nombre_completo,
+          e.foto_url as estudiante_foto_url,
+          pa.nombre as periodo_nombre,
+          ga.nombre as grado_actual_nombre,
+          gd.nombre as grado_destino_nombre,
+          nd.nombre as nivel_destino_nombre,
+          td.nombre as turno_destino_nombre,
+          td.hora_inicio as turno_hora_inicio,
+          td.hora_fin as turno_hora_fin
+        FROM reserva_cupo r
+        INNER JOIN estudiante e ON r.estudiante_id = e.id
+        INNER JOIN periodo_academico pa ON r.periodo_academico_id = pa.id
+        LEFT JOIN grado ga ON r.grado_actual_id = ga.id
+        INNER JOIN grado gd ON r.grado_destino_id = gd.id
+        INNER JOIN nivel_academico nd ON gd.nivel_academico_id = nd.id
+        INNER JOIN turno td ON r.turno_destino_id = td.id
+        WHERE r.periodo_academico_id = $1 
+          AND r.deleted_at IS NULL
+          AND (
+            LOWER(TRIM(r.tutor_ci)) = LOWER(TRIM($2))
+            OR r.id = $3
+          )
+        ORDER BY r.id ASC
+      `, [periodoId, tutorCi, reservaPrincipal.id]);
+
+      if (resTutor.rows.length > 0) {
+        reservasRegulares = resTutor.rows;
+      }
+    }
+
+    // 2. Obtener todos los hermanos postulados de este núcleo familiar
+    const idsRegulares = reservasRegulares.map(r => r.estudiante_id);
+    const queryHermanos = `
+      SELECT 
+        rh.*,
+        TO_CHAR(rh.fecha_reserva, 'DD/MM/YYYY HH24:MI') as fecha_reserva_formateada,
+        TO_CHAR(rh.fecha_reserva, 'YYYY-MM-DD') as fecha_reserva_corta,
+        TO_CHAR(rh.fecha_nacimiento, 'YYYY-MM-DD') as fecha_nacimiento_formateada,
+        TRIM(CONCAT(rh.nombres, ' ', rh.apellido_paterno, ' ', COALESCE(rh.apellido_materno, ''))) as nombre_completo,
+        pa.nombre as periodo_nombre,
+        g.nombre as grado_solicitado_nombre,
+        na.nombre as nivel_solicitado_nombre,
+        t.nombre as turno_solicitado_nombre,
+        t.hora_inicio as turno_hora_inicio,
+        t.hora_fin as turno_hora_fin,
+        e.codigo as regular_codigo,
+        e.ci as regular_ci,
+        TRIM(CONCAT(e.nombres, ' ', e.apellido_paterno, ' ', COALESCE(e.apellido_materno, ''))) as regular_nombre_completo,
+        e.foto_url as regular_foto_url
+      FROM reserva_cupo_hermano rh
+      INNER JOIN estudiante e ON rh.hermano_regular_id = e.id
+      INNER JOIN periodo_academico pa ON rh.periodo_academico_id = pa.id
+      INNER JOIN grado g ON rh.grado_solicitado_id = g.id
+      INNER JOIN nivel_academico na ON g.nivel_academico_id = na.id
+      INNER JOIN turno t ON rh.turno_solicitado_id = t.id
+      WHERE rh.periodo_academico_id = $1 
+        AND rh.deleted_at IS NULL
+        AND (
+          rh.hermano_regular_id = ANY($2)
+          ${tutorCi ? 'OR LOWER(TRIM(rh.tutor_ci)) = LOWER(TRIM($3))' : ''}
+        )
+      ORDER BY rh.id ASC
+    `;
+
+    const paramsHermanos = tutorCi ? [periodoId, idsRegulares, tutorCi] : [periodoId, idsRegulares];
+    const resHermanos = await pool.query(queryHermanos, paramsHermanos);
+
+    return {
+      reservas: reservasRegulares,
+      hermanos: resHermanos.rows
+    };
   }
 
   /**
