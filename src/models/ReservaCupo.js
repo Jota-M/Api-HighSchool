@@ -803,6 +803,8 @@ class ReservaCupo {
         gd.nombre as grado_nombre,
         nd.nombre as nivel_nombre,
         COUNT(CASE WHEN r.estado = 'confirmada' THEN 1 END)::int as total_confirmados,
+        COUNT(CASE WHEN r.estado = 'confirmada' AND (td.nombre ILIKE '%mañana%' OR r.turno_destino_id = 1) THEN 1 END)::int as total_manana,
+        COUNT(CASE WHEN r.estado = 'confirmada' AND (td.nombre ILIKE '%tarde%' OR r.turno_destino_id = 2) THEN 1 END)::int as total_tarde,
         COUNT(CASE WHEN r.estado = 'no_continua' THEN 1 END)::int as total_no_continuan,
         COUNT(CASE WHEN r.estado = 'solicitud_anulacion' THEN 1 END)::int as total_solicitudes_anulacion,
         COUNT(CASE WHEN r.estado IN ('anulada', 'cancelada') THEN 1 END)::int as total_anuladas,
@@ -810,6 +812,7 @@ class ReservaCupo {
       FROM grado gd
       INNER JOIN nivel_academico nd ON gd.nivel_academico_id = nd.id
       LEFT JOIN reserva_cupo r ON r.grado_destino_id = gd.id AND r.deleted_at IS NULL ${wherePeriodo ? 'AND r.periodo_academico_id = $1' : ''}
+      LEFT JOIN turno td ON r.turno_destino_id = td.id
       GROUP BY gd.id, gd.nombre, nd.nombre, gd.orden
       ORDER BY gd.orden ASC
     `;
@@ -832,6 +835,368 @@ class ReservaCupo {
         total_secundaria: resumenData.total_secundaria || 0
       },
       por_grado: porGradoRes.rows || []
+    };
+  }
+
+  /**
+   * 📊 BALANCE DE CUPOS ASEGURADOS (Regulares proyectados vs confirmados vs restantes)
+   */
+  static async obtenerBalanceCuposAsegurados({ anioDestino = 2027 } = {}) {
+    const anioActual = anioDestino - 1;
+
+    // Buscar periodo 2027
+    const perDestinoRes = await pool.query(
+      "SELECT id, nombre FROM periodo_academico WHERE nombre ILIKE $1 LIMIT 1",
+      [`%${anioDestino}%`]
+    );
+    const periodoDestinoId = perDestinoRes.rows[0]?.id || null;
+
+    // Buscar periodo 2026
+    const perActualRes = await pool.query(
+      "SELECT id, nombre FROM periodo_academico WHERE nombre ILIKE $1 LIMIT 1",
+      [`%${anioActual}%`]
+    );
+    const periodoActualId = perActualRes.rows[0]?.id || null;
+
+    // 1. Consulta consolidada por Grado Destino
+    const queryGrados = `
+      WITH estudiantes_proyectados AS (
+        SELECT 
+          m.estudiante_id,
+          p.turno_id as turno_origen_id,
+          t_act.nombre as turno_origen_nombre,
+          (
+            SELECT g_sig.id 
+            FROM grado g_sig
+            INNER JOIN nivel_academico na_sig ON g_sig.nivel_academico_id = na_sig.id
+            WHERE (na_sig.orden > na_act.orden) OR (na_sig.orden = na_act.orden AND g_sig.orden > g_act.orden)
+            ORDER BY na_sig.orden ASC, g_sig.orden ASC
+            LIMIT 1
+          ) as grado_destino_id
+        FROM matricula m
+        INNER JOIN periodo_academico pa ON m.periodo_academico_id = pa.id
+        INNER JOIN paralelo p ON m.paralelo_id = p.id
+        INNER JOIN grado g_act ON p.grado_id = g_act.id
+        INNER JOIN nivel_academico na_act ON g_act.nivel_academico_id = na_act.id
+        LEFT JOIN turno t_act ON p.turno_id = t_act.id
+        INNER JOIN estudiante e ON m.estudiante_id = e.id
+        WHERE m.estado = 'activo' AND m.deleted_at IS NULL AND e.activo = true AND e.deleted_at IS NULL
+          ${periodoActualId ? 'AND m.periodo_academico_id = ' + periodoActualId : "AND pa.nombre ILIKE '%" + anioActual + "%'"}
+      )
+      SELECT 
+        gd.id as grado_destino_id,
+        gd.nombre as grado_destino_nombre,
+        gd.orden as grado_orden,
+        nd.id as nivel_id,
+        nd.nombre as nivel_nombre,
+        nd.orden as nivel_orden,
+        COALESCE(COUNT(ep.estudiante_id), 0)::int as total_asegurados,
+        COALESCE(COUNT(CASE WHEN r.estado = 'confirmada' THEN 1 END), 0)::int as total_confirmados,
+        COALESCE(COUNT(CASE WHEN r.estado = 'no_continua' THEN 1 END), 0)::int as total_no_continua,
+        COALESCE(COUNT(CASE WHEN r.estado = 'solicitud_anulacion' THEN 1 END), 0)::int as total_solicitud_anulacion,
+        COALESCE(COUNT(CASE WHEN r.estado IN ('anulada', 'cancelada') THEN 1 END), 0)::int as total_anuladas,
+        (COALESCE(COUNT(ep.estudiante_id), 0) - COALESCE(COUNT(CASE WHEN r.id IS NOT NULL AND r.deleted_at IS NULL THEN 1 END), 0))::int as total_restantes
+      FROM grado gd
+      INNER JOIN nivel_academico nd ON gd.nivel_academico_id = nd.id
+      LEFT JOIN estudiantes_proyectados ep ON ep.grado_destino_id = gd.id
+      LEFT JOIN reserva_cupo r ON r.estudiante_id = ep.estudiante_id 
+        AND r.deleted_at IS NULL 
+        ${periodoDestinoId ? 'AND r.periodo_academico_id = ' + periodoDestinoId : ''}
+      GROUP BY gd.id, gd.nombre, gd.orden, nd.id, nd.nombre, nd.orden
+      ORDER BY nd.orden ASC, gd.orden ASC
+    `;
+
+    // 2. Consulta de turnos desglosados
+    const queryTurnos = `
+      WITH estudiantes_proyectados AS (
+        SELECT 
+          m.estudiante_id,
+          p.turno_id as turno_origen_id,
+          t_act.nombre as turno_origen_nombre,
+          (
+            SELECT g_sig.id 
+            FROM grado g_sig
+            INNER JOIN nivel_academico na_sig ON g_sig.nivel_academico_id = na_sig.id
+            WHERE (na_sig.orden > na_act.orden) OR (na_sig.orden = na_act.orden AND g_sig.orden > g_act.orden)
+            ORDER BY na_sig.orden ASC, g_sig.orden ASC
+            LIMIT 1
+          ) as grado_destino_id
+        FROM matricula m
+        INNER JOIN periodo_academico pa ON m.periodo_academico_id = pa.id
+        INNER JOIN paralelo p ON m.paralelo_id = p.id
+        INNER JOIN grado g_act ON p.grado_id = g_act.id
+        INNER JOIN nivel_academico na_act ON g_act.nivel_academico_id = na_act.id
+        LEFT JOIN turno t_act ON p.turno_id = t_act.id
+        INNER JOIN estudiante e ON m.estudiante_id = e.id
+        WHERE m.estado = 'activo' AND m.deleted_at IS NULL AND e.activo = true AND e.deleted_at IS NULL
+          ${periodoActualId ? 'AND m.periodo_academico_id = ' + periodoActualId : "AND pa.nombre ILIKE '%" + anioActual + "%'"}
+      )
+      SELECT 
+        ep.grado_destino_id,
+        ep.turno_origen_id as turno_id,
+        COALESCE(ep.turno_origen_nombre, td.nombre, 'Sin Turno') as turno_nombre,
+        COUNT(ep.estudiante_id)::int as asegurados,
+        COUNT(CASE WHEN r.estado = 'confirmada' THEN 1 END)::int as confirmados,
+        COUNT(CASE WHEN r.estado = 'no_continua' THEN 1 END)::int as no_continua,
+        (COUNT(ep.estudiante_id) - COUNT(CASE WHEN r.id IS NOT NULL AND r.deleted_at IS NULL THEN 1 END))::int as restantes
+      FROM estudiantes_proyectados ep
+      LEFT JOIN turno td ON ep.turno_origen_id = td.id
+      LEFT JOIN reserva_cupo r ON r.estudiante_id = ep.estudiante_id 
+        AND r.deleted_at IS NULL 
+        ${periodoDestinoId ? 'AND r.periodo_academico_id = ' + periodoDestinoId : ''}
+      GROUP BY ep.grado_destino_id, ep.turno_origen_id, ep.turno_origen_nombre, td.nombre
+      ORDER BY ep.grado_destino_id, ep.turno_origen_id
+    `;
+
+    const [gradosRes, turnosRes] = await Promise.all([
+      pool.query(queryGrados),
+      pool.query(queryTurnos)
+    ]);
+
+    // Asociar turnos a cada grado
+    const turnosPorGrado = {};
+    for (const row of turnosRes.rows) {
+      if (!turnosPorGrado[row.grado_destino_id]) {
+        turnosPorGrado[row.grado_destino_id] = [];
+      }
+      turnosPorGrado[row.grado_destino_id].push({
+        turno_id: row.turno_id,
+        turno_nombre: row.turno_nombre,
+        asegurados: row.asegurados,
+        confirmados: row.confirmados,
+        no_continua: row.no_continua,
+        restantes: row.restantes,
+      });
+    }
+
+    let sumaAsegurados = 0;
+    let sumaConfirmados = 0;
+    let sumaNoContinua = 0;
+    let sumaRestantes = 0;
+
+    const porGrado = gradosRes.rows.map((g) => {
+      const asegurados = g.total_asegurados || 0;
+      const confirmados = g.total_confirmados || 0;
+      const noContinua = g.total_no_continua || 0;
+      const restantes = Math.max(0, g.total_restantes || 0);
+      const porcentaje = asegurados > 0 ? Math.round((confirmados / asegurados) * 100) : 0;
+
+      sumaAsegurados += asegurados;
+      sumaConfirmados += confirmados;
+      sumaNoContinua += noContinua;
+      sumaRestantes += restantes;
+
+      const tList = turnosPorGrado[g.grado_destino_id] || [];
+      const tManana = tList.find(t => t.turno_id === 1) || { asegurados: 0, confirmados: 0, restantes: 0 };
+      const tTarde = tList.find(t => t.turno_id === 2) || { asegurados: 0, confirmados: 0, restantes: 0 };
+
+      return {
+        ...g,
+        grado_id: g.grado_destino_id,
+        grado_nombre: g.grado_destino_nombre,
+        total_asegurados: asegurados,
+        total_confirmados: confirmados,
+        total_no_continua: noContinua,
+        total_restantes: restantes,
+        porcentaje_confirmado: porcentaje,
+        turnos_lista: tList,
+        turnos: {
+          manana: {
+            asegurados: tManana.asegurados || 0,
+            confirmados: tManana.confirmados || 0,
+            restantes: tManana.restantes || 0
+          },
+          tarde: {
+            asegurados: tTarde.asegurados || 0,
+            confirmados: tTarde.confirmados || 0,
+            restantes: tTarde.restantes || 0
+          }
+        }
+      };
+    });
+
+    const porcentajeGlobal = sumaAsegurados > 0 ? Math.round((sumaConfirmados / sumaAsegurados) * 100) : 0;
+
+    const resumenGlobal = {
+      total_asegurados: sumaAsegurados,
+      total_confirmados: sumaConfirmados,
+      total_no_continua: sumaNoContinua,
+      total_restantes: sumaRestantes,
+      porcentaje_confirmado: porcentajeGlobal,
+      gestion_destino: anioDestino,
+      gestion_origen: anioActual
+    };
+
+    return {
+      totales_globales: resumenGlobal,
+      resumen: resumenGlobal,
+      grados: porGrado,
+      por_grado: porGrado
+    };
+  }
+
+  /**
+   * 📋 NÓMINA NOMINAL DE ESTUDIANTES CON CUPO ASEGURADO
+   */
+  static async obtenerEstudiantesCuposAsegurados(filtros = {}) {
+    const {
+      grado_destino_id,
+      turno_id,
+      estado_filtro,
+      search,
+      anioDestino = 2027
+    } = filtros;
+
+    const anioActual = anioDestino - 1;
+
+    // Buscar periodo 2027 y 2026
+    const perDestinoRes = await pool.query(
+      "SELECT id, nombre FROM periodo_academico WHERE nombre ILIKE $1 LIMIT 1",
+      [`%${anioDestino}%`]
+    );
+    const periodoDestinoId = perDestinoRes.rows[0]?.id || null;
+
+    const perActualRes = await pool.query(
+      "SELECT id, nombre FROM periodo_academico WHERE nombre ILIKE $1 LIMIT 1",
+      [`%${anioActual}%`]
+    );
+    const periodoActualId = perActualRes.rows[0]?.id || null;
+
+    let whereExtra = '';
+    const params = [];
+    let pIdx = 1;
+
+    if (grado_destino_id) {
+      whereExtra += ` AND ep.grado_destino_id = $${pIdx}`;
+      params.push(parseInt(grado_destino_id, 10));
+      pIdx++;
+    }
+
+    if (turno_id) {
+      whereExtra += ` AND ep.turno_origen_id = $${pIdx}`;
+      params.push(parseInt(turno_id, 10));
+      pIdx++;
+    }
+
+    if (search) {
+      whereExtra += ` AND (
+        e.nombres ILIKE $${pIdx} OR 
+        e.apellido_paterno ILIKE $${pIdx} OR 
+        e.apellido_materno ILIKE $${pIdx} OR 
+        e.ci ILIKE $${pIdx} OR 
+        e.codigo ILIKE $${pIdx} OR
+        t.nombres ILIKE $${pIdx} OR
+        t.apellidos ILIKE $${pIdx} OR
+        t.telefono ILIKE $${pIdx} OR
+        r.tutor_nombre ILIKE $${pIdx} OR
+        r.tutor_telefono ILIKE $${pIdx}
+      )`;
+      params.push(`%${search.trim()}%`);
+      pIdx++;
+    }
+
+    const query = `
+      WITH estudiantes_proyectados AS (
+        SELECT 
+          m.estudiante_id,
+          g_act.id as grado_origen_id,
+          g_act.nombre as grado_origen_nombre,
+          p.turno_id as turno_origen_id,
+          t_act.nombre as turno_origen_nombre,
+          p.nombre as paralelo_origen_nombre,
+          (
+            SELECT g_sig.id 
+            FROM grado g_sig
+            INNER JOIN nivel_academico na_sig ON g_sig.nivel_academico_id = na_sig.id
+            WHERE (na_sig.orden > na_act.orden) OR (na_sig.orden = na_act.orden AND g_sig.orden > g_act.orden)
+            ORDER BY na_sig.orden ASC, g_sig.orden ASC
+            LIMIT 1
+          ) as grado_destino_id
+        FROM matricula m
+        INNER JOIN periodo_academico pa ON m.periodo_academico_id = pa.id
+        INNER JOIN paralelo p ON m.paralelo_id = p.id
+        INNER JOIN grado g_act ON p.grado_id = g_act.id
+        INNER JOIN nivel_academico na_act ON g_act.nivel_academico_id = na_act.id
+        LEFT JOIN turno t_act ON p.turno_id = t_act.id
+        INNER JOIN estudiante e ON m.estudiante_id = e.id
+        WHERE m.estado = 'activo' AND m.deleted_at IS NULL AND e.activo = true AND e.deleted_at IS NULL
+          ${periodoActualId ? 'AND m.periodo_academico_id = ' + periodoActualId : "AND pa.nombre ILIKE '%" + anioActual + "%'"}
+      )
+      SELECT 
+        e.id as estudiante_id,
+        e.codigo as estudiante_codigo,
+        e.ci as estudiante_ci,
+        e.nombres as estudiante_nombres,
+        e.apellido_paterno as estudiante_apellido_paterno,
+        e.apellido_materno as estudiante_apellido_materno,
+        TRIM(CONCAT(e.nombres, ' ', e.apellido_paterno, ' ', COALESCE(e.apellido_materno, ''))) as estudiante_nombre_completo,
+        e.foto_url as estudiante_foto_url,
+        ep.grado_origen_nombre,
+        ep.paralelo_origen_nombre,
+        ep.turno_origen_id,
+        ep.turno_origen_nombre,
+        gd.id as grado_destino_id,
+        gd.nombre as grado_destino_nombre,
+        nd.nombre as nivel_destino_nombre,
+        COALESCE(r.estado, 'pendiente') as estado_reserva,
+        r.codigo_reserva,
+        r.codigo_recibo,
+        r.fecha_reserva,
+        TO_CHAR(r.fecha_reserva, 'DD/MM/YYYY HH24:MI') as fecha_reserva_formateada,
+        COALESCE(r.tutor_nombre, TRIM(CONCAT(pf.nombres, ' ', pf.apellido_paterno)), 'Tutor Regular') as tutor_nombre,
+        COALESCE(r.tutor_telefono, pf.celular, pf.telefono, e.telefono, e.contacto_emergencia) as tutor_telefono,
+        COALESCE(r.tutor_parentesco, pf.parentesco, 'Tutor') as tutor_parentesco,
+        r.motivo_no_continua,
+        r.motivo_anulacion
+      FROM estudiantes_proyectados ep
+      INNER JOIN estudiante e ON ep.estudiante_id = e.id
+      INNER JOIN grado gd ON ep.grado_destino_id = gd.id
+      INNER JOIN nivel_academico nd ON gd.nivel_academico_id = nd.id
+      LEFT JOIN reserva_cupo r ON r.estudiante_id = e.id 
+        AND r.deleted_at IS NULL 
+        ${periodoDestinoId ? 'AND r.periodo_academico_id = ' + periodoDestinoId : ''}
+      LEFT JOIN estudiante_tutor et ON et.estudiante_id = e.id AND et.es_tutor_principal = true
+      LEFT JOIN padre_familia pf ON et.padre_familia_id = pf.id
+      WHERE 1=1 ${whereExtra}
+      ORDER BY gd.orden ASC, e.apellido_paterno ASC, e.nombres ASC
+    `;
+
+    const result = await pool.query(query, params);
+    let estudiantes = result.rows;
+
+    if (estado_filtro && estado_filtro !== 'todos') {
+      if (estado_filtro === 'pendiente') {
+        estudiantes = estudiantes.filter(e => e.estado_reserva === 'pendiente');
+      } else {
+        estudiantes = estudiantes.filter(e => e.estado_reserva === estado_filtro);
+      }
+    }
+
+    const formateados = estudiantes.map(e => ({
+      estudiante_id: e.estudiante_id,
+      codigo_estudiante: e.estudiante_codigo,
+      nombre_completo: e.estudiante_nombre_completo,
+      ci: e.estudiante_ci || '',
+      curso_actual_2026: `${e.grado_origen_nombre} (${e.paralelo_origen_nombre || 'A'}) - ${e.turno_origen_nombre || ''}`,
+      grado_destino_id: e.grado_destino_id,
+      grado_destino_nombre: e.grado_destino_nombre,
+      nivel_destino: e.nivel_destino_nombre,
+      turno_destino_id: e.turno_origen_id,
+      turno_destino_nombre: e.turno_origen_nombre,
+      estado_confirmacion: e.estado_reserva === 'confirmada' ? 'CONFIRMADO' : e.estado_reserva === 'no_continua' ? 'NO_CONTINUA' : 'PENDIENTE',
+      codigo_reserva: e.codigo_recibo || e.codigo_reserva || null,
+      fecha_reserva: e.fecha_reserva_formateada || null,
+      tutor_nombre: e.tutor_nombre || null,
+      tutor_telefono: e.tutor_telefono || null,
+      tutor_parentesco: e.tutor_parentesco || null
+    }));
+
+    return {
+      estudiantes: formateados,
+      total: formateados.length,
+      pagina: 1,
+      limite: formateados.length,
+      total_paginas: 1
     };
   }
 }

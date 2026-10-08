@@ -974,6 +974,7 @@ class ReservaCupoController {
         periodo_academico_id,
         grado_destino_id,
         nivel_destino_id,
+        turno_destino_id,
         estado,
         search
       } = req.query;
@@ -982,6 +983,7 @@ class ReservaCupoController {
         periodo_academico_id: periodo_academico_id ? parseInt(periodo_academico_id, 10) : undefined,
         grado_destino_id: grado_destino_id ? parseInt(grado_destino_id, 10) : undefined,
         nivel_destino_id: nivel_destino_id ? parseInt(nivel_destino_id, 10) : undefined,
+        turno_destino_id: turno_destino_id ? parseInt(turno_destino_id, 10) : undefined,
         estado,
         search,
         page: 1,
@@ -994,10 +996,28 @@ class ReservaCupoController {
         periodo_academico_id ? parseInt(periodo_academico_id, 10) : null
       );
 
+      // Metadatos para encabezados
+      let gradoNombre = null;
+      let turnoNombre = null;
+      if (reservas.length > 0) {
+        if (grado_destino_id) gradoNombre = reservas[0].grado_destino_nombre;
+        if (turno_destino_id) turnoNombre = reservas[0].turno_destino_nombre;
+      }
+      if (!turnoNombre && turno_destino_id) {
+        const turnoQuery = await pool.query('SELECT nombre FROM turno WHERE id = $1', [parseInt(turno_destino_id, 10)]);
+        turnoNombre = turnoQuery.rows[0]?.nombre || null;
+      }
+      if (!gradoNombre && grado_destino_id) {
+        const gradoQuery = await pool.query('SELECT nombre FROM grado WHERE id = $1', [parseInt(grado_destino_id, 10)]);
+        gradoNombre = gradoQuery.rows[0]?.nombre || null;
+      }
+
+      const meta = { gradoNombre, turnoNombre };
+
       if (formato === 'excel') {
-        return await ReservaCupoController._excelReservas(res, reservas, stats.resumen);
+        return await ReservaCupoController._excelReservas(res, reservas, stats.resumen, meta);
       } else {
-        return ReservaCupoController._pdfReservas(res, reservas, stats.resumen);
+        return ReservaCupoController._pdfReservas(res, reservas, stats.resumen, meta);
       }
 
     } catch (error) {
@@ -1012,25 +1032,40 @@ class ReservaCupoController {
   /**
    * Generación de PDF institucional tipo Docente / Calificaciones
    */
-  static _pdfReservas(res, reservas, resumen) {
+  static _pdfReservas(res, reservas, resumen, meta = {}) {
     const pdf = new PDFGenerator({ margin: 35, landscape: true, title: 'Reporte de Reservas de Cupos 2027' });
     const fechaStr = new Date().toISOString().slice(0, 10);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=Reporte_Reservas_Cupos_2027_${fechaStr}.pdf`);
     pdf.pipe(res);
 
+    const subtituloPartes = ['Gestión Académica 2027', 'Estudiantes Regulares'];
+    if (meta.gradoNombre) subtituloPartes.push(meta.gradoNombre);
+    if (meta.turnoNombre) subtituloPartes.push(`Turno ${meta.turnoNombre}`);
+    subtituloPartes.push('U.E.P. La Voz de Cristo');
+
     pdf.drawHeader(
       'REPORTE OFICIAL DE RESERVAS Y NO CONTINUIDAD',
-      'Gestión Académica 2027 · Estudiantes Regulares · U.E.P. La Voz de Cristo'
+      subtituloPartes.join(' · ')
     );
 
-    pdf.drawInfoBox([
+    const infoItems = [
       { label: 'Gestión Destino', value: 'Gestión 2027' },
       { label: 'Fecha de Emisión', value: formatearFecha(new Date(), 'largo') },
-      { label: 'Total Registros', value: (reservas.length).toString() },
-      { label: 'Confirmadas', value: (resumen?.total_confirmadas || 0).toString() },
-      { label: 'No Continuarán', value: (resumen?.total_no_continua || 0).toString() },
-    ], 2);
+    ];
+    if (meta.gradoNombre) {
+      infoItems.push({ label: 'Grado Destino', value: meta.gradoNombre });
+    }
+    if (meta.turnoNombre) {
+      infoItems.push({ label: 'Turno', value: `Turno ${meta.turnoNombre}` });
+    } else {
+      infoItems.push({ label: 'Turnos', value: 'Consolidado Global (Mañana y Tarde)' });
+    }
+    infoItems.push({ label: 'Total Registros', value: (reservas.length).toString() });
+    infoItems.push({ label: 'Confirmadas', value: (resumen?.total_confirmadas || 0).toString() });
+    infoItems.push({ label: 'No Continuarán', value: (resumen?.total_no_continua || 0).toString() });
+
+    pdf.drawInfoBox(infoItems, 2);
 
     pdf.drawSection('RESUMEN DE REGISTROS');
     pdf.drawStatsGrid([
@@ -1041,8 +1076,8 @@ class ReservaCupoController {
     ], 4);
 
     pdf.drawSection('DETALLE DE ESTUDIANTES');
-    const headers = ['#', 'Nº Recibo', 'Cód. Reserva', 'Estudiante', 'CI', 'Grado 2027', 'Decisión / Estado', 'Persona que Tramitó', 'Teléfono'];
-    const colWidths = [20, 65, 65, 130, 55, 85, 80, 105, 55];
+    const headers = ['#', 'Nº Recibo', 'Cód. Reserva', 'Estudiante', 'CI', 'Grado 2027', 'Turno', 'Decisión / Estado', 'Persona que Tramitó', 'Teléfono'];
+    const colWidths = [20, 60, 60, 130, 50, 85, 55, 75, 100, 55];
 
     const formatearEstado = (est) => {
       switch (est) {
@@ -1062,6 +1097,7 @@ class ReservaCupoController {
       r.estudiante_nombre_completo || '—',
       r.estudiante_ci || '—',
       r.grado_destino_nombre || '—',
+      r.turno_destino_nombre ? `Turno ${r.turno_destino_nombre}` : '—',
       formatearEstado(r.estado),
       `${r.tutor_nombre} (${r.tutor_parentesco})`,
       r.tutor_telefono || '—'
@@ -1074,23 +1110,36 @@ class ReservaCupoController {
   /**
    * Generación de Excel con estilos institucionales
    */
-  static async _excelReservas(res, reservas, resumen) {
+  static async _excelReservas(res, reservas, resumen, meta = {}) {
     const excel = new ExcelGenerator();
     const ws = excel.createSheet('Reservas de Cupos 2027', { landscape: true });
+
+    const subtituloExcel = ['Gestión Académica 2027', 'Estudiantes Regulares'];
+    if (meta.gradoNombre) subtituloExcel.push(meta.gradoNombre);
+    if (meta.turnoNombre) subtituloExcel.push(`Turno ${meta.turnoNombre}`);
+    subtituloExcel.push('U.E.P. La Voz de Cristo');
 
     excel.addTitle(
       ws,
       'REPORTE OFICIAL DE RESERVAS Y NO CONTINUIDAD',
-      'Gestión Académica 2027 · Estudiantes Regulares · U.E.P. La Voz de Cristo'
+      subtituloExcel.join(' · ')
     );
 
-    excel.addInfoBox(ws, [
+    const infoBoxItems = [
       { label: 'Gestión', value: 'Gestión 2027' },
       { label: 'Fecha de Emisión', value: formatearFecha(new Date(), 'largo') },
-      { label: 'Total Registros', value: reservas.length },
-      { label: 'Confirmadas', value: resumen?.total_confirmadas || 0 },
-      { label: 'No Continuarán', value: resumen?.total_no_continua || 0 },
-    ]);
+    ];
+    if (meta.gradoNombre) {
+      infoBoxItems.push({ label: 'Grado Destino', value: meta.gradoNombre });
+    }
+    if (meta.turnoNombre) {
+      infoBoxItems.push({ label: 'Turno', value: `Turno ${meta.turnoNombre}` });
+    }
+    infoBoxItems.push({ label: 'Total Registros', value: reservas.length });
+    infoBoxItems.push({ label: 'Confirmadas', value: resumen?.total_confirmadas || 0 });
+    infoBoxItems.push({ label: 'No Continuarán', value: resumen?.total_no_continua || 0 });
+
+    excel.addInfoBox(ws, infoBoxItems);
 
     excel.addStats(ws, [
       { label: 'Confirmadas', value: resumen?.total_confirmadas || 0 },
@@ -1110,7 +1159,7 @@ class ReservaCupoController {
       }
     };
 
-    const headers = ['#', 'Nº Recibo', 'Cód. Reserva', 'Estudiante', 'CI', 'Grado Actual', 'Grado Destino (2027)', 'Estado / Decisión', 'Motivo Detallado', 'Persona que Tramitó', 'Parentesco', 'CI Tutor', 'Teléfono / WhatsApp', 'Fecha Registro'];
+    const headers = ['#', 'Nº Recibo', 'Cód. Reserva', 'Estudiante', 'CI', 'Grado Actual', 'Grado Destino (2027)', 'Turno Destino', 'Estado / Decisión', 'Motivo Detallado', 'Persona que Tramitó', 'Parentesco', 'CI Tutor', 'Teléfono / WhatsApp', 'Fecha Registro'];
     const rows = reservas.map((r, idx) => [
       idx + 1,
       r.codigo_recibo,
@@ -1119,6 +1168,7 @@ class ReservaCupoController {
       r.estudiante_ci,
       r.grado_actual_nombre || '—',
       r.grado_destino_nombre,
+      r.turno_destino_nombre ? `Turno ${r.turno_destino_nombre}` : '—',
       formatearEstado(r.estado),
       r.motivo_no_continua || r.motivo_anulacion || r.observaciones || '—',
       r.tutor_nombre,
@@ -1130,7 +1180,7 @@ class ReservaCupoController {
 
     excel.addTable(ws, headers, rows, {
       sectionTitle: 'LISTA DE ESTUDIANTES REGULARES (GESTIÓN 2027)',
-      columnWidths: [6, 16, 16, 28, 14, 18, 20, 18, 26, 24, 14, 14, 16, 18]
+      columnWidths: [6, 16, 16, 28, 14, 18, 20, 16, 18, 26, 24, 14, 14, 16, 18]
     });
 
     excel.addFooter(ws);
@@ -1350,6 +1400,67 @@ class ReservaCupoController {
     res.setHeader('Content-Disposition', `attachment; filename=Reporte_Hermanos_Postulantes_2027_${fechaStr}.xlsx`);
     await excel.write(res);
     res.end();
+  }
+
+  /**
+   * 📊 BALANCE DE CUPOS ASEGURADOS (CONTINUIDAD REGULAR)
+   * GET /api/reserva-cupo/admin/cupos-asegurados
+   */
+  static async obtenerBalanceCuposAsegurados(req, res) {
+    try {
+      const anioDestino = parseInt(req.query.anio_destino || '2027', 10);
+      const balance = await ReservaCupo.obtenerBalanceCuposAsegurados({ anioDestino });
+      res.json({
+        success: true,
+        data: balance
+      });
+    } catch (error) {
+      console.error('Error al obtener balance de cupos asegurados:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al obtener balance de cupos asegurados',
+        error: error.message
+      });
+    }
+  }
+
+  /**
+   * 📋 DETALLE DE ESTUDIANTES CON CUPO ASEGURADO
+   * GET /api/reserva-cupo/admin/cupos-asegurados/estudiantes
+   */
+  static async obtenerEstudiantesCuposAsegurados(req, res) {
+    try {
+      const {
+        grado_destino_id,
+        turno_destino_id,
+        estado_confirmacion,
+        busqueda,
+        limite,
+        pagina
+      } = req.query;
+
+      const resultado = await ReservaCupo.obtenerEstudiantesCuposAsegurados({
+        grado_destino_id: grado_destino_id ? parseInt(grado_destino_id, 10) : undefined,
+        turno_id: turno_destino_id ? parseInt(turno_destino_id, 10) : undefined,
+        estado_filtro: estado_confirmacion === 'confirmados' ? 'confirmada' : estado_confirmacion === 'pendientes' ? 'pendiente' : estado_confirmacion === 'no_continua' ? 'no_continua' : undefined,
+        search: busqueda,
+        limite: limite ? parseInt(limite, 10) : 100,
+        pagina: pagina ? parseInt(pagina, 10) : 1,
+        anioDestino: 2027
+      });
+
+      res.json({
+        success: true,
+        data: resultado
+      });
+    } catch (error) {
+      console.error('Error al obtener estudiantes con cupo asegurado:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al obtener estudiantes con cupo asegurado',
+        error: error.message
+      });
+    }
   }
 }
 

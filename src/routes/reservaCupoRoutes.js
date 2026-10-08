@@ -63,6 +63,18 @@ router.get('/admin/listado', authenticate, ReservaCupoController.listarAdmin);
 router.get('/admin/estadisticas', authenticate, ReservaCupoController.obtenerEstadisticas);
 
 /**
+ * GET /api/reserva-cupo/admin/cupos-asegurados
+ * Balance de cupos de estudiantes regulares proyectados para el siguiente periodo lectivo.
+ */
+router.get('/admin/cupos-asegurados', authenticate, ReservaCupoController.obtenerBalanceCuposAsegurados);
+
+/**
+ * GET /api/reserva-cupo/admin/cupos-asegurados/estudiantes
+ * Listado de estudiantes con cupo asegurado, filtrable por grado, turno y estado (confirmados/pendientes).
+ */
+router.get('/admin/cupos-asegurados/estudiantes', authenticate, ReservaCupoController.obtenerEstudiantesCuposAsegurados);
+
+/**
  * GET /api/reserva-cupo/admin/exportar
  * Exportación oficial de reservas a Excel o PDF.
  */
