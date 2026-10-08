@@ -1199,6 +1199,30 @@ class ReservaCupo {
       total_paginas: 1
     };
   }
+
+  /**
+   * Obtiene nombres paramétricos para metadatos de reportes (grado, turno, nivel)
+   */
+  static async obtenerNombresParametricos({ grado_id, turno_id, nivel_id } = {}) {
+    let gradoNombre = null;
+    let turnoNombre = null;
+    let nivelNombre = null;
+
+    if (grado_id) {
+      const gRes = await pool.query('SELECT nombre FROM grado WHERE id = $1', [parseInt(grado_id, 10)]);
+      gradoNombre = gRes.rows[0]?.nombre || null;
+    }
+    if (turno_id) {
+      const tRes = await pool.query('SELECT nombre FROM turno WHERE id = $1', [parseInt(turno_id, 10)]);
+      turnoNombre = tRes.rows[0]?.nombre || null;
+    }
+    if (nivel_id) {
+      const nRes = await pool.query('SELECT nombre FROM nivel_academico WHERE id = $1', [parseInt(nivel_id, 10)]);
+      nivelNombre = nRes.rows[0]?.nombre || null;
+    }
+
+    return { gradoNombre, turnoNombre, nivelNombre };
+  }
 }
 
 export default ReservaCupo;

@@ -996,20 +996,23 @@ class ReservaCupoController {
         periodo_academico_id ? parseInt(periodo_academico_id, 10) : null
       );
 
-      // Metadatos para encabezados
+      // Metadatos para encabezados (obtenidos del primer registro o a través del modelo)
       let gradoNombre = null;
       let turnoNombre = null;
+
       if (reservas.length > 0) {
         if (grado_destino_id) gradoNombre = reservas[0].grado_destino_nombre;
         if (turno_destino_id) turnoNombre = reservas[0].turno_destino_nombre;
       }
-      if (!turnoNombre && turno_destino_id) {
-        const turnoQuery = await pool.query('SELECT nombre FROM turno WHERE id = $1', [parseInt(turno_destino_id, 10)]);
-        turnoNombre = turnoQuery.rows[0]?.nombre || null;
-      }
-      if (!gradoNombre && grado_destino_id) {
-        const gradoQuery = await pool.query('SELECT nombre FROM grado WHERE id = $1', [parseInt(grado_destino_id, 10)]);
-        gradoNombre = gradoQuery.rows[0]?.nombre || null;
+
+      if ((!gradoNombre && grado_destino_id) || (!turnoNombre && turno_destino_id) || nivel_destino_id) {
+        const paramsMeta = await ReservaCupo.obtenerNombresParametricos({
+          grado_id: grado_destino_id,
+          turno_id: turno_destino_id,
+          nivel_id: nivel_destino_id,
+        });
+        if (!gradoNombre) gradoNombre = paramsMeta.gradoNombre;
+        if (!turnoNombre) turnoNombre = paramsMeta.turnoNombre;
       }
 
       const meta = { gradoNombre, turnoNombre };
