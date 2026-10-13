@@ -5,44 +5,153 @@ import { Matricula } from './Matricula.js';
 import EmailService from '../utils/emailService.js';
 import WhatsAppService from '../utils/whatsappService.js';
 import Usuario from './Usuario.js';
+import { CupoPreinscripcion } from './CupoPreinscripcion.js';
 
 class PreInscripcion {
   // =============================================
-  // VERIFICAR Y ASIGNAR CUPO
+  // VERIFICAR Y ASIGNAR CUPO (DINÁMICO CON RESERVA DE CUPOS)
   // =============================================
   static async verificarYAsignarCupo(gradoId, turnoId, periodoAcademicoId, client) {
-    const cupoResult = await client.query(`
-      SELECT * FROM cupo_preinscripcion
-      WHERE grado_id = $1 
-        AND turno_id = $2 
-        AND periodo_academico_id = $3
-        AND activo = true
-        AND cupos_disponibles > 0
-      LIMIT 1
-    `, [gradoId, turnoId, periodoAcademicoId]);
+    const disp = await CupoPreinscripcion.calcularDisponibilidadDinamica({
+      gradoId,
+      turnoId,
+      periodoAcademicoId,
+      client
+    });
 
-    if (cupoResult.rows.length === 0) {
+    if (!disp.tiene_cupos) {
       return {
         tiene_cupo: false,
-        cupo_id: null,
-        mensaje: 'No hay cupos disponibles para este grado y turno'
+        cupo_id: disp.cupo_id || null,
+        posicion_espera: disp.posicion_espera || 1,
+        turno_alternativo: disp.turno_alternativo,
+        mensaje: disp.mensaje || 'No hay cupos disponibles para este grado y turno'
       };
     }
 
-    const cupo = cupoResult.rows[0];
-
-    await client.query(`
-      UPDATE cupo_preinscripcion
-      SET cupos_ocupados = cupos_ocupados + 1,
-          updated_at = NOW()
-      WHERE id = $1
-    `, [cupo.id]);
+    if (disp.cupo_id) {
+      await client.query(`
+        UPDATE cupo_preinscripcion
+        SET cupos_ocupados = cupos_ocupados + 1,
+            updated_at = NOW()
+        WHERE id = $1
+      `, [disp.cupo_id]);
+    }
 
     return {
       tiene_cupo: true,
-      cupo_id: cupo.id,
+      cupo_id: disp.cupo_id,
+      posicion_espera: 0,
       mensaje: 'Cupo asignado exitosamente'
     };
+  }
+
+  // =============================================
+  // REORDENAR LISTA DE ESPERA
+  // =============================================
+  static async reordenarListaEspera({ gradoId, turnoId, periodoId, client = null }) {
+    const conn = client || pool;
+    if (!gradoId || !turnoId || !periodoId) return;
+
+    await conn.query(`
+      WITH reordenados AS (
+        SELECT id, ROW_NUMBER() OVER (ORDER BY id ASC) as nueva_pos
+        FROM pre_inscripcion
+        WHERE grado_id = $1 
+          AND turno_preferido_id = $2 
+          AND periodo_academico_id = $3
+          AND estado = 'en_espera'
+          AND deleted_at IS NULL
+      )
+      UPDATE pre_inscripcion pi
+      SET posicion_espera = r.nueva_pos
+      FROM reordenados r
+      WHERE pi.id = r.id;
+    `, [gradoId, turnoId, periodoId]);
+  }
+
+  // =============================================
+  // PROMOVER DE LISTA DE ESPERA A CUPO DIRECTO
+  // =============================================
+  static async promoverDeListaEspera(id, usuarioId, motivo = null, externalClient = null) {
+    const client = externalClient || await pool.connect();
+    const shouldManageTransaction = !externalClient;
+
+    try {
+      if (shouldManageTransaction) {
+        await client.query('BEGIN');
+      }
+
+      const preRes = await client.query(`
+        SELECT * FROM pre_inscripcion WHERE id = $1 AND deleted_at IS NULL FOR UPDATE
+      `, [id]);
+
+      if (preRes.rows.length === 0) {
+        throw new Error('Preinscripción no encontrada');
+      }
+
+      const pre = preRes.rows[0];
+      if (pre.estado !== 'en_espera') {
+        throw new Error(`La preinscripción no está en lista de espera (estado actual: ${pre.estado})`);
+      }
+
+      // Verificar/asignar cupo dinámico
+      const disp = await CupoPreinscripcion.calcularDisponibilidadDinamica({
+        gradoId: pre.grado_id,
+        turnoId: pre.turno_preferido_id,
+        periodoAcademicoId: pre.periodo_academico_id,
+        client
+      });
+
+      let cupoId = disp.cupo_id;
+      if (cupoId) {
+        await client.query(`
+          UPDATE cupo_preinscripcion
+          SET cupos_ocupados = cupos_ocupados + 1,
+              updated_at = NOW()
+          WHERE id = $1
+        `, [cupoId]);
+      }
+
+      const nuevoObs = motivo 
+        ? `${pre.observaciones ? pre.observaciones + ' | ' : ''}Promovido de Lista de Espera: ${motivo}`
+        : (pre.observaciones || 'Promovido de Lista de Espera por Administración');
+
+      const result = await client.query(`
+        UPDATE pre_inscripcion
+        SET estado = 'datos_completos',
+            tiene_cupo_asignado = true,
+            cupo_preinscripcion_id = COALESCE($1, cupo_preinscripcion_id),
+            posicion_espera = 0,
+            observaciones = $2,
+            updated_at = NOW()
+        WHERE id = $3
+        RETURNING *
+      `, [cupoId, nuevoObs, id]);
+
+      // Reordenar a los demás que siguen en espera
+      await this.reordenarListaEspera({
+        gradoId: pre.grado_id,
+        turnoId: pre.turno_preferido_id,
+        periodoId: pre.periodo_academico_id,
+        client
+      });
+
+      if (shouldManageTransaction) {
+        await client.query('COMMIT');
+      }
+
+      return result.rows[0];
+    } catch (err) {
+      if (shouldManageTransaction) {
+        await client.query('ROLLBACK');
+      }
+      throw err;
+    } finally {
+      if (shouldManageTransaction) {
+        client.release();
+      }
+    }
   }
 
   // =============================================
@@ -78,8 +187,8 @@ class PreInscripcion {
       `);
       const codigoInscripcion = codigoResult.rows[0].codigo;
 
-      // 2. Asignar cupo (si se proporcionan los datos)
-      let cupoAsignado = { tiene_cupo: false, cupo_id: null };
+      // 2. Asignar cupo o registrar en lista de espera
+      let cupoAsignado = { tiene_cupo: false, cupo_id: null, posicion_espera: 0 };
 
       if (options.grado_id && options.turno_id && options.periodo_academico_id) {
         cupoAsignado = await this.verificarYAsignarCupo(
@@ -89,6 +198,9 @@ class PreInscripcion {
           client
         );
       }
+
+      const estadoInicial = cupoAsignado.tiene_cupo ? 'datos_completos' : 'en_espera';
+      const posicionEspera = cupoAsignado.tiene_cupo ? 0 : (cupoAsignado.posicion_espera || 1);
 
       // 3. Crear pre_inscripcion
       const inscripcionResult = await client.query(`
@@ -100,18 +212,21 @@ class PreInscripcion {
           grado_id,
           turno_preferido_id,
           cupo_preinscripcion_id,
-          tiene_cupo_asignado
+          tiene_cupo_asignado,
+          posicion_espera
         )
-        VALUES ($1, 'datos_completos', $2, $3, $4, $5, $6, $7)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         RETURNING *
       `, [
         codigoInscripcion,
+        estadoInicial,
         options.periodo_academico_id || null,
         options.nivel_academico_id || null,
         options.grado_id || null,
         options.turno_id || null,
         cupoAsignado.cupo_id,
-        cupoAsignado.tiene_cupo
+        cupoAsignado.tiene_cupo,
+        posicionEspera
       ]);
 
       const preInscripcionId = inscripcionResult.rows[0].id;
@@ -263,7 +378,7 @@ class PreInscripcion {
       LEFT JOIN turno t ON pi.turno_preferido_id = t.id
       LEFT JOIN cupo_preinscripcion cp ON pi.cupo_preinscripcion_id = cp.id
       WHERE ${whereClause}
-      ORDER BY pi.created_at DESC
+      ORDER BY ${estado === 'en_espera' ? 'pi.posicion_espera ASC, pi.created_at ASC' : 'pi.created_at DESC'}
       LIMIT $${paramCount} OFFSET $${paramCount + 1}
     `;
 
@@ -654,6 +769,28 @@ class PreInscripcion {
         throw new Error('Preinscripción no encontrada');
       }
 
+      // Liberar cupo si se rechaza o cancela
+      const cupoId = result.rows[0]?.cupo_preinscripcion_id;
+      if (['rechazada', 'cancelada'].includes(nuevoEstado) && !['rechazada', 'cancelada'].includes(estadoAnterior) && cupoId) {
+        await this.liberarCupo(cupoId, client);
+        await client.query(
+          'UPDATE pre_inscripcion SET tiene_cupo_asignado = false WHERE id = $1',
+          [id]
+        );
+      }
+
+      // Si estaba en lista de espera y cambió a otro estado, reordenar a los demás
+      if (estadoAnterior === 'en_espera' && nuevoEstado !== 'en_espera') {
+        const rowModificada = result.rows[0];
+        await client.query('UPDATE pre_inscripcion SET posicion_espera = 0 WHERE id = $1', [id]);
+        await this.reordenarListaEspera({
+          gradoId: rowModificada.grado_id,
+          turnoId: rowModificada.turno_preferido_id,
+          periodoId: rowModificada.periodo_academico_id,
+          client
+        });
+      }
+
       if (shouldManageTransaction) {
         await client.query('COMMIT');
       }
@@ -665,7 +802,7 @@ class PreInscripcion {
             const preinscripcionCompleta = await this.obtenerPorId(id);
 
             // 📧 Email
-            await EmailService.notificarCambioEstado(preinscripcionCompleta, estadoAnterior);
+            // await EmailService.notificarCambioEstado(preinscripcionCompleta, estadoAnterior);
 
             // 📱 WhatsApp (NUEVO)
             await WhatsAppService.notificarCambioEstado(preinscripcionCompleta, estadoAnterior);

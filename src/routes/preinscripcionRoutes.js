@@ -51,13 +51,22 @@ const cpUpload = upload.fields([
   { name: 'libreta_notas', maxCount: 1 },
   { name: 'cedula_representante', maxCount: 1 },
 ]);
+// Middleware para ejecutar multer solo si viene como multipart/form-data
+const uploadIfMultipart = (uploadMiddleware) => (req, res, next) => {
+  const contentType = req.headers['content-type'] || '';
+  if (contentType.includes('multipart/form-data')) {
+    return uploadMiddleware(req, res, next);
+  }
+  next();
+};
+
 router.get('/buscar-padre/:ci', PreInscripcionController.buscarPadrePorCI);
 
-// 🆕 Crear preinscripción múltiple (varios estudiantes, un padre)
+// 🆕 Crear preinscripción múltiple (varios estudiantes y tutores, payload JSON o multipart)
 router.post(
   '/multiple', 
-  multipleUpload,
-  formDataConfigs.preInscripcionMultiple, // Necesitarás crear este middleware
+  uploadIfMultipart(multipleUpload),
+  formDataConfigs.preInscripcionMultiple,
   PreInscripcionController.crearMultiple
 );
 
@@ -77,7 +86,7 @@ const reuploadFields = upload.fields([
 // Crear preinscripción
 router.post(
   '/', 
-  cpUpload,
+  uploadIfMultipart(cpUpload),
   formDataConfigs.preInscripcion,
   PreInscripcionController.crear
 );
@@ -117,6 +126,9 @@ router.patch(
   authenticate,
   PreInscripcionController.marcarDocumentoObservado
 );
+
+// Promover de lista de espera a cupo directo (ADMIN)
+router.post('/:id/promover-espera', authenticate, PreInscripcionController.promoverDeListaEspera);
 
 // Convertir a estudiante
 router.post('/:id/convertir', authenticate, PreInscripcionController.convertirAEstudiante);

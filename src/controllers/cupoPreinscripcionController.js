@@ -6,6 +6,46 @@ import RequestInfo from '../utils/requestInfo.js';
 class CupoPreinscripcionController {
   
   /**
+   * VERIFICAR DISPONIBILIDAD (PÚBLICO - motor dinámico)
+   */
+  static async verificarDisponibilidad(req, res) {
+    try {
+      const { grado_id, turno_id, periodo_academico_id } = req.query;
+
+      if (!grado_id || !turno_id) {
+        return res.status(400).json({
+          success: false,
+          message: 'Debe proporcionar grado_id y turno_id'
+        });
+      }
+
+      const disp = await CupoPreinscripcion.calcularDisponibilidadDinamica({
+        gradoId: parseInt(grado_id),
+        turnoId: parseInt(turno_id),
+        periodoAcademicoId: periodo_academico_id ? parseInt(periodo_academico_id) : null
+      });
+
+      res.json({
+        success: true,
+        data: {
+          tiene_cupos: disp.tiene_cupos,
+          cupos_disponibles: disp.cupos_disponibles,
+          cupos_totales: disp.cupos_totales,
+          cupos_ocupados: disp.cupos_ocupados,
+          mensaje: disp.mensaje,
+          cupo_id: disp.cupo_id
+        }
+      });
+    } catch (error) {
+      console.error('Error al verificar disponibilidad:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al verificar disponibilidad de cupos: ' + error.message
+      });
+    }
+  }
+
+  /**
    * CREAR CUPO
    */
   static async crear(req, res) {
@@ -335,6 +375,49 @@ class CupoPreinscripcionController {
       res.status(500).json({
         success: false,
         message: 'Error al eliminar cupo: ' + error.message
+      });
+    }
+  }
+
+  /**
+   * SINCRONIZAR CUPOS AUTOMÁTICAMENTE CON PARALELOS Y RESERVAS
+   */
+  static async sincronizar(req, res) {
+    try {
+      const { periodo_academico_id } = req.body || {};
+      const resultados = await CupoPreinscripcion.sincronizarTodos(periodo_academico_id);
+      const count = resultados.total_sincronizados || 0;
+
+      if (req.user) {
+        try {
+          const reqInfo = RequestInfo.extract(req);
+          await ActividadLog.create({
+            usuario_id: req.user.id,
+            accion: 'sincronizar_cupos_preinscripcion',
+            modulo: 'cupos',
+            tabla_afectada: 'cupo_preinscripcion',
+            registro_id: null,
+            datos_nuevos: { total_sincronizados: count },
+            ip_address: reqInfo?.ip || '127.0.0.1',
+            user_agent: reqInfo?.userAgent || 'Browser',
+            resultado: 'exitoso',
+            mensaje: `Se sincronizaron ${count} cupos con la capacidad de paralelos y reservas de cupo.`
+          });
+        } catch (logErr) {
+          console.warn('Advertencia en log de actividad sincronizar:', logErr.message);
+        }
+      }
+
+      res.json({
+        success: true,
+        message: `Sincronización exitosa: ${count} grados/turnos actualizados con aforo y reservas reales`,
+        data: resultados
+      });
+    } catch (error) {
+      console.error('Error al sincronizar cupos:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al sincronizar cupos: ' + error.message
       });
     }
   }

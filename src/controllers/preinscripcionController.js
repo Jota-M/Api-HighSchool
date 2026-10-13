@@ -6,6 +6,7 @@ import RequestInfo from '../utils/requestInfo.js';
 import UploadImage from '../utils/uploadImage.js';
 import EmailService from '../utils/emailService.js';
 import WhatsAppService from '../utils/whatsappService.js';
+import { CupoPreinscripcion } from '../models/CupoPreinscripcion.js';
 
 class PreInscripcionController {
 
@@ -187,58 +188,51 @@ class PreInscripcionController {
         });
       }
 
-      // Verificar disponibilidad de cupo (NO asignar)
+      // Verificar disponibilidad de cupo (determinar si entra con cupo o a lista de espera)
       let cupoDisponible = { tiene_cupos: false, cupo_id: null, mensaje: '' };
+      let estadoInicial = 'datos_completos';
+      let tieneCupoAsignado = false;
+      let posicionEspera = 0;
 
       if (preinscripcion_info?.grado_id && preinscripcion_info?.turno_id && preinscripcion_info?.periodo_academico_id) {
-        console.log('🔍 Verificando cupos:', {
+        console.log('🔍 Verificando cupos dinámicos:', {
           grado_id: preinscripcion_info.grado_id,
           turno_id: preinscripcion_info.turno_id,
           periodo_academico_id: preinscripcion_info.periodo_academico_id
         });
 
-        const verificacion = await client.query(`
-          SELECT 
-            cp.*,
-            (cp.cupos_totales - cp.cupos_ocupados) as cupos_disponibles
-          FROM cupo_preinscripcion cp
-          WHERE cp.grado_id = $1 
-            AND cp.turno_id = $2 
-            AND cp.periodo_academico_id = $3
-            AND cp.activo = true
-          LIMIT 1
-        `, [
-          preinscripcion_info.grado_id,
-          preinscripcion_info.turno_id,
-          preinscripcion_info.periodo_academico_id
-        ]);
+        const disp = await CupoPreinscripcion.calcularDisponibilidadDinamica({
+          gradoId: parseInt(preinscripcion_info.grado_id),
+          turnoId: parseInt(preinscripcion_info.turno_id),
+          periodoAcademicoId: parseInt(preinscripcion_info.periodo_academico_id),
+          client
+        });
 
-        if (verificacion.rows.length === 0) {
-          await client.query('ROLLBACK');
-          return res.status(400).json({
-            success: false,
-            message: 'No hay cupos configurados para este grado y turno'
-          });
+        if (disp.tiene_cupos) {
+          cupoDisponible = {
+            tiene_cupos: true,
+            cupo_id: disp.cupo_id,
+            mensaje: disp.mensaje
+          };
+          estadoInicial = 'datos_completos';
+          tieneCupoAsignado = false; // Se confirma formalmente en revisión/aprobación
+          posicionEspera = 0;
+          console.log('✅ Cupos dinámicos disponibles:', disp.cupos_disponibles);
+        } else {
+          // No hay cupos disponibles -> Registrar en LISTA DE ESPERA
+          posicionEspera = disp.posicion_espera || 1;
+          cupoDisponible = {
+            tiene_cupos: false,
+            cupo_id: disp.cupo_id,
+            es_lista_espera: true,
+            posicion_espera: posicionEspera,
+            turno_alternativo: disp.turno_alternativo,
+            mensaje: disp.mensaje
+          };
+          estadoInicial = 'en_espera';
+          tieneCupoAsignado = false;
+          console.log(`📋 Postulante registrado en Lista de Espera, Puesto #${posicionEspera}`);
         }
-
-        const cupo = verificacion.rows[0];
-        const cuposDisponibles = cupo.cupos_totales - cupo.cupos_ocupados;
-
-        if (cuposDisponibles <= 0) {
-          await client.query('ROLLBACK');
-          return res.status(400).json({
-            success: false,
-            message: `No hay cupos disponibles. Todos los ${cupo.cupos_totales} cupos están ocupados.`
-          });
-        }
-
-        cupoDisponible = {
-          tiene_cupos: true,
-          cupo_id: cupo.id,
-          mensaje: `Hay ${cuposDisponibles} cupos disponibles`
-        };
-
-        console.log('✅ Cupos disponibles:', cuposDisponibles);
       }
 
       // Subir foto del estudiante
@@ -263,7 +257,7 @@ class PreInscripcionController {
       `);
       const codigoInscripcion = codigoResult.rows[0].codigo;
 
-      // Crear pre_inscripcion (SIN cupo asignado)
+      // Crear pre_inscripcion (con estado y posición de espera correspondientes)
       const inscripcionResult = await client.query(`
         INSERT INTO pre_inscripcion (
           codigo_inscripcion, 
@@ -272,15 +266,20 @@ class PreInscripcionController {
           grado_id,
           turno_preferido_id,
           cupo_preinscripcion_id,
-          tiene_cupo_asignado
+          tiene_cupo_asignado,
+          posicion_espera
         )
-        VALUES ($1, 'datos_completos', $2, $3, $4, NULL, false)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING *
       `, [
         codigoInscripcion,
+        estadoInicial,
         preinscripcion_info?.periodo_academico_id || null,
         preinscripcion_info?.grado_id || null,
-        preinscripcion_info?.turno_id || null
+        preinscripcion_info?.turno_id || null,
+        cupoDisponible.cupo_id || null,
+        tieneCupoAsignado,
+        posicionEspera
       ]);
 
       const preInscripcionId = inscripcionResult.rows[0].id;
@@ -395,7 +394,7 @@ class PreInscripcionController {
       setImmediate(async () => {
         try {
           const preinscripcionCompleta = await PreInscripcion.obtenerPorId(preInscripcionId);
-          await EmailService.notificarCambioEstado(preinscripcionCompleta, null);
+          // await EmailService.notificarCambioEstado(preinscripcionCompleta, null);
           await WhatsAppService.notificarPreinscripcionCreada(preinscripcionCompleta);
         } catch (error) {
           console.error('❌ Error notificaciones creación:', error);
@@ -424,14 +423,18 @@ class PreInscripcionController {
 
       res.status(201).json({
         success: true,
-        message: `Preinscripción creada exitosamente. ${cupoDisponible.mensaje}`,
+        message: estadoInicial === 'en_espera'
+          ? `Preinscripción registrada en Lista de Espera (Puesto #${posicionEspera}).`
+          : `Preinscripción creada exitosamente. ${cupoDisponible.mensaje}`,
         data: {
           preinscripcion: {
             id: preInscripcionId,
             codigo_inscripcion: codigoInscripcion,
-            estado: 'datos_completos',
+            estado: estadoInicial,
+            es_lista_espera: estadoInicial === 'en_espera',
+            posicion_espera: posicionEspera,
             foto_url: foto_url,
-            cupo_asignado: false,
+            cupo_asignado: tieneCupoAsignado,
             periodo_academico_id: preinscripcion_info?.periodo_academico_id,
             grado_id: preinscripcion_info?.grado_id,
             turno_preferido_id: preinscripcion_info?.turno_id,
@@ -558,59 +561,41 @@ class PreInscripcionController {
 
       if (estado === 'aprobada' && !preInscripcion.tiene_cupo_asignado) {
         if (preInscripcion.grado_id && preInscripcion.turno_preferido_id && preInscripcion.periodo_academico_id) {
+          const disp = await CupoPreinscripcion.calcularDisponibilidadDinamica({
+            gradoId: preInscripcion.grado_id,
+            turnoId: preInscripcion.turno_preferido_id,
+            periodoAcademicoId: preInscripcion.periodo_academico_id,
+            client
+          });
 
-          const cupoResult = await client.query(`
-            SELECT * FROM cupo_preinscripcion
-            WHERE grado_id = $1 
-              AND turno_id = $2 
-              AND periodo_academico_id = $3
-              AND activo = true
-            LIMIT 1
-          `, [
-            preInscripcion.grado_id,
-            preInscripcion.turno_preferido_id,
-            preInscripcion.periodo_academico_id
-          ]);
-
-          if (cupoResult.rows.length === 0) {
+          if (!disp.tiene_cupos) {
             await client.query('ROLLBACK');
             return res.status(400).json({
               success: false,
-              message: 'No hay cupos configurados'
+              message: disp.mensaje || 'No hay cupos disponibles'
             });
           }
 
-          const cupo = cupoResult.rows[0];
-          const cuposDisponibles = cupo.cupos_totales - cupo.cupos_ocupados;
+          if (disp.cupo_id) {
+            await client.query(`
+              UPDATE cupo_preinscripcion
+              SET cupos_ocupados = cupos_ocupados + 1,
+                  updated_at = NOW()
+              WHERE id = $1
+            `, [disp.cupo_id]);
 
-          if (cuposDisponibles <= 0) {
-            await client.query('ROLLBACK');
-            return res.status(400).json({
-              success: false,
-              message: 'No hay cupos disponibles'
-            });
+            await client.query(`
+              UPDATE pre_inscripcion
+              SET cupo_preinscripcion_id = $1,
+                  tiene_cupo_asignado = true,
+                  updated_at = NOW()
+              WHERE id = $2
+            `, [disp.cupo_id, id]);
           }
-
-          // Incrementar cupos ocupados
-          await client.query(`
-            UPDATE cupo_preinscripcion
-            SET cupos_ocupados = cupos_ocupados + 1,
-                updated_at = NOW()
-            WHERE id = $1
-          `, [cupo.id]);
-
-          // Asignar cupo a preinscripción
-          await client.query(`
-            UPDATE pre_inscripcion
-            SET cupo_preinscripcion_id = $1,
-                tiene_cupo_asignado = true,
-                updated_at = NOW()
-            WHERE id = $2
-          `, [cupo.id, id]);
 
           cupoAsignado = {
-            cupo_id: cupo.id,
-            cupos_restantes: cuposDisponibles - 1
+            cupo_id: disp.cupo_id,
+            cupos_restantes: disp.cupos_disponibles - 1
           };
         }
       }
@@ -629,7 +614,7 @@ class PreInscripcionController {
       setImmediate(async () => {
         try {
           const preinscripcionCompleta = await PreInscripcion.obtenerPorId(id);
-          await EmailService.notificarCambioEstado(preinscripcionCompleta, preInscripcion.estado);
+          // await EmailService.notificarCambioEstado(preinscripcionCompleta, preInscripcion.estado);
           await WhatsAppService.notificarCambioEstado(preinscripcionCompleta, preInscripcion.estado);
         } catch (error) {
           console.error('❌ Error notificaciones cambio estado:', error);
@@ -1080,18 +1065,29 @@ class PreInscripcionController {
   }
   static async crearMultiple(req, res) {
     const client = await pool.connect();
-    const documentos_urls = [];
 
     try {
       await client.query('BEGIN');
 
-      const { modo, padre_id, estudiantes, representante } = req.body;
+      const { 
+        periodo_academico_id: periodoIdGlobal,
+        preinscripcion_info,
+        estudiantes = [], 
+        tutores = [],
+        representante,
+        relaciones = []
+      } = req.body;
 
-      console.log('📥 Datos recibidos:', {
-        modo,
-        padre_id,
-        total_estudiantes: estudiantes?.length || 0,
-        tiene_representante: !!representante
+      // Unificar tutores: si enviaron `representante` individual, convertirlo a array
+      const tutoresList = Array.isArray(tutores) && tutores.length > 0 
+        ? tutores 
+        : (representante ? [representante] : []);
+
+      console.log('📥 [crearMultiple] Datos recibidos:', {
+        total_estudiantes: estudiantes.length,
+        total_tutores: tutoresList.length,
+        total_relaciones: relaciones.length,
+        periodoIdGlobal: periodoIdGlobal || preinscripcion_info?.periodo_academico_id
       });
 
       // ========================================
@@ -1105,126 +1101,117 @@ class PreInscripcionController {
         });
       }
 
-      if (estudiantes.length > 5) {
+      if (estudiantes.length > 10) {
         await client.query('ROLLBACK');
         return res.status(400).json({
           success: false,
-          message: 'Máximo 5 estudiantes por preinscripción'
+          message: 'Máximo 10 estudiantes por solicitud de preinscripción'
         });
       }
 
-      // ========================================
-      // DETERMINAR O CREAR PADRE
-      // ========================================
-      let padreFamiliaId;
-      let cedulaRepresentanteUrl = null; // 🆕 URL de la cédula del padre
+      if (tutoresList.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Debe registrar al menos un padre/tutor responsable'
+        });
+      }
 
-      if (modo === 'padre_existente' && padre_id) {
-        // Verificar que el padre existe
-        const padreExiste = await client.query(
-          'SELECT id FROM padre_familia WHERE id = $1 AND deleted_at IS NULL',
-          [padre_id]
-        );
-
-        if (padreExiste.rows.length === 0) {
-          await client.query('ROLLBACK');
-          return res.status(404).json({
-            success: false,
-            message: 'Padre no encontrado en el sistema'
-          });
-        }
-
-        padreFamiliaId = padre_id;
-        console.log(`✅ Usando padre existente: ${padreFamiliaId}`);
-
-        // 🆕 BUSCAR SI EL PADRE YA TIENE CÉDULA EN OTRA PREINSCRIPCIÓN
-        const cedulaExistenteResult = await client.query(`
-        SELECT pd.url_archivo 
-        FROM pre_documento pd
-        INNER JOIN pre_tutor pt ON pd.pre_inscripcion_id = pt.pre_inscripcion_id
-        WHERE pt.ci = (SELECT ci FROM padre_familia WHERE id = $1)
-          AND pd.tipo_documento = 'cedula_tutor'
-          AND pd.url_archivo IS NOT NULL
-        ORDER BY pd.created_at DESC
-        LIMIT 1
-      `, [padre_id]);
-
-        if (cedulaExistenteResult.rows.length > 0) {
-          cedulaRepresentanteUrl = cedulaExistenteResult.rows[0].url_archivo;
-          console.log(`✅ Reutilizando cédula del padre: ${cedulaRepresentanteUrl}`);
-        }
-
-      } else {
-        // Modo 'nuevo' o 'multiple': crear nuevo padre
-        if (!representante || !representante.nombres || !representante.apellido_paterno || !representante.ci) {
+      // Validar datos mínimos de cada tutor
+      for (let t = 0; t < tutoresList.length; t++) {
+        const tut = tutoresList[t];
+        if (!tut.nombres || !tut.apellido_paterno || !tut.ci || (!tut.telefono && !tut.celular)) {
           await client.query('ROLLBACK');
           return res.status(400).json({
             success: false,
-            message: 'Los datos del representante son incompletos'
+            message: `Tutor ${t + 1}: Faltan datos requeridos (nombres, apellido paterno, CI y teléfono de contacto)`
           });
         }
+      }
 
-        // Verificar que el CI no exista ya
-        const ciExiste = await client.query(
+      // Determinar período académico activo si no vino
+      let periodoAcademicoId = periodoIdGlobal || preinscripcion_info?.periodo_academico_id;
+      if (!periodoAcademicoId) {
+        const periodoResult = await client.query(`
+          SELECT id FROM periodo_academico 
+          WHERE estado = 'activo' AND deleted_at IS NULL 
+          ORDER BY fecha_inicio DESC LIMIT 1
+        `);
+        periodoAcademicoId = periodoResult.rows[0]?.id || null;
+      }
+
+      // ========================================
+      // REGISTRAR / VINCULAR PADRES EN padre_familia
+      // ========================================
+      const tutoresProcesados = [];
+
+      for (let t = 0; t < tutoresList.length; t++) {
+        const tut = tutoresList[t];
+
+        // Verificar si ya existe en padre_familia por CI
+        const existePadre = await client.query(
           'SELECT id FROM padre_familia WHERE ci = $1 AND deleted_at IS NULL',
-          [representante.ci]
+          [tut.ci]
         );
 
-        if (ciExiste.rows.length > 0) {
-          await client.query('ROLLBACK');
-          return res.status(400).json({
-            success: false,
-            message: 'Ya existe un padre/tutor con ese CI. Use el modo "Padre Existente".'
-          });
+        let padreId;
+        if (existePadre.rows.length > 0) {
+          padreId = existePadre.rows[0].id;
+          // Actualizar datos de contacto si cambiaron
+          await client.query(`
+            UPDATE padre_familia
+            SET nombres = COALESCE($1, nombres),
+                apellido_paterno = COALESCE($2, apellido_paterno),
+                apellido_materno = COALESCE($3, apellido_materno),
+                telefono = COALESCE($4, telefono),
+                celular = COALESCE($5, celular),
+                email = COALESCE($6, email),
+                direccion = COALESCE($7, direccion),
+                ocupacion = COALESCE($8, ocupacion),
+                updated_at = NOW()
+            WHERE id = $9
+          `, [
+            tut.nombres,
+            tut.apellido_paterno,
+            tut.apellido_materno || null,
+            tut.telefono || tut.celular,
+            tut.celular || tut.telefono,
+            tut.email || null,
+            tut.direccion || null,
+            tut.ocupacion || null,
+            padreId
+          ]);
+        } else {
+          // Crear nuevo padre_familia
+          const nuevoPadre = await client.query(`
+            INSERT INTO padre_familia (
+              nombres, apellido_paterno, apellido_materno, ci,
+              fecha_nacimiento, telefono, celular, email,
+              direccion, ocupacion, estado_civil, parentesco
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            RETURNING id
+          `, [
+            tut.nombres,
+            tut.apellido_paterno,
+            tut.apellido_materno || null,
+            tut.ci,
+            tut.fecha_nacimiento || null,
+            tut.telefono || tut.celular,
+            tut.celular || tut.telefono,
+            tut.email || null,
+            tut.direccion || null,
+            tut.ocupacion || null,
+            tut.estado_civil || null,
+            tut.parentesco || 'padre'
+          ]);
+          padreId = nuevoPadre.rows[0].id;
         }
 
-        // Subir cédula del representante (si existe)
-        const cedulaRepFile = req.files?.['cedula_representante']?.[0];
-        if (cedulaRepFile) {
-          try {
-            const uploadResult = await UploadImage.uploadFromBuffer(
-              cedulaRepFile.buffer,
-              'preinscripciones/documentos',
-              `cedula_rep_${representante.ci}_${Date.now()}`
-            );
-            cedulaRepresentanteUrl = uploadResult.url;
-            documentos_urls.push(uploadResult.url);
-            console.log(`✅ Cédula del padre subida: ${cedulaRepresentanteUrl}`);
-          } catch (uploadError) {
-            console.error('Error al subir cédula de representante:', uploadError);
-          }
-        }
-
-        // Crear el nuevo padre
-        const nuevoPadreResult = await client.query(`
-        INSERT INTO padre_familia (
-          nombres, apellido_paterno, apellido_materno, ci,
-          fecha_nacimiento, genero, telefono, celular, email,
-          direccion, ocupacion, lugar_trabajo, telefono_trabajo,
-          estado_civil, nivel_educacion, parentesco
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-        RETURNING id
-      `, [
-          representante.nombres,
-          representante.apellido_paterno,
-          representante.apellido_materno || null,
-          representante.ci,
-          representante.fecha_nacimiento || null,
-          representante.genero || null,
-          representante.telefono,
-          representante.celular || representante.telefono,
-          representante.email || null,
-          representante.direccion || null,
-          representante.ocupacion || null,
-          representante.lugar_trabajo || null,
-          representante.telefono_trabajo || null,
-          representante.estado_civil || null,
-          representante.nivel_educacion || null,
-          representante.parentesco || 'padre'
-        ]);
-
-        padreFamiliaId = nuevoPadreResult.rows[0].id;
-        console.log(`✅ Nuevo padre creado: ${padreFamiliaId}`);
+        tutoresProcesados.push({
+          ...tut,
+          padre_familia_id: padreId,
+          index: t
+        });
       }
 
       // ========================================
@@ -1233,183 +1220,195 @@ class PreInscripcionController {
       const preinscripcionesCreadas = [];
 
       for (let i = 0; i < estudiantes.length; i++) {
-        const estudiante = estudiantes[i];
+        const est = estudiantes[i];
+        const gradoId = est.grado_id || preinscripcion_info?.grado_id || null;
+        const turnoId = est.turno_id || preinscripcion_info?.turno_id || null;
+        const estPeriodoId = est.periodo_academico_id || periodoAcademicoId;
 
-        console.log(`📝 Procesando estudiante ${i + 1}/${estudiantes.length}:`, estudiante.nombres);
-
-        // Validar datos mínimos del estudiante
-        if (!estudiante.nombres || !estudiante.apellido_paterno || !estudiante.fecha_nacimiento) {
-          throw new Error(`Estudiante ${i + 1}: Datos incompletos (nombres, apellido_paterno, fecha_nacimiento son obligatorios)`);
+        // Validar campos indispensables
+        if (!est.nombres || !est.apellido_paterno || !est.fecha_nacimiento) {
+          throw new Error(`Estudiante ${i + 1}: Nombres, apellido paterno y fecha de nacimiento son obligatorios.`);
         }
 
-        // Generar código único
+        // VALIDAR CUPO DINÁMICO (ASIGNAR CUPO O REGISTRAR EN LISTA DE ESPERA)
+        let estEstado = 'datos_completos';
+        let estPosicionEspera = 0;
+        let estCupoId = null;
+
+        if (gradoId && turnoId && estPeriodoId) {
+          const disp = await CupoPreinscripcion.calcularDisponibilidadDinamica({
+            gradoId,
+            turnoId,
+            periodoAcademicoId: estPeriodoId,
+            client
+          });
+
+          estCupoId = disp.cupo_id || null;
+          if (disp.tiene_cupos) {
+            estEstado = 'datos_completos';
+            estPosicionEspera = 0;
+          } else {
+            estEstado = 'en_espera';
+            estPosicionEspera = disp.posicion_espera || 1;
+            console.log(`📋 Postulante ${est.nombres} registrado en Lista de Espera, Puesto #${estPosicionEspera}`);
+          }
+        }
+
+        // Generar código de preinscripción
         const codigoResult = await client.query(`
-        SELECT 'PRE-' || TO_CHAR(CURRENT_DATE, 'YYYY') || '-' || 
-        LPAD(CAST(COALESCE(MAX(CAST(SUBSTRING(codigo_inscripcion FROM 10) AS INTEGER)), 0) + 1 AS VARCHAR), 4, '0') 
-        AS codigo
-        FROM pre_inscripcion 
-        WHERE codigo_inscripcion LIKE 'PRE-' || TO_CHAR(CURRENT_DATE, 'YYYY') || '-%'
-      `);
+          SELECT 'PRE-' || TO_CHAR(CURRENT_DATE, 'YYYY') || '-' || 
+          LPAD(CAST(COALESCE(MAX(CAST(SUBSTRING(codigo_inscripcion FROM 10) AS INTEGER)), 0) + 1 AS VARCHAR), 4, '0') 
+          AS codigo
+          FROM pre_inscripcion 
+          WHERE codigo_inscripcion LIKE 'PRE-' || TO_CHAR(CURRENT_DATE, 'YYYY') || '-%'
+        `);
         const codigoInscripcion = codigoResult.rows[0].codigo;
 
         // Crear pre_inscripcion
         const inscripcionResult = await client.query(`
-        INSERT INTO pre_inscripcion (codigo_inscripcion, estado)
-        VALUES ($1, 'datos_completos')
-        RETURNING *
-      `, [codigoInscripcion]);
+          INSERT INTO pre_inscripcion (
+            codigo_inscripcion, 
+            estado,
+            periodo_academico_id,
+            grado_id,
+            turno_preferido_id,
+            cupo_preinscripcion_id,
+            tiene_cupo_asignado,
+            posicion_espera
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, false, $7)
+          RETURNING *
+        `, [
+          codigoInscripcion,
+          estEstado,
+          estPeriodoId,
+          gradoId,
+          turnoId,
+          estCupoId,
+          estPosicionEspera
+        ]);
 
         const preInscripcionId = inscripcionResult.rows[0].id;
 
-        // Subir foto del estudiante (si existe)
-        let fotoUrl = null;
-        const fotoFile = req.files?.[`foto_estudiante_${i}`]?.[0];
-        if (fotoFile) {
-          try {
-            const uploadResult = await UploadImage.uploadFromBuffer(
-              fotoFile.buffer,
-              'preinscripciones/fotos',
-              `foto_${codigoInscripcion}_${Date.now()}`
-            );
-            fotoUrl = uploadResult.url;
-            documentos_urls.push(uploadResult.url);
-          } catch (uploadError) {
-            console.error(`Error al subir foto del estudiante ${i + 1}:`, uploadError);
-          }
-        }
-
         // Crear pre_estudiante
         await client.query(`
-        INSERT INTO pre_estudiante (
-          pre_inscripcion_id, nombres, apellido_paterno, apellido_materno,
-          ci, fecha_nacimiento, lugar_nacimiento, genero, 
-          direccion, zona, ciudad, telefono, email, foto_url,
-          contacto_emergencia, telefono_emergencia,
-          tiene_discapacidad, tipo_discapacidad,
-          institucion_procedencia, ultimo_grado_cursado, grado_solicitado,
-          repite_grado, turno_solicitado
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
-      `, [
+          INSERT INTO pre_estudiante (
+            pre_inscripcion_id, nombres, apellido_paterno, apellido_materno,
+            ci, rude, fecha_nacimiento, lugar_nacimiento, genero, 
+            direccion, zona, ciudad, telefono, email,
+            contacto_emergencia,
+            tiene_discapacidad, tipo_discapacidad,
+            institucion_procedencia, ultimo_grado_cursado, grado_solicitado,
+            repite_grado, turno_solicitado
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+        `, [
           preInscripcionId,
-          estudiante.nombres,
-          estudiante.apellido_paterno,
-          estudiante.apellido_materno || null,
-          estudiante.ci || null,
-          estudiante.fecha_nacimiento,
-          estudiante.lugar_nacimiento || null,
-          estudiante.genero || null,
-          estudiante.direccion || null,
-          estudiante.zona || null,
-          estudiante.ciudad || null,
-          estudiante.telefono || null,
-          estudiante.email || null,
-          fotoUrl,
-          estudiante.contacto_emergencia || null,
-          estudiante.telefono_emergencia || null,
-          estudiante.tiene_discapacidad || false,
-          estudiante.tipo_discapacidad || null,
-          estudiante.institucion_procedencia || null,
-          estudiante.ultimo_grado_cursado || null,
-          estudiante.grado_solicitado || null,
-          estudiante.repite_grado || false,
-          estudiante.turno_solicitado || null
+          est.nombres,
+          est.apellido_paterno,
+          est.apellido_materno || null,
+          est.ci || null,
+          est.rude || null,
+          est.fecha_nacimiento,
+          est.lugar_nacimiento || null,
+          est.genero || null,
+          est.direccion || null,
+          est.zona || null,
+          est.ciudad || null,
+          est.telefono || null,
+          est.email || null,
+          est.contacto_emergencia || null,
+          est.tiene_discapacidad || false,
+          est.tipo_discapacidad || null,
+          est.institucion_procedencia || null,
+          est.ultimo_grado_cursado || null,
+          est.grado_solicitado || null,
+          est.repite_grado || false,
+          est.turno_solicitado || null
         ]);
 
-        // Crear pre_tutor (vinculando al padre)
-        await client.query(`
-        INSERT INTO pre_tutor (
-          pre_inscripcion_id, tipo_representante, nombres, apellido_paterno, 
-          apellido_materno, ci, fecha_nacimiento, genero, parentesco,
-          telefono, celular, email, direccion, 
-          ocupacion, lugar_trabajo, telefono_trabajo,
-          estado_civil, nivel_educacion,
-          es_tutor_principal, vive_con_estudiante
-        ) 
-        SELECT 
-          $1,
-          $2,
-          pf.nombres, pf.apellido_paterno, pf.apellido_materno, pf.ci,
-          pf.fecha_nacimiento, 'masculino', pf.parentesco,
-          pf.telefono, pf.celular, pf.email, pf.direccion,
-          pf.ocupacion, pf.lugar_trabajo, pf.telefono_trabajo,
-          pf.estado_civil, pf.nivel_educacion,
-          true,
-          $3
-        FROM padre_familia pf
-        WHERE pf.id = $4
-      `, [
-          preInscripcionId,
-          representante?.tipo_representante || 'Padre o Madre',
-          estudiante.vive_con_tutor !== undefined ? estudiante.vive_con_tutor : true,
-          padreFamiliaId
-        ]);
+        // ========================================
+        // ASOCIAR TUTORES A ESTE ESTUDIANTE
+        // ========================================
+        // Buscar tutores correspondientes según array relaciones
+        const relacionesEstudiante = relaciones.filter(r => r.estudiante_index === i);
+        let tutoresParaEstudiante = [];
 
-        // Subir documentos del estudiante
-        const tiposDocumento = [
-          { campo: `cedula_estudiante_${i}`, tipo: 'cedula_estudiante' },
-          { campo: `certificado_nacimiento_${i}`, tipo: 'certificado_nacimiento' },
-          { campo: `libreta_notas_${i}`, tipo: 'libreta_notas' }
-        ];
-
-        for (const doc of tiposDocumento) {
-          const file = req.files?.[doc.campo]?.[0];
-
-          if (file) {
-            try {
-              const uploadResult = await UploadImage.uploadFromBuffer(
-                file.buffer,
-                'preinscripciones/documentos',
-                `${codigoInscripcion}_${doc.tipo}_${Date.now()}`
-              );
-
-              documentos_urls.push(uploadResult.url);
-
-              await client.query(`
-              INSERT INTO pre_documento (
-                pre_inscripcion_id, tipo_documento, nombre_archivo, 
-                url_archivo, tamano_bytes, tipo_mime,
-                subido, fecha_subida
-              ) VALUES ($1, $2, $3, $4, $5, $6, true, NOW())
-            `, [
-                preInscripcionId,
-                doc.tipo,
-                file.originalname,
-                uploadResult.url,
-                file.size,
-                file.mimetype
-              ]);
-
-            } catch (uploadError) {
-              console.error(`Error al subir ${doc.tipo} del estudiante ${i + 1}:`, uploadError);
-            }
-          }
+        if (relacionesEstudiante.length > 0) {
+          tutoresParaEstudiante = relacionesEstudiante.map(rel => {
+            const tutorObj = tutoresProcesados[rel.tutor_index] || tutoresProcesados[0];
+            return {
+              ...tutorObj,
+              parentesco: rel.parentesco || tutorObj.parentesco || 'padre',
+              es_tutor_principal: rel.es_tutor_principal !== undefined ? rel.es_tutor_principal : tutorObj.es_tutor_principal
+            };
+          });
+        } else {
+          // Si no hay relaciones explícitas, asociar todos los tutores registrados
+          tutoresParaEstudiante = tutoresProcesados.map((tut, idx) => ({
+            ...tut,
+            es_tutor_principal: idx === 0 || tut.es_tutor_principal === true
+          }));
         }
 
-        // 🆕 INSERTAR CÉDULA DEL PADRE (compartida entre hermanos)
-        if (cedulaRepresentanteUrl) {
+        // Insertar en pre_tutor por cada tutor
+        for (const tutorData of tutoresParaEstudiante) {
           await client.query(`
-          INSERT INTO pre_documento (
-            pre_inscripcion_id, tipo_documento, nombre_archivo, 
-            url_archivo, subido, fecha_subida
-          ) VALUES ($1, 'cedula_tutor', 'Cédula Representante (compartida)', $2, true, NOW())
-        `, [preInscripcionId, cedulaRepresentanteUrl]);
-
-          console.log(`✅ Cédula del padre vinculada a estudiante ${i + 1}`);
+            INSERT INTO pre_tutor (
+              pre_inscripcion_id, tipo_representante, nombres, apellido_paterno, 
+              apellido_materno, ci, fecha_nacimiento, genero, parentesco,
+              otro_parentesco, telefono, celular, email, direccion, 
+              ocupacion, estado_civil, es_tutor_principal, vive_con_estudiante
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+          `, [
+            preInscripcionId,
+            tutorData.tipo_representante || null,
+            tutorData.nombres,
+            tutorData.apellido_paterno,
+            tutorData.apellido_materno || null,
+            tutorData.ci,
+            tutorData.fecha_nacimiento || null,
+            tutorData.genero || null,
+            tutorData.parentesco || 'padre',
+            tutorData.otro_parentesco || null,
+            tutorData.telefono || tutorData.celular,
+            tutorData.celular || tutorData.telefono,
+            tutorData.email || null,
+            tutorData.direccion || null,
+            tutorData.ocupacion || null,
+            tutorData.estado_civil || null,
+            tutorData.es_tutor_principal || false,
+            tutorData.vive_con_estudiante !== undefined ? tutorData.vive_con_estudiante : true
+          ]);
         }
 
         preinscripcionesCreadas.push({
           id: preInscripcionId,
           codigo_inscripcion: codigoInscripcion,
-          estado: 'datos_completos',
-          foto_url: fotoUrl,
-          estudiante_nombres: `${estudiante.nombres} ${estudiante.apellido_paterno}`
+          estado: estEstado,
+          es_lista_espera: estEstado === 'en_espera',
+          posicion_espera: estPosicionEspera,
+          estudiante_nombres: `${est.nombres} ${est.apellido_paterno}`,
+          grado_id: gradoId,
+          turno_id: turnoId
         });
       }
 
-      // ========================================
-      // COMMIT - TODO EXITOSO
-      // ========================================
       await client.query('COMMIT');
+
+      // Notificaciones asíncronas
+      setImmediate(async () => {
+        try {
+          for (const item of preinscripcionesCreadas) {
+            const preCompleta = await PreInscripcion.obtenerPorId(item.id);
+            if (preCompleta) {
+              // await EmailService.notificarPreinscripcionCreada(preCompleta).catch(() => {});
+              await WhatsAppService.notificarPreinscripcionCreada(preCompleta).catch(() => {});
+            }
+          }
+        } catch (notifErr) {
+          console.error('❌ Error notificaciones en crearMultiple:', notifErr);
+        }
+      });
 
       // Registrar actividad
       if (req.user) {
@@ -1420,54 +1419,39 @@ class PreInscripcionController {
           modulo: 'preinscripcion',
           tabla_afectada: 'pre_inscripcion',
           datos_nuevos: {
-            modo,
-            padre_id: padreFamiliaId,
             total_estudiantes: estudiantes.length,
-            cedula_compartida: !!cedulaRepresentanteUrl,
+            total_tutores: tutoresProcesados.length,
             codigos_creados: preinscripcionesCreadas.map(p => p.codigo_inscripcion)
           },
           ip_address: reqInfo.ip,
           user_agent: reqInfo.userAgent,
           resultado: 'exitoso',
-          mensaje: `${estudiantes.length} preinscripción(es) creada(s) con cédula${cedulaRepresentanteUrl ? ' compartida' : ''}`
+          mensaje: `${estudiantes.length} preinscripción(es) creada(s) correctamente.`
         });
       }
 
       res.status(201).json({
         success: true,
-        message: `${estudiantes.length} preinscripción(es) creada(s) exitosamente${cedulaRepresentanteUrl ? ' (cédula del padre compartida)' : ''}`,
+        message: `${estudiantes.length} preinscripción(es) registrada(s) exitosamente`,
         data: {
           preinscripciones: preinscripcionesCreadas,
-          total_creadas: preinscripcionesCreadas.length,
-          padre_id: padreFamiliaId,
-          cedula_compartida: !!cedulaRepresentanteUrl
+          total_creadas: preinscripcionesCreadas.length
         }
       });
 
     } catch (error) {
       await client.query('ROLLBACK');
-      console.error('Error en preinscripción múltiple:', error);
+      console.error('❌ Error en crearMultiple:', error);
 
-      // Eliminar archivos de Cloudinary si se subieron
-      for (const url of documentos_urls) {
-        const publicId = UploadImage.extractPublicIdFromUrl(url);
-        if (publicId) {
-          try {
-            await UploadImage.deleteImage(publicId);
-          } catch (err) {
-            console.error('Error al eliminar archivo tras fallo:', err);
-          }
-        }
-      }
-
-      res.status(500).json({
+      res.status(400).json({
         success: false,
-        message: 'Error al crear preinscripciones: ' + error.message
+        message: 'Error al registrar preinscripción: ' + error.message
       });
     } finally {
       client.release();
     }
   }
+
   // ========================================
   // BUSCAR POR CÓDIGO
   // ========================================
@@ -1698,6 +1682,51 @@ class PreInscripcionController {
       res.status(500).json({
         success: false,
         message: 'Error al actualizar datos: ' + error.message
+      });
+    }
+  }
+
+  // ========================================
+  // PROMOVER DE LISTA DE ESPERA (ADMIN)
+  // ========================================
+  static async promoverDeListaEspera(req, res) {
+    try {
+      const { id } = req.params;
+      const { motivo } = req.body;
+      const usuarioId = req.user?.id || null;
+
+      const resultado = await PreInscripcion.promoverDeListaEspera(
+        parseInt(id),
+        usuarioId,
+        motivo
+      );
+
+      // Registrar auditoría
+      const reqInfo = RequestInfo.extract(req);
+      await ActividadLog.crear({
+        usuario_id: req.user?.id,
+        accion: 'promover_lista_espera',
+        modulo: 'preinscripciones',
+        tabla_afectada: 'pre_inscripcion',
+        registro_id: id,
+        ip_address: reqInfo.ip,
+        user_agent: reqInfo.userAgent,
+        resultado: 'exitoso',
+        mensaje: `Preinscripción ${resultado.codigo_inscripcion} promovida de lista de espera con vacante asignada.`
+      });
+
+      res.json({
+        success: true,
+        message: 'Postulante promovido de lista de espera exitosamente con vacante asignada',
+        data: {
+          preinscripcion: resultado
+        }
+      });
+    } catch (error) {
+      console.error('Error al promover de lista de espera:', error);
+      res.status(400).json({
+        success: false,
+        message: error.message || 'Error al promover de lista de espera'
       });
     }
   }

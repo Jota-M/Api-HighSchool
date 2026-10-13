@@ -25,6 +25,9 @@ router.get('/resumen/:periodo_id', authenticate, CupoPreinscripcionController.ob
 // Obtener cupo por ID
 router.get('/:id', authenticate, CupoPreinscripcionController.obtenerPorId);
 
+// Sincronizar cupos automáticamente con paralelos y reservas
+router.post('/sincronizar', authenticate, CupoPreinscripcionController.sincronizar);
+
 // Crear cupo
 router.post('/', authenticate, CupoPreinscripcionController.crear);
 

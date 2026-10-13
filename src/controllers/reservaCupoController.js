@@ -11,6 +11,7 @@ import RequestInfo from '../utils/requestInfo.js';
 import PDFGenerator from '../services/reportes/pdfGenerator.js';
 import ExcelGenerator from '../services/reportes/excelGenerator.js';
 import { formatearFecha } from '../services/reportes/reportStyles.js';
+import whatsappService from '../utils/whatsappService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -186,6 +187,20 @@ class ReservaCupoController {
         resultado: 'exitoso',
         mensaje: `Reserva para ${totalRegistrados} hijo(s) (${resultado.cantidad_regulares} regulares, ${resultado.cantidad_hermanos} hermanos) por ${tutor_nombre} (${tutor_parentesco})`
       }).catch(err => console.error('Error log reserva:', err));
+
+      // Notificar creación vía WhatsApp (asíncrono, no bloquea la respuesta HTTP)
+      setImmediate(async () => {
+        try {
+          await whatsappService.notificarReservaCupoCreada({
+            reservas: resultado.reservas || [],
+            hermanos: resultado.hermanos || [],
+            tutor_nombre,
+            tutor_telefono
+          });
+        } catch (wsErr) {
+          console.error('❌ Error notificaciones WhatsApp reserva cupo:', wsErr.message);
+        }
+      });
 
       res.status(201).json({
         success: true,
@@ -452,7 +467,7 @@ class ReservaCupoController {
     const borderGray = '#e2e8f0';
 
     const esHermano = Boolean(
-      reserva.hermano_regular_id || 
+      reserva.hermano_regular_id ||
       (reserva.codigo_reserva && (reserva.codigo_reserva.startsWith('HER-') || reserva.codigo_reserva.startsWith('ESP-')))
     );
     const esEspera = reserva.estado === 'en_espera';
@@ -1151,11 +1166,11 @@ class ReservaCupoController {
     const cardsToDraw = (meta.statsCards && meta.statsCards.length > 0)
       ? meta.statsCards
       : [
-          { label: 'Reservas Confirmadas', value: resumen?.total_confirmadas || 0 },
-          { label: 'No Continuarán', value: resumen?.total_no_continua || 0 },
-          { label: 'Solicitud Anulación', value: resumen?.total_solicitud_anulacion || 0 },
-          { label: 'Anuladas', value: resumen?.total_anuladas || 0 },
-        ];
+        { label: 'Reservas Confirmadas', value: resumen?.total_confirmadas || 0 },
+        { label: 'No Continuarán', value: resumen?.total_no_continua || 0 },
+        { label: 'Solicitud Anulación', value: resumen?.total_solicitud_anulacion || 0 },
+        { label: 'Anuladas', value: resumen?.total_anuladas || 0 },
+      ];
     pdf.drawStatsGrid(cardsToDraw, cardsToDraw.length);
 
     pdf.drawSection('DETALLE DE ESTUDIANTES');
@@ -1227,11 +1242,11 @@ class ReservaCupoController {
     const cardsToDrawExcel = (meta.statsCards && meta.statsCards.length > 0)
       ? meta.statsCards
       : [
-          { label: 'Confirmadas', value: resumen?.total_confirmadas || 0 },
-          { label: 'No Continuarán', value: resumen?.total_no_continua || 0 },
-          { label: 'Solicitud Anulación', value: resumen?.total_solicitud_anulacion || 0 },
-          { label: 'Anuladas', value: resumen?.total_anuladas || 0 },
-        ];
+        { label: 'Confirmadas', value: resumen?.total_confirmadas || 0 },
+        { label: 'No Continuarán', value: resumen?.total_no_continua || 0 },
+        { label: 'Solicitud Anulación', value: resumen?.total_solicitud_anulacion || 0 },
+        { label: 'Anuladas', value: resumen?.total_anuladas || 0 },
+      ];
     excel.addStats(ws, cardsToDrawExcel, cardsToDrawExcel.length);
 
     const formatearEstado = (est) => {
@@ -1554,6 +1569,203 @@ class ReservaCupoController {
         success: false,
         message: 'Error al obtener estudiantes con cupo asegurado',
         error: error.message
+      });
+    }
+  }
+
+  /**
+   * 📲 ENVIAR / REENVIAR CONFIRMACIÓN DE RESERVA POR WHATSAPP
+   * POST /api/reserva-cupo/notificar-whatsapp/:codigo
+   * Público
+   */
+  static async enviarConfirmacionWhatsApp(req, res) {
+    try {
+      const { codigo } = req.params;
+      const { telefono } = req.body || {};
+
+      let reserva = await ReservaCupo.obtenerPorCodigo(codigo);
+      if (!reserva) {
+        reserva = await ReservaCupoHermano.obtenerPorCodigo(codigo);
+      }
+
+      if (!reserva) {
+        return res.status(404).json({
+          success: false,
+          message: 'No se encontró la reserva con el código especificado'
+        });
+      }
+
+      const telDestino = telefono || reserva.tutor_telefono;
+      if (!telDestino) {
+        return res.status(400).json({
+          success: false,
+          message: 'La reserva no cuenta con un número de teléfono / WhatsApp registrado'
+        });
+      }
+
+      const resultado = await whatsappService.notificarReservaCupoIndividual(reserva, telDestino);
+
+      if (!resultado.success) {
+        return res.status(500).json({
+          success: false,
+          message: resultado.error || 'No se pudo enviar el mensaje de WhatsApp. Verifique el número e intente de nuevo.'
+        });
+      }
+
+      res.json({
+        success: true,
+        message: `Mensaje de confirmación enviado exitosamente vía WhatsApp a ${telDestino}`
+      });
+
+    } catch (error) {
+      console.error('Error al enviar WhatsApp de reserva:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al enviar WhatsApp: ' + error.message
+      });
+    }
+  }
+
+  /**
+   * 📲 ENVIAR WHATSAPP DESDE PANEL ADMINISTRATIVO
+   * POST /api/reserva-cupo/admin/:id/enviar-whatsapp
+   */
+  static async enviarWhatsAppAdmin(req, res) {
+    try {
+      const { id } = req.params;
+      const { tipo = 'regular', telefono } = req.body || {};
+
+      let reserva = null;
+      if (tipo === 'hermano') {
+        reserva = await ReservaCupoHermano.obtenerPorId(id);
+      } else {
+        reserva = await ReservaCupo.obtenerPorId(id);
+      }
+
+      if (!reserva) {
+        return res.status(404).json({
+          success: false,
+          message: 'Reserva no encontrada'
+        });
+      }
+
+      const telDestino = telefono || reserva.tutor_telefono;
+      if (!telDestino) {
+        return res.status(400).json({
+          success: false,
+          message: 'No hay número de WhatsApp registrado para este registro'
+        });
+      }
+
+      const resultado = await whatsappService.notificarReservaCupoIndividual(reserva, telDestino);
+
+      if (!resultado.success) {
+        return res.status(500).json({
+          success: false,
+          message: resultado.error || 'Error al enviar mensaje vía WhatsApp'
+        });
+      }
+
+      res.json({
+        success: true,
+        message: `Mensaje oficial de confirmación enviado a ${telDestino}`
+      });
+
+    } catch (error) {
+      console.error('Error al enviar WhatsApp desde admin:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al enviar WhatsApp: ' + error.message
+      });
+    }
+  }
+
+  /**
+   * Genera el buffer binario del recibo PDF usando PDFDocument
+   */
+  static async generarBufferReciboPDF(reserva) {
+    return new Promise(async (resolve, reject) => {
+      try {
+        const doc = new PDFDocument({
+          size: 'LETTER',
+          margins: { top: 25, bottom: 25, left: 35, right: 35 }
+        });
+        const chunks = [];
+        doc.on('data', chunk => chunks.push(chunk));
+        doc.on('end', () => resolve(Buffer.concat(chunks)));
+        doc.on('error', reject);
+
+        await ReservaCupoController.dibujarContenidoRecibo(doc, reserva);
+        doc.end();
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+
+  /**
+   * 📎 ENVIAR RECIBO OFICIAL EN PDF ADJUNTO VÍA WHATSAPP
+   * POST /api/reserva-cupo/notificar-whatsapp/:codigo/documento
+   */
+  static async enviarDocumentoPDFWhatsApp(req, res) {
+    try {
+      const { codigo } = req.params;
+      const { telefono } = req.body || {};
+
+      let reserva = await ReservaCupo.obtenerPorCodigo(codigo);
+      if (!reserva) {
+        reserva = await ReservaCupoHermano.obtenerPorCodigo(codigo);
+      }
+
+      if (!reserva) {
+        return res.status(404).json({
+          success: false,
+          message: 'No se encontró la reserva con el código especificado'
+        });
+      }
+
+      const telDestino = telefono || reserva.tutor_telefono;
+      if (!telDestino) {
+        return res.status(400).json({
+          success: false,
+          message: 'No hay número de teléfono / WhatsApp registrado para enviar el comprobante'
+        });
+      }
+
+      // 1. Generar el buffer del PDF oficial
+      const pdfBuffer = await ReservaCupoController.generarBufferReciboPDF(reserva);
+      const base64Pdf = pdfBuffer.toString('base64');
+      const nombreEst = reserva.estudiante_nombre_completo ||
+        `${reserva.estudiante_nombres || reserva.nombres || ''} ${reserva.estudiante_apellido_paterno || reserva.apellido_paterno || ''}`.trim() ||
+        'Estudiante';
+      const fileName = `Recibo_Reserva_${reserva.codigo_reserva}.pdf`;
+      const caption = `📄 Recibo Oficial de Trámite de Cupo - ${nombreEst} (${reserva.codigo_reserva})`;
+
+      // 2. Enviar como documento PDF vía Evolution API
+      const resultado = await whatsappService.enviarDocumento({
+        to: telDestino,
+        documentUrlOrBase64: base64Pdf,
+        fileName,
+        caption
+      });
+
+      if (!resultado.success) {
+        return res.status(500).json({
+          success: false,
+          message: resultado.error || 'No se pudo enviar el documento PDF por WhatsApp'
+        });
+      }
+
+      res.json({
+        success: true,
+        message: `Comprobante PDF oficial enviado directamente a WhatsApp (${telDestino})`
+      });
+
+    } catch (error) {
+      console.error('Error al enviar documento PDF por WhatsApp:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al enviar PDF por WhatsApp: ' + error.message
       });
     }
   }

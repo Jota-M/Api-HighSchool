@@ -11,8 +11,7 @@ router.get('/periodo-activo', async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT * FROM periodo_academico 
-      WHERE activo = true 
-        AND permite_inscripciones = true
+      WHERE permite_inscripciones = true
         AND deleted_at IS NULL
       ORDER BY fecha_inicio DESC
       LIMIT 1

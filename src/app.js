@@ -227,6 +227,15 @@ app.use('/api/reserva-cupo', reservaCupoRoutes);
 app.use('/docente', docenteRoutes);
 app.use('/asignacion-docente', asignacionDocenteRoutes);
 app.use('/cursos-vacacionales', cursosVacacionalesRoutes);
+
+// ------------------------------
+// Preinscripciones y Cupos (debe ir antes de /api paymentRoutes)
+// ------------------------------
+app.use('/preinscripcion', preinscripcionRoutes);
+app.use('/api/preinscripcion', preinscripcionRoutes);
+app.use('/cupos', cupoPreinscripcionRoutes);
+app.use('/api/cupos', cupoPreinscripcionRoutes);
+
 app.use('/api', paymentRoutes);
 app.use('/api/migracion-mensualidades', migracionMensualidadesRoutes);
 
@@ -265,6 +274,7 @@ app.use('/padre', padreRoutes);
 app.use('/prediccion', prediccionRoutes);
 app.use('/backups', backupRoutes);
 app.use('/whatsapp', whatsappRoutes);
+
 // ------------------------------
 // PADRE PAGOS Y PRODUCTOS
 // ------------------------------
@@ -276,12 +286,6 @@ app.use('/solicitudes-factura', solicitudFacturaRoutes);
 app.use('/ocr', ocrRoutes);
 app.use('/api/inicial', inicialRoutes);
 app.use('/inicial', inicialRoutes);
-
-// ------------------------------
-// Rutas API antiguas
-// ------------------------------
-app.use('/preinscripcion', preinscripcionRoutes);
-app.use('/cupos', cupoPreinscripcionRoutes);
 // ------------------------------
 app.use('/', permisosRoutes);
 

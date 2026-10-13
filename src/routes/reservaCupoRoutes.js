@@ -122,4 +122,22 @@ router.post('/admin/hermanos/:id/anular', authenticate, ReservaCupoController.an
  */
 router.post('/admin/hermanos/:id/reactivar', authenticate, ReservaCupoController.reactivarHermanoAdmin);
 
+/**
+ * POST /api/reserva-cupo/notificar-whatsapp/:codigo
+ * Envía / reenvía mensaje oficial de confirmación vía WhatsApp al tutor
+ */
+router.post('/notificar-whatsapp/:codigo', ReservaCupoController.enviarConfirmacionWhatsApp);
+
+/**
+ * POST /api/reserva-cupo/notificar-whatsapp/:codigo/documento
+ * Envía el comprobante oficial como documento PDF adjunto vía WhatsApp
+ */
+router.post('/notificar-whatsapp/:codigo/documento', ReservaCupoController.enviarDocumentoPDFWhatsApp);
+
+/**
+ * POST /api/reserva-cupo/admin/:id/enviar-whatsapp
+ * Envía confirmación oficial por WhatsApp desde el panel administrativo
+ */
+router.post('/admin/:id/enviar-whatsapp', authenticate, ReservaCupoController.enviarWhatsAppAdmin);
+
 export default router;
