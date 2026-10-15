@@ -114,6 +114,9 @@ router.get('/:id', authenticate, PreInscripcionController.obtenerPorId);
 // ✅ Cambiar estado (CORREGIDO: PUT → PATCH)
 router.patch('/:id/estado', authenticate, PreInscripcionController.cambiarEstado);
 
+// 📱 Reenviar notificación de WhatsApp (ADMIN)
+router.post('/:id/reenviar-whatsapp', authenticate, PreInscripcionController.reenviarWhatsApp);
+
 // 🆕 Actualizar datos del estudiante (PÚBLICO)
 router.put('/:id/estudiante', PreInscripcionController.actualizarDatosEstudiante);
 

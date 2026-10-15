@@ -403,10 +403,10 @@ class CupoPreinscripcion {
       tiene_cupos: tieneCupos,
       total_paralelos: paralelosConfigurados,
       mensaje: tieneCupos
-        ? `Hay ${cuposDisponibles} cupo(s) disponible(s)`
+        ? 'Vacantes disponibles habilitadas'
         : (aforoTotal === 0
             ? `No hay aforo configurado para este curso. El postulante quedará en Lista de Espera puesto #${posicionEspera}.`
-            : `Cupos agotados (${cuposOcupados}/${aforoTotal} ocupados). El postulante quedará en Lista de Espera puesto #${posicionEspera}.`)
+            : `Cupos agotados. El postulante quedará en Lista de Espera puesto #${posicionEspera}.`)
     };
   }
 

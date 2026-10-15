@@ -1,251 +1,100 @@
-// // src/utils/whatsappService.js
-// import twilio from 'twilio';
-// import dotenv from 'dotenv';
-// import { pool } from '../db/pool.js';
-
-// dotenv.config();
-
-// class WhatsAppService {
-//   constructor() {
-//     this.client = twilio(
-//       process.env.TWILIO_ACCOUNT_SID,
-//       process.env.TWILIO_AUTH_TOKEN
-//     );
-//     this.from = process.env.TWILIO_WHATSAPP_FROM ?? 'whatsapp:+14155238886';
-//   }
-
-//   // ─── Normalizar número boliviano ─────────────────────────────
-//   // Acepta: "70000000", "591-70000000", "+59170000000", "0070000000"
-//   // Devuelve: "+59170000000"
-//   normalizarNumero(numero) {
-//     if (!numero) return null;
-//     // Quitar todo excepto dígitos
-//     const solo = numero.replace(/\D/g, '');
-//     // Si ya tiene el código de país 591
-//     if (solo.startsWith('591') && solo.length >= 11) {
-//       return `+${solo}`;
-//     }
-//     // Si empieza con 00 (formato europeo)
-//     if (solo.startsWith('00591')) {
-//       return `+${solo.slice(2)}`;
-//     }
-//     // Número local boliviano (7 u 8 dígitos)
-//     if (solo.length >= 7 && solo.length <= 8) {
-//       return `+591${solo}`;
-//     }
-//     // Fallback: agregar +591 si no tiene código
-//     return `+591${solo}`;
-//   }
-
-//   // ─── Método genérico de envío ─────────────────────────────────
-//   async enviarMensaje({ to, body }) {
-//   const numeroNormalizado = this.normalizarNumero(to);
-//   if (!numeroNormalizado) {
-//     return { success: false, error: 'Número inválido' };
-//   }
-
-//   try {
-//     // Timeout de 15 segundos para no colgar el dispatcher
-//     const timeoutPromise = new Promise((_, reject) =>
-//       setTimeout(() => reject(new Error('Timeout Twilio (15s)')), 15_000)
-//     );
-
-//     const message = await Promise.race([
-//       this.client.messages.create({
-//         from: this.from,
-//         to: `whatsapp:${numeroNormalizado}`,
-//         body,
-//       }),
-//       timeoutPromise,
-//     ]);
-
-//     console.log(`✅ WhatsApp enviado a ${numeroNormalizado}:`, message.sid);
-//     return { success: true, sid: message.sid };
-//   } catch (error) {
-//     console.error(`❌ Error WhatsApp a ${numeroNormalizado}:`, error.message);
-//     return { success: false, error: error.message };
-//   }
-// }
-
-//   // ─── Consultar padres a notificar dado un estudiante_id ───────
-//   // Usa la tabla estudiante_tutor (recibe_notificaciones = true)
-//   // y toma el celular de padre_familia
-//   async obtenerPadresANotificar(estudiante_id) {
-//     const query = `
-//       SELECT
-//         pf.id             AS padre_id,
-//         pf.nombres        AS padre_nombres,
-//         pf.apellido_paterno AS padre_apellido,
-//         pf.celular,
-//         pf.telefono,
-//         et.es_tutor_principal,
-//         et.prioridad_contacto
-//       FROM estudiante_tutor et
-//       INNER JOIN padre_familia pf ON et.padre_familia_id = pf.id
-//       WHERE et.estudiante_id       = $1
-//         AND et.recibe_notificaciones = true
-//         AND pf.celular IS NOT NULL
-//         AND pf.deleted_at IS NULL
-//       ORDER BY et.prioridad_contacto ASC, et.es_tutor_principal DESC
-//     `;
-//     const result = await pool.query(query, [estudiante_id]);
-//     return result.rows;
-//   }
-
-//   // ─── Obtener datos del estudiante dado matricula_id ───────────
-//   async obtenerDatosEstudiante(matricula_id) {
-//     const query = `
-//       SELECT
-//         e.id              AS estudiante_id,
-//         e.nombres,
-//         e.apellidos,
-//         e.codigo          AS estudiante_codigo,
-//         p.nombre          AS paralelo_nombre,
-//         g.nombre          AS grado_nombre,
-//         n.nombre          AS nivel_nombre,
-//         t.nombre          AS turno_nombre
-//       FROM matricula m
-//       INNER JOIN estudiante e         ON m.estudiante_id = e.id
-//       INNER JOIN paralelo p           ON m.paralelo_id = p.id
-//       INNER JOIN grado g              ON p.grado_id = g.id
-//       INNER JOIN nivel_academico n    ON g.nivel_academico_id = n.id
-//       INNER JOIN turno t              ON p.turno_id = t.id
-//       WHERE m.id = $1
-//         AND m.deleted_at IS NULL
-//     `;
-//     const result = await pool.query(query, [matricula_id]);
-//     return result.rows[0] || null;
-//   }
-
-//   // ─── Notificación de asistencia: ausente o tardanza ──────────
-//   async notificarAsistencia({ matricula_id, estado, materia_nombre, fecha, asignacion_docente_id }) {
-//     // Solo notificar para ausente o tardanza
-//     if (!['ausente', 'tardanza'].includes(estado)) return;
-
-//     const estudiante = await this.obtenerDatosEstudiante(matricula_id);
-//     if (!estudiante) {
-//       console.warn(`⚠️ No se encontró estudiante para matrícula ${matricula_id}`);
-//       return;
-//     }
-
-//     const padres = await this.obtenerPadresANotificar(estudiante.estudiante_id);
-//     if (padres.length === 0) {
-//       console.log(`⚠️ Sin padres con celular registrado para ${estudiante.nombres}`);
-//       return;
-//     }
-
-//     const body = this.generarMensajeAsistencia({
-//       estado,
-//       nombreEstudiante: `${estudiante.nombres} ${estudiante.apellidos}`.trim(),
-//       grado: `${estudiante.grado_nombre} ${estudiante.paralelo_nombre}`,
-//       materia: materia_nombre,
-//       fecha,
-//       turno: estudiante.turno_nombre,
-//     });
-
-//     // Enviar a todos los padres con recibe_notificaciones = true
-//     const resultados = await Promise.allSettled(
-//       padres.map(padre =>
-//         this.enviarMensaje({ to: padre.celular, body })
-//       )
-//     );
-
-//     const enviados = resultados.filter(r => r.status === 'fulfilled' && r.value.success).length;
-//     console.log(`📱 Notificaciones asistencia: ${enviados}/${padres.length} enviadas para ${estudiante.nombres}`);
-
-//     return resultados;
-//   }
-
-//   // ─── Notificación masiva (pase de lista completo) ─────────────
-//   // Llama a notificarAsistencia para cada registro ausente/tardanza
-//   async notificarAsistenciaMasiva(registros, { asignacion_docente_id, fecha, materia_nombre }) {
-//     const aNotificar = registros.filter(r =>
-//       ['ausente', 'tardanza'].includes(r.estado)
-//     );
-
-//     if (aNotificar.length === 0) {
-//       console.log('ℹ️ Sin ausentes/tardanzas en el pase de lista');
-//       return;
-//     }
-
-//     console.log(`📨 Enviando ${aNotificar.length} notificaciones de asistencia...`);
-
-//     // Enviar en paralelo pero con control (no saturar Twilio)
-//     const resultados = await Promise.allSettled(
-//       aNotificar.map(reg =>
-//         this.notificarAsistencia({
-//           matricula_id: reg.matricula_id,
-//           estado: reg.estado,
-//           materia_nombre,
-//           fecha,
-//           asignacion_docente_id,
-//         })
-//       )
-//     );
-
-//     return resultados;
-//   }
-
-//   // ─── Template del mensaje ─────────────────────────────────────
-//   generarMensajeAsistencia({ estado, nombreEstudiante, grado, materia, fecha, turno }) {
-//     const fechaFormateada = new Date(fecha + 'T12:00:00').toLocaleDateString('es-BO', {
-//       weekday: 'long',
-//       year: 'numeric',
-//       month: 'long',
-//       day: 'numeric',
-//     });
-
-//     const esAusente = estado === 'ausente';
-
-//     return [
-//       `${esAusente ? '⚠️' : '🕐'} *${esAusente ? 'Inasistencia' : 'Tardanza'} registrada*`,
-//       `🏫 Unidad Educativa La Voz de Cristo`,
-//       ``,
-//       `👤 Estudiante: *${nombreEstudiante}*`,
-//       `📚 Grado: ${grado} — Turno ${turno}`,
-//       materia ? `📖 Materia: ${materia}` : null,
-//       `📅 Fecha: ${fechaFormateada}`,
-//       ``,
-//       esAusente
-//         ? `Su hijo/a *no asistió* a clases el día de hoy.`
-//         : `Su hijo/a llegó con *tardanza* a clases el día de hoy.`,
-//       ``,
-//       `Si esto es un error o ya fue justificado, comuníquese con el docente o administración.`,
-//       ``,
-//       `📞 _Colegio: +591 69624189_`,
-//       `_Este es un mensaje automático._`,
-//     ]
-//       .filter(l => l !== null)
-//       .join('\n');
-//   }
-// }
-
-// export default new WhatsAppService();
 // src/utils/whatsappService.js
-// Adaptador Evolution API — migrado desde Twilio
-// Mantiene la misma interfaz pública para no romper dispatcher ni asistencia
+// Adaptador Evolution API / Evolution Go con arquitectura Anti-Baneo Avanzada
+// Incluye: Cola secuencial (FIFO), Throttling con Jitter humano, Simulación de digitación (typing),
+// normalización estricta de números y micro-variaciones (Spintax) para mitigar huella de spam.
 
 import { pool } from '../db/pool.js';
 
 class WhatsAppService {
+    constructor() {
+        // ─── Cola de Envíos Anti-Baneo ──────────────────────────────
+        this.colaEnvio = [];
+        this.procesandoCola = false;
 
-    // ─── Normalizar número boliviano ──────────────────────────────
+        // Rango de pausa aleatoria entre envíos sucesivos (3.0s a 6.0s)
+        this.minDelayMs = 3000;
+        this.maxDelayMs = 6000;
+    }
+
+    // ─── Utilidad: Pausa Asíncrona ────────────────────────────────
+    _esperar(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    // ─── Utilidad: Delay Aleatorio (Jitter Humano) ─────────────────
+    _obtenerDelayAleatorio(min = this.minDelayMs, max = this.maxDelayMs) {
+        return Math.floor(Math.random() * (max - min + 1)) + min;
+    }
+
+    // ─── Despachador de Cola Secuencial ───────────────────────────
+    async _ejecutarEnCola(tareaFn) {
+        return new Promise((resolve, reject) => {
+            this.colaEnvio.push({ tareaFn, resolve, reject });
+            this._procesarCola();
+        });
+    }
+
+    async _procesarCola() {
+        if (this.procesandoCola || this.colaEnvio.length === 0) return;
+
+        this.procesandoCola = true;
+
+        while (this.colaEnvio.length > 0) {
+            const { tareaFn, resolve, reject } = this.colaEnvio.shift();
+
+            try {
+                const resultado = await tareaFn();
+                resolve(resultado);
+            } catch (error) {
+                reject(error);
+            }
+
+            // Si aún quedan mensajes en la cola, pausar con cadencia humana
+            if (this.colaEnvio.length > 0) {
+                const pausa = this._obtenerDelayAleatorio();
+                console.log(`⏳ [Anti-Ban WA] Pausa humana de ${(pausa / 1000).toFixed(1)}s antes del próximo envío (${this.colaEnvio.length} en espera)...`);
+                await this._esperar(pausa);
+            }
+        }
+
+        this.procesandoCola = false;
+    }
+
+    // ─── Normalizar y Validar número boliviano/internacional ──────
     normalizarNumero(numero) {
         if (!numero) return null;
 
-        const solo = numero.replace(/\D/g, '');
+        const solo = String(numero).replace(/\D/g, '');
+
+        // Descartar números sospechosos, vacíos o cadenas de ceros
+        if (!solo || solo.length < 7 || /^0+$/.test(solo)) {
+            return null;
+        }
 
         if (solo.startsWith('00591')) return solo.slice(2);
         if (solo.startsWith('591') && solo.length >= 11) return solo;
-        if (solo.length >= 7 && solo.length <= 8) return `591${solo}`;
+
+        // Celular boliviano típico (8 dígitos, usualmente inicia con 6 o 7)
+        if (solo.length >= 7 && solo.length <= 8) {
+            return `591${solo}`;
+        }
+
+        // Número internacional válido (> 9 dígitos)
+        if (solo.length >= 9) {
+            return solo;
+        }
+
         return `591${solo}`;
     }
 
-    // ─── Enviar texto plano ───────────────────────────────────────
+    // ─── Enviar texto plano con simulación de escritura ───────────
     async _enviarTexto(numero, texto) {
         if (!process.env.EVOLUTION_API_URL || !process.env.EVOLUTION_INSTANCE_TOKEN) {
             throw new Error('Variables EVOLUTION_API_URL o EVOLUTION_INSTANCE_TOKEN no configuradas');
         }
+
+        // Simulación de tiempo de tipeo humano (entre 1.2s y 2.4s)
+        const delayTyping = Math.floor(Math.random() * 1200) + 1200;
 
         const response = await fetch(`${process.env.EVOLUTION_API_URL}/send/text`, {
             method: 'POST',
@@ -256,6 +105,7 @@ class WhatsAppService {
             body: JSON.stringify({
                 number: numero,
                 text: texto,
+                delay: delayTyping,
             }),
         });
 
@@ -278,6 +128,8 @@ class WhatsAppService {
             throw new Error('Variables EVOLUTION_API_URL o EVOLUTION_INSTANCE_TOKEN no configuradas');
         }
 
+        const delayTyping = Math.floor(Math.random() * 1000) + 1200;
+
         const response = await fetch(`${process.env.EVOLUTION_API_URL}/send/media`, {
             method: 'POST',
             headers: {
@@ -286,9 +138,10 @@ class WhatsAppService {
             },
             body: JSON.stringify({
                 number: numero,
-                type: 'image',   // ← era "mediatype"
-                url: imageUrl,  // ← era "media"
+                type: 'image',
+                url: imageUrl,
                 caption: caption,
+                delay: delayTyping,
             }),
         });
 
@@ -311,11 +164,12 @@ class WhatsAppService {
             throw new Error('Variables EVOLUTION_API_URL o EVOLUTION_INSTANCE_TOKEN no configuradas');
         }
 
-        // Si viene con prefijo Data URI 'data:...;base64,', extraer sólo la cadena base64 pura
         let mediaPayload = documentUrlOrBase64;
         if (typeof mediaPayload === 'string' && mediaPayload.includes(';base64,')) {
             mediaPayload = mediaPayload.split(';base64,')[1];
         }
+
+        const delayTyping = Math.floor(Math.random() * 1000) + 1500;
 
         const response = await fetch(`${process.env.EVOLUTION_API_URL}/send/media`, {
             method: 'POST',
@@ -330,6 +184,7 @@ class WhatsAppService {
                 fileName: fileName,
                 mimetype: 'application/pdf',
                 caption: caption,
+                delay: delayTyping,
             }),
         });
 
@@ -346,84 +201,111 @@ class WhatsAppService {
         return data;
     }
 
-    // ─── Enviar Documento Genérico ────────────────────────────────
+    // ─── Enviar Documento Genérico (Protegido por Cola Anti-Ban) ───
     async enviarDocumento({ to, documentUrlOrBase64, fileName = 'comprobante.pdf', caption = '' }) {
         const numero = this.normalizarNumero(to);
         if (!numero) {
-            return { success: false, error: 'Número inválido' };
+            return { success: false, error: 'Número inválido o no reconocido' };
         }
 
-        try {
-            const timeoutPromise = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error('Timeout Evolution (25s)')), 25_000)
-            );
+        return await this._ejecutarEnCola(async () => {
+            try {
+                const timeoutPromise = new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error('Timeout Evolution (25s)')), 25_000)
+                );
 
-            const result = await Promise.race([
-                this._enviarDocumento(numero, documentUrlOrBase64, fileName, caption),
-                timeoutPromise,
-            ]);
+                const result = await Promise.race([
+                    this._enviarDocumento(numero, documentUrlOrBase64, fileName, caption),
+                    timeoutPromise,
+                ]);
 
-            console.log(`✅ WhatsApp Documento (${fileName}) enviado a ${numero}`);
-            return { success: true, data: result };
-        } catch (error) {
-            console.error(`❌ Error WhatsApp Documento a ${numero}:`, error.message);
-            return { success: false, error: error.message };
-        }
+                console.log(`✅ [Anti-Ban WA] Documento (${fileName}) enviado a ${numero}`);
+                return { success: true, data: result };
+            } catch (error) {
+                console.error(`❌ [Anti-Ban WA] Error documento a ${numero}:`, error.message);
+                return { success: false, error: error.message };
+            }
+        });
     }
 
-    // ─── Método genérico de envío ─────────────────────────────────
+    // ─── Método genérico de envío (Protegido por Cola Anti-Ban) ────
     async enviarMensaje({ to, body, foto_url = null }) {
         const numero = this.normalizarNumero(to);
-
         if (!numero) {
-            return { success: false, error: 'Número inválido' };
+            return { success: false, error: 'Número inválido o no reconocido' };
         }
 
-        try {
-            const timeoutPromise = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error('Timeout Evolution (15s)')), 15_000)
-            );
+        return await this._ejecutarEnCola(async () => {
+            try {
+                const timeoutPromise = new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error('Timeout Evolution (20s)')), 20_000)
+                );
 
-            if (foto_url) {
-                await Promise.race([
-                    this._enviarImagen(numero, foto_url, body),
-                    timeoutPromise,
-                ]);
-            } else {
-                await Promise.race([
-                    this._enviarTexto(numero, body),
-                    timeoutPromise,
-                ]);
+                if (foto_url) {
+                    await Promise.race([
+                        this._enviarImagen(numero, foto_url, body),
+                        timeoutPromise,
+                    ]);
+                } else {
+                    await Promise.race([
+                        this._enviarTexto(numero, body),
+                        timeoutPromise,
+                    ]);
+                }
+
+                console.log(`✅ [Anti-Ban WA] Mensaje entregado a ${numero}`);
+                return { success: true };
+            } catch (error) {
+                console.error(`❌ [Anti-Ban WA] Error envío a ${numero}:`, error.message);
+                return { success: false, error: error.message };
             }
+        });
+    }
 
-            console.log(`✅ WhatsApp enviado a ${numero}`);
-            return { success: true };
+    // ─── Helpers de Spintax Anti-Hash de Spam ──────────────────────
+    _obtenerSaludoAleatorio(nombre) {
+        const nom = (nombre || '').trim();
+        const tieneNombre = Boolean(nom && nom.toLowerCase() !== 'padre/tutor' && nom.toLowerCase() !== 'padre/madre/tutor');
+        const destinatario = tieneNombre ? `*${nom}*` : 'estimado padre/tutor de familia';
 
-        } catch (error) {
-            console.error(`❌ Error WhatsApp a ${numero}:`, error.message);
-            return { success: false, error: error.message };
-        }
+        const saludos = [
+            `Hola ${destinatario},`,
+            `Estimado/a ${destinatario},`,
+            `Apreciado/a ${destinatario},`,
+            `Reciba un cordial saludo, ${destinatario}:`,
+            `Buen día, ${destinatario}:`,
+        ];
+        return saludos[Math.floor(Math.random() * saludos.length)];
+    }
+
+    _obtenerDespedidaAntiReporte() {
+        const avisos = [
+            `ℹ️ _Si cambió de número o no reconoce este aviso, por favor respóndanos a este chat._`,
+            `ℹ️ _Comunicado oficial. Si recibió este mensaje por error, infórmenos por esta vía._`,
+            `ℹ️ _Por favor guarde nuestro contacto oficial para recibir novedades académicas._`,
+        ];
+        return avisos[Math.floor(Math.random() * avisos.length)];
     }
 
     // ─── Consultar padres a notificar dado un estudiante_id ───────
     async obtenerPadresANotificar(estudiante_id) {
         const query = `
-      SELECT
-        pf.id               AS padre_id,
-        pf.nombres          AS padre_nombres,
-        pf.apellido_paterno AS padre_apellido,
-        pf.celular,
-        pf.telefono,
-        et.es_tutor_principal,
-        et.prioridad_contacto
-      FROM estudiante_tutor et
-      INNER JOIN padre_familia pf ON et.padre_familia_id = pf.id
-      WHERE et.estudiante_id         = $1
-        AND et.recibe_notificaciones = true
-        AND pf.celular IS NOT NULL
-        AND pf.deleted_at IS NULL
-      ORDER BY et.prioridad_contacto ASC, et.es_tutor_principal DESC
-    `;
+          SELECT
+            pf.id               AS padre_id,
+            pf.nombres          AS padre_nombres,
+            pf.apellido_paterno AS padre_apellido,
+            pf.celular,
+            pf.telefono,
+            et.es_tutor_principal,
+            et.prioridad_contacto
+          FROM estudiante_tutor et
+          INNER JOIN padre_familia pf ON et.padre_familia_id = pf.id
+          WHERE et.estudiante_id         = $1
+            AND et.recibe_notificaciones = true
+            AND pf.celular IS NOT NULL
+            AND pf.deleted_at IS NULL
+          ORDER BY et.prioridad_contacto ASC, et.es_tutor_principal DESC
+        `;
         const result = await pool.query(query, [estudiante_id]);
         return result.rows;
     }
@@ -431,24 +313,24 @@ class WhatsAppService {
     // ─── Obtener datos del estudiante dado matricula_id ───────────
     async obtenerDatosEstudiante(matricula_id) {
         const query = `
-      SELECT
-        e.id          AS estudiante_id,
-        e.nombres,
-        e.apellidos,
-        e.codigo      AS estudiante_codigo,
-        p.nombre      AS paralelo_nombre,
-        g.nombre      AS grado_nombre,
-        n.nombre      AS nivel_nombre,
-        t.nombre      AS turno_nombre
-      FROM matricula m
-      INNER JOIN estudiante e      ON m.estudiante_id = e.id
-      INNER JOIN paralelo p        ON m.paralelo_id = p.id
-      INNER JOIN grado g           ON p.grado_id = g.id
-      INNER JOIN nivel_academico n ON g.nivel_academico_id = n.id
-      INNER JOIN turno t           ON p.turno_id = t.id
-      WHERE m.id = $1
-        AND m.deleted_at IS NULL
-    `;
+          SELECT
+            e.id          AS estudiante_id,
+            e.nombres,
+            e.apellidos,
+            e.codigo      AS estudiante_codigo,
+            p.nombre      AS paralelo_nombre,
+            g.nombre      AS grado_nombre,
+            n.nombre      AS nivel_nombre,
+            t.nombre      AS turno_nombre
+          FROM matricula m
+          INNER JOIN estudiante e      ON m.estudiante_id = e.id
+          INNER JOIN paralelo p        ON m.paralelo_id = p.id
+          INNER JOIN grado g           ON p.grado_id = g.id
+          INNER JOIN nivel_academico n ON g.nivel_academico_id = n.id
+          INNER JOIN turno t           ON p.turno_id = t.id
+          WHERE m.id = $1
+            AND m.deleted_at IS NULL
+        `;
         const result = await pool.query(query, [matricula_id]);
         return result.rows[0] || null;
     }
@@ -478,22 +360,20 @@ class WhatsAppService {
             turno: estudiante.turno_nombre,
         });
 
-        const resultados = await Promise.allSettled(
-            padres.map(padre => this.enviarMensaje({ to: padre.celular, body }))
-        );
+        // Despacho secuencial protegido por cola
+        const resultados = [];
+        for (const padre of padres) {
+            const res = await this.enviarMensaje({ to: padre.celular, body });
+            resultados.push({ status: 'fulfilled', value: res });
+        }
 
-        const enviados = resultados.filter(
-            r => r.status === 'fulfilled' && r.value.success
-        ).length;
-
-        console.log(
-            `📱 Notificaciones asistencia: ${enviados}/${padres.length} enviadas para ${estudiante.nombres}`
-        );
+        const enviados = resultados.filter(r => r.value?.success).length;
+        console.log(`📱 Notificaciones asistencia: ${enviados}/${padres.length} para ${estudiante.nombres}`);
 
         return resultados;
     }
 
-    // ─── Notificación masiva (pase de lista completo) ─────────────
+    // ─── Notificación masiva (pase de lista completo con Throttling) ─
     async notificarAsistenciaMasiva(registros, { asignacion_docente_id, fecha, materia_nombre }) {
         const aNotificar = registros.filter(r =>
             ['ausente', 'tardanza'].includes(r.estado)
@@ -501,22 +381,26 @@ class WhatsAppService {
 
         if (aNotificar.length === 0) {
             console.log('ℹ️ Sin ausentes/tardanzas en el pase de lista');
-            return;
+            return [];
         }
 
-        console.log(`📨 Enviando ${aNotificar.length} notificaciones de asistencia...`);
+        console.log(`📨 [Anti-Ban] Encolando ${aNotificar.length} notificaciones de asistencia con despacho regulado...`);
 
-        const resultados = await Promise.allSettled(
-            aNotificar.map(reg =>
-                this.notificarAsistencia({
+        const resultados = [];
+        for (const reg of aNotificar) {
+            try {
+                const res = await this.notificarAsistencia({
                     matricula_id: reg.matricula_id,
                     estado: reg.estado,
                     materia_nombre,
                     fecha,
                     asignacion_docente_id,
-                })
-            )
-        );
+                });
+                resultados.push({ status: 'fulfilled', value: res });
+            } catch (err) {
+                resultados.push({ status: 'rejected', reason: err });
+            }
+        }
 
         return resultados;
     }
@@ -540,10 +424,11 @@ class WhatsAppService {
         })();
 
         const esAusente = estado === 'ausente';
+        const avisoAntiReporte = this._obtenerDespedidaAntiReporte();
 
         return [
             `${esAusente ? '⚠️' : '🕐'} *${esAusente ? 'Inasistencia' : 'Tardanza'} registrada*`,
-            `🏫 Unidad Educativa La Voz de Cristo`,
+            `🏫 *Unidad Educativa Particular La Voz de Cristo*`,
             ``,
             `👤 Estudiante: *${nombreEstudiante}*`,
             `📚 Grado: ${grado} — Turno ${turno}`,
@@ -556,12 +441,14 @@ class WhatsAppService {
             ``,
             `Si esto es un error o ya fue justificado, comuníquese con el docente o administración.`,
             ``,
-            `📞 _Colegio: +591 69624189_`,
-            `_Este es un mensaje automático._`,
+            avisoAntiReporte,
+            `📞 _Secretaría: +591 69624189_`,
+            `_Mensaje institucional automático._`,
         ]
             .filter(l => l !== null)
             .join('\n');
     }
+
     // ─── Obtener celular del tutor principal de una preinscripción ───
     obtenerCelularTutor(preinscripcion) {
         const tutor = preinscripcion?.tutor;
@@ -592,7 +479,6 @@ class WhatsAppService {
     }
 
     // ─── Templates ──────────────────────────────────────────────────
-
     _obtenerInfoEstadoSimple(estado) {
         const estados = {
             'iniciada': { emoji: '📝', titulo: 'Preinscripción Iniciada' },
@@ -617,23 +503,46 @@ class WhatsAppService {
         const tutor = preinscripcion.tutor || {};
         const nombreEstudiante = `${estudiante.nombres || ''} ${estudiante.apellido_paterno || ''}`.trim();
         const nombreTutor = `${tutor.nombres || ''} ${tutor.apellido_paterno || ''}`.trim();
+        const grado = preinscripcion.grado_nombre || estudiante.grado_solicitado || '';
+        const turno = preinscripcion.turno_nombre || estudiante.turno_solicitado || '';
+        const periodo = preinscripcion.periodo_nombre || '';
+        const saludo = this._obtenerSaludoAleatorio(nombreTutor);
+        const avisoAntiReporte = this._obtenerDespedidaAntiReporte();
 
-        return [
-            `📝 *¡Gracias por registrarte!*`,
-            `🏫 Unidad Educativa La Voz de Cristo`,
+        const lineas = [
+            `📝 *¡Registro de Preinscripción Recibido!*`,
+            `🏫 *Unidad Educativa Particular La Voz de Cristo*`,
             ``,
-            `Hola ${nombreTutor || 'Padre/Tutor'},`,
+            saludo,
             ``,
-            `Hemos recibido correctamente la preinscripción de *${nombreEstudiante}*.`,
+            `Hemos recibido correctamente la postulación de:`,
+            `👤 Estudiante: *${nombreEstudiante}*`,
+            `📋 Código de seguimiento: *${preinscripcion.codigo_inscripcion}*`,
+        ];
+
+        if (grado) {
+            lineas.push(`📚 Curso / Grado: *${grado}*`);
+        }
+        if (turno) {
+            lineas.push(`⏰ Turno solicitado: *${turno}*`);
+        }
+        if (periodo) {
+            lineas.push(`📅 Gestión académica: *${periodo}*`);
+        }
+
+        lineas.push(
             ``,
-            `📋 Código: *${preinscripcion.codigo_inscripcion}*`,
+            `📌 *Próximos pasos:*`,
+            `Una vez revisada la información enviada, nos contactaremos con usted por este medio (WhatsApp) para la entrevista correspondiente.`,
             ``,
-            `Guarda este código para dar seguimiento a tu solicitud.`,
-            `Te avisaremos por este medio sobre cualquier novedad. ¡Gracias por confiar en nosotros!`,
+            `🗓️ Las entrevistas se realizarán a partir del *20 de octubre*. La fecha y hora exacta le será enviada por este medio.`,
             ``,
-            `📞 _Colegio: +591 69624189_`,
-            `_Este es un mensaje automático._`,
-        ].join('\n');
+            avisoAntiReporte,
+            `📞 _Secretaría: +591 69624189_`,
+            `_Mensaje institucional automático._`,
+        );
+
+        return lineas.join('\n');
     }
 
     generarMensajeCambioEstado(preinscripcion, estadoAnterior) {
@@ -641,29 +550,86 @@ class WhatsAppService {
         const tutor = preinscripcion.tutor || {};
         const nombreEstudiante = `${estudiante.nombres || ''} ${estudiante.apellido_paterno || ''}`.trim();
         const nombreTutor = `${tutor.nombres || ''} ${tutor.apellido_paterno || ''}`.trim();
+        const grado = preinscripcion.grado_nombre || estudiante.grado_solicitado || '';
+        const turno = preinscripcion.turno_nombre || estudiante.turno_solicitado || '';
         const info = this._obtenerInfoEstadoSimple(preinscripcion.estado);
+        const saludo = this._obtenerSaludoAleatorio(nombreTutor);
+        const avisoAntiReporte = this._obtenerDespedidaAntiReporte();
 
         const lineas = [
             `${info.emoji} *${info.titulo}*`,
-            `🏫 Unidad Educativa La Voz de Cristo`,
+            `🏫 *Unidad Educativa Particular La Voz de Cristo*`,
             ``,
-            `Hola ${nombreTutor || 'Padre/Tutor'},`,
+            saludo,
             ``,
-            `La preinscripción de *${nombreEstudiante}* (código *${preinscripcion.codigo_inscripcion}*) ha cambiado de estado:`,
-            ``,
-            `📊 Nuevo estado: *${info.titulo}*`,
+            `La preinscripción de *${nombreEstudiante}* ha sido actualizada:`,
+            `📋 Código: *${preinscripcion.codigo_inscripcion}*`,
         ];
 
+        if (grado) {
+            lineas.push(`📚 Curso postulado: *${grado}*`);
+        }
+        if (turno) {
+            lineas.push(`⏰ Turno: *${turno}*`);
+        }
+
+        lineas.push(
+            ``,
+            `📊 Estado actual: *${info.titulo}*`,
+        );
+
         if (preinscripcion.observaciones) {
-            lineas.push(``, `📝 Observaciones: ${preinscripcion.observaciones}`);
+            let obs = String(preinscripcion.observaciones).trim();
+
+            // Si contiene fecha sin formato WhatsApp (*), resaltarla automáticamente en negrilla
+            if (obs.includes('- Fecha:') && !obs.includes('*')) {
+                obs = obs.replace(
+                    /- Fecha:\s*(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2})/g,
+                    '- 📅 Fecha y Hora: *$1* a horas *$2*'
+                );
+            }
+
+            if (obs.startsWith('Entrevista agendada') || obs.startsWith('Entrevista completada')) {
+                lineas.push(``, obs);
+            } else {
+                lineas.push(``, `📝 Observaciones: ${obs}`);
+            }
         }
 
         if (preinscripcion.estado === 'documentos_pendientes') {
-            lineas.push(``, `⚠️ *Acción requerida:* completa la carga de documentos lo antes posible.`);
+            lineas.push(``, `⚠️ *Acción requerida:* Por favor suba los documentos faltantes a la brevedad.`);
+        }
+
+        if (preinscripcion.estado === 'entrevista_pendiente') {
+            lineas.push(
+                ``,
+                `🗓️ *Entrevistas:* Se realizarán a partir del *20 de octubre*. Nos comunicaremos por este medio (WhatsApp) para coordinar la fecha y hora exacta.`
+            );
         }
 
         if (preinscripcion.estado === 'aprobada') {
-            lineas.push(``, `🎉 ¡Felicitaciones! Pronto recibirás más información sobre los siguientes pasos.`);
+            lineas.push(``, `🎉 ¡Felicitaciones! Su solicitud ha sido aprobada. Pronto recibirá las indicaciones para formalizar la matrícula.`);
+        }
+
+        if (preinscripcion.estado === 'entrevista_programada') {
+            const obsStr = (preinscripcion.observaciones || '').toLowerCase();
+            const tieneAsistencia = obsStr.includes('asistencia') || obsStr.includes('tutor') || obsStr.includes('padre');
+            if (!tieneAsistencia) {
+                lineas.push(
+                    ``,
+                    `👥 *Asistencia Requerida (Obligatoria):*`,
+                    `Para la entrevista es indispensable la presencia del *Padre y/o Madre o Tutor* junto con el *hijo o los hijos postulantes*.`
+                );
+            }
+
+            const esVirtual = obsStr.includes('modalidad: virtual');
+            if (!esVirtual) {
+                lineas.push(
+                    ``,
+                    `📍 *Ubicación del Colegio (Google Maps):*`,
+                    `https://maps.app.goo.gl/dWapCMNPguGBMUTv9`
+                );
+            }
         }
 
         if (preinscripcion.estado === 'rechazada' && preinscripcion.motivo_rechazo) {
@@ -672,8 +638,9 @@ class WhatsAppService {
 
         lineas.push(
             ``,
-            `📞 _Colegio: +591 69624189_`,
-            `_Este es un mensaje automático._`,
+            avisoAntiReporte,
+            `📞 _Secretaría: +591 69624189_`,
+            `_Mensaje institucional automático._`,
         );
 
         return lineas.join('\n');
@@ -689,13 +656,15 @@ class WhatsAppService {
         const nombreTutor = tutor_nombre?.trim() || 'Padre/Madre/Tutor';
         const periodo = reservas[0]?.periodo_nombre || hermanos[0]?.periodo_nombre || 'Gestión 2027';
         const baseUrl = this._obtenerBaseUrlRecibo();
+        const saludo = this._obtenerSaludoAleatorio(nombreTutor);
+        const avisoAntiReporte = this._obtenerDespedidaAntiReporte();
 
         const lineas = [
             `🎟️ *¡Confirmación de Trámite de Cupo Escolar!*`,
             `🏫 *Unidad Educativa Particular La Voz de Cristo*`,
             ``,
-            `Hola *${nombreTutor}*,`,
-            `Hemos registrado correctamente el trámite de cupo escolar para la *${periodo}*.`,
+            saludo,
+            `Hemos registrado el trámite de cupo escolar para la *${periodo}*.`,
             ``
         ];
 
@@ -761,8 +730,9 @@ class WhatsAppService {
         lineas.push(
             `📌 *Importante:* Conserve este comprobante y sus códigos oficiales para el proceso de formalización e inscripción de matrícula.`,
             ``,
-            `📞 _Secretaría del Colegio: +591 69624189_`,
-            `_Este es un mensaje oficial emitido automáticamente por el sistema._`
+            avisoAntiReporte,
+            `📞 _Secretaría: +591 69624189_`,
+            `_Mensaje institucional automático._`
         );
 
         return lineas.join('\n');
@@ -778,12 +748,14 @@ class WhatsAppService {
         const esEspera = reserva.estado === 'en_espera';
         const esHermano = Boolean(reserva.hermano_regular_id || reserva.codigo_reserva?.startsWith('HER-') || reserva.codigo_reserva?.startsWith('ESP-'));
         const baseUrl = this._obtenerBaseUrlRecibo();
+        const saludo = this._obtenerSaludoAleatorio(nombreTutor);
+        const avisoAntiReporte = this._obtenerDespedidaAntiReporte();
 
         const lineas = [
             `🎟️ *¡Comprobante Oficial de Reserva de Cupo!*`,
             `🏫 *Unidad Educativa Particular La Voz de Cristo*`,
             ``,
-            `Hola *${nombreTutor}*,`,
+            saludo,
             `Compartimos el comprobante oficial de su registro para la *${periodo}*:`,
             ``,
             `🎓 *Estudiante:* ${nombreEst}`,
@@ -815,8 +787,9 @@ class WhatsAppService {
             ``,
             `📌 Conserve este mensaje y código oficial para la formalización de matrícula escolar.`,
             ``,
-            `📞 _Secretaría del Colegio: +591 69624189_`,
-            `_Mensaje automático oficial._`
+            avisoAntiReporte,
+            `📞 _Secretaría: +591 69624189_`,
+            `_Mensaje institucional automático._`
         );
 
         return lineas.join('\n');

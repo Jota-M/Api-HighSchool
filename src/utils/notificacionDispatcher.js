@@ -149,7 +149,7 @@ class NotificacionDispatcher {
 
     return [
       `${prioridad}${icono} *${notif.titulo}*`,
-      `🏫 Unidad Educativa La Voz de Cristo`,
+      `🏫 *Unidad Educativa Particular La Voz de Cristo*`,
       ``,
       notif.mensaje,
       ``,

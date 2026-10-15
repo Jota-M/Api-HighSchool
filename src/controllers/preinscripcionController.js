@@ -247,14 +247,26 @@ class PreInscripcionController {
         documentos_urls.push(uploadResult.url);
       }
 
-      // Generar código
+      // Generar código con el año de la gestión académica seleccionada
+      let anioCodigo = null;
+      if (preinscripcion_info?.periodo_academico_id) {
+        const pRes = await client.query('SELECT nombre, fecha_inicio FROM periodo_academico WHERE id = $1', [preinscripcion_info.periodo_academico_id]);
+        if (pRes.rows.length > 0) {
+          const matchYear = pRes.rows[0].nombre?.match(/\d{4}/);
+          anioCodigo = matchYear ? matchYear[0] : (pRes.rows[0].fecha_inicio ? new Date(pRes.rows[0].fecha_inicio).getFullYear().toString() : null);
+        }
+      }
+      if (!anioCodigo) {
+        anioCodigo = new Date().getFullYear().toString();
+      }
+
       const codigoResult = await client.query(`
-        SELECT 'PRE-' || TO_CHAR(CURRENT_DATE, 'YYYY') || '-' || 
+        SELECT 'PRE-' || $1::text || '-' || 
         LPAD(CAST(COALESCE(MAX(CAST(SUBSTRING(codigo_inscripcion FROM 10) AS INTEGER)), 0) + 1 AS VARCHAR), 4, '0') 
         AS codigo
         FROM pre_inscripcion 
-        WHERE codigo_inscripcion LIKE 'PRE-' || TO_CHAR(CURRENT_DATE, 'YYYY') || '-%'
-      `);
+        WHERE codigo_inscripcion LIKE 'PRE-' || $1::text || '-%'
+      `, [anioCodigo]);
       const codigoInscripcion = codigoResult.rows[0].codigo;
 
       // Crear pre_inscripcion (con estado y posición de espera correspondientes)
@@ -536,7 +548,7 @@ class PreInscripcionController {
       await client.query('BEGIN');
 
       const { id } = req.params;
-      const { estado, observaciones } = req.body;
+      const { estado, observaciones, notificarWhatsapp = true } = req.body;
 
       if (!estado) {
         await client.query('ROLLBACK');
@@ -610,16 +622,18 @@ class PreInscripcionController {
       );
 
       await client.query('COMMIT');
-      // Notificar cambio de estado 
-      setImmediate(async () => {
-        try {
-          const preinscripcionCompleta = await PreInscripcion.obtenerPorId(id);
-          // await EmailService.notificarCambioEstado(preinscripcionCompleta, preInscripcion.estado);
-          await WhatsAppService.notificarCambioEstado(preinscripcionCompleta, preInscripcion.estado);
-        } catch (error) {
-          console.error('❌ Error notificaciones cambio estado:', error);
-        }
-      });
+
+      // Notificar cambio de estado si no se deshabilitó explícitamente
+      if (notificarWhatsapp !== false && notificarWhatsapp !== 'false') {
+        setImmediate(async () => {
+          try {
+            const preinscripcionCompleta = await PreInscripcion.obtenerPorId(id);
+            await WhatsAppService.notificarCambioEstado(preinscripcionCompleta, preInscripcion.estado);
+          } catch (error) {
+            console.error('❌ Error notificaciones cambio estado:', error);
+          }
+        });
+      }
 
       // Registrar actividad
       if (req.user) {
@@ -633,7 +647,8 @@ class PreInscripcionController {
           datos_nuevos: {
             estado,
             observaciones,
-            cupo_asignado: !!cupoAsignado
+            cupo_asignado: !!cupoAsignado,
+            whatsapp_notificado: notificarWhatsapp !== false && notificarWhatsapp !== 'false'
           },
           ip_address: reqInfo.ip,
           user_agent: reqInfo.userAgent,
@@ -660,6 +675,53 @@ class PreInscripcionController {
       });
     } finally {
       client.release();
+    }
+  }
+
+  // ========================================
+  // REENVIAR NOTIFICACIÓN WHATSAPP
+  // ========================================
+  static async reenviarWhatsApp(req, res) {
+    try {
+      const { id } = req.params;
+      const { observaciones } = req.body;
+
+      const preinscripcion = await PreInscripcion.obtenerPorId(id);
+      if (!preinscripcion) {
+        return res.status(404).json({
+          success: false,
+          message: 'Preinscripción no encontrada',
+        });
+      }
+
+      if (observaciones) {
+        preinscripcion.observaciones = observaciones;
+        await pool.query(
+          'UPDATE pre_inscripcion SET observaciones = $1, updated_at = NOW() WHERE id = $2',
+          [observaciones, id]
+        );
+      }
+
+      const resultado = await WhatsAppService.notificarCambioEstado(preinscripcion, null);
+
+      if (resultado.success) {
+        return res.json({
+          success: true,
+          message: 'Notificación de WhatsApp enviada exitosamente',
+        });
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: resultado.error || resultado.message || 'No se pudo enviar el mensaje por WhatsApp',
+        });
+      }
+    } catch (error) {
+      console.error('❌ Error al reenviar WhatsApp:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Error al reenviar mensaje de WhatsApp',
+        error: error.message,
+      });
     }
   }
 
@@ -1254,14 +1316,26 @@ class PreInscripcionController {
           }
         }
 
-        // Generar código de preinscripción
+        // Generar código de preinscripción con el año de la gestión académica
+        let anioCodigo = null;
+        if (estPeriodoId) {
+          const pRes = await client.query('SELECT nombre, fecha_inicio FROM periodo_academico WHERE id = $1', [estPeriodoId]);
+          if (pRes.rows.length > 0) {
+            const matchYear = pRes.rows[0].nombre?.match(/\d{4}/);
+            anioCodigo = matchYear ? matchYear[0] : (pRes.rows[0].fecha_inicio ? new Date(pRes.rows[0].fecha_inicio).getFullYear().toString() : null);
+          }
+        }
+        if (!anioCodigo) {
+          anioCodigo = new Date().getFullYear().toString();
+        }
+
         const codigoResult = await client.query(`
-          SELECT 'PRE-' || TO_CHAR(CURRENT_DATE, 'YYYY') || '-' || 
+          SELECT 'PRE-' || $1::text || '-' || 
           LPAD(CAST(COALESCE(MAX(CAST(SUBSTRING(codigo_inscripcion FROM 10) AS INTEGER)), 0) + 1 AS VARCHAR), 4, '0') 
           AS codigo
           FROM pre_inscripcion 
-          WHERE codigo_inscripcion LIKE 'PRE-' || TO_CHAR(CURRENT_DATE, 'YYYY') || '-%'
-        `);
+          WHERE codigo_inscripcion LIKE 'PRE-' || $1::text || '-%'
+        `, [anioCodigo]);
         const codigoInscripcion = codigoResult.rows[0].codigo;
 
         // Crear pre_inscripcion

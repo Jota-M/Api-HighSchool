@@ -177,14 +177,26 @@ class PreInscripcion {
     try {
       await client.query('BEGIN');
 
-      // 1. Generar código único
+      // 1. Generar código único con el año de la gestión académica
+      let anioCodigo = null;
+      if (options.periodo_academico_id) {
+        const pRes = await client.query('SELECT nombre, fecha_inicio FROM periodo_academico WHERE id = $1', [options.periodo_academico_id]);
+        if (pRes.rows.length > 0) {
+          const matchYear = pRes.rows[0].nombre?.match(/\d{4}/);
+          anioCodigo = matchYear ? matchYear[0] : (pRes.rows[0].fecha_inicio ? new Date(pRes.rows[0].fecha_inicio).getFullYear().toString() : null);
+        }
+      }
+      if (!anioCodigo) {
+        anioCodigo = new Date().getFullYear().toString();
+      }
+
       const codigoResult = await client.query(`
-        SELECT 'PRE-' || TO_CHAR(CURRENT_DATE, 'YYYY') || '-' || 
+        SELECT 'PRE-' || $1::text || '-' || 
         LPAD(CAST(COALESCE(MAX(CAST(SUBSTRING(codigo_inscripcion FROM 10) AS INTEGER)), 0) + 1 AS VARCHAR), 4, '0') 
         AS codigo
         FROM pre_inscripcion 
-        WHERE codigo_inscripcion LIKE 'PRE-' || TO_CHAR(CURRENT_DATE, 'YYYY') || '-%'
-      `);
+        WHERE codigo_inscripcion LIKE 'PRE-' || $1::text || '-%'
+      `, [anioCodigo]);
       const codigoInscripcion = codigoResult.rows[0].codigo;
 
       // 2. Asignar cupo o registrar en lista de espera
