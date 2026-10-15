@@ -188,6 +188,39 @@ class PreInscripcionController {
         });
       }
 
+      // Validar que no sea 1ra Sección (admisión presencial al inicio de gestión según ministerio)
+      if (preinscripcion_info?.grado_id) {
+        const gradoCheck = await client.query(`
+          SELECT g.nombre, na.nombre as nivel_nombre, g.orden 
+          FROM grado g 
+          LEFT JOIN nivel_academico na ON g.nivel_academico_id = na.id 
+          WHERE g.id = $1
+        `, [preinscripcion_info.grado_id]);
+
+        if (gradoCheck.rows.length > 0) {
+          const gRow = gradoCheck.rows[0];
+          const gNom = (gRow.nombre || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+          const nNom = (gRow.nivel_nombre || '').toLowerCase();
+          const es1ra =
+            gNom.includes('prekinder') ||
+            gNom.includes('pre-kinder') ||
+            gNom.includes('pre kinder') ||
+            gNom.includes('1ra seccion') ||
+            gNom.includes('1ra. seccion') ||
+            gNom.includes('primera seccion') ||
+            gNom.includes('1ra secc') ||
+            (nNom.includes('inicial') && (gNom.includes('1ra') || gRow.orden === 1) && !gNom.includes('kinder') && !gNom.includes('2da'));
+
+          if (es1ra) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+              success: false,
+              message: 'La inscripción a 1ra Sección no está habilitada en este formulario en línea. Las admisiones se realizarán directamente al inicio de gestión según disponga el Ministerio de Educación.'
+            });
+          }
+        }
+      }
+
       // Verificar disponibilidad de cupo (determinar si entra con cupo o a lista de espera)
       let cupoDisponible = { tiene_cupos: false, cupo_id: null, mensaje: '' };
       let estadoInicial = 'datos_completos';
@@ -1290,6 +1323,37 @@ class PreInscripcionController {
         // Validar campos indispensables
         if (!est.nombres || !est.apellido_paterno || !est.fecha_nacimiento) {
           throw new Error(`Estudiante ${i + 1}: Nombres, apellido paterno y fecha de nacimiento son obligatorios.`);
+        }
+
+        // Validar que no sea 1ra Sección (admisión presencial al inicio de gestión según ministerio)
+        if (gradoId) {
+          const gradoCheck = await client.query(`
+            SELECT g.nombre, na.nombre as nivel_nombre, g.orden 
+            FROM grado g 
+            LEFT JOIN nivel_academico na ON g.nivel_academico_id = na.id 
+            WHERE g.id = $1
+          `, [gradoId]);
+
+          if (gradoCheck.rows.length > 0) {
+            const gRow = gradoCheck.rows[0];
+            const gNom = (gRow.nombre || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+            const nNom = (gRow.nivel_nombre || '').toLowerCase();
+            const es1ra =
+              gNom.includes('prekinder') ||
+              gNom.includes('pre-kinder') ||
+              gNom.includes('pre kinder') ||
+              gNom.includes('1ra seccion') ||
+              gNom.includes('1ra. seccion') ||
+              gNom.includes('primera seccion') ||
+              gNom.includes('1ra secc') ||
+              (nNom.includes('inicial') && (gNom.includes('1ra') || gRow.orden === 1) && !gNom.includes('kinder') && !gNom.includes('2da'));
+
+            if (es1ra) {
+              throw new Error(
+                `Estudiante ${i + 1}: La inscripción a 1ra Sección no está habilitada en este formulario en línea. Las admisiones se realizarán directamente al inicio de gestión según disponga el Ministerio de Educación.`
+              );
+            }
+          }
         }
 
         // VALIDAR CUPO DINÁMICO (ASIGNAR CUPO O REGISTRAR EN LISTA DE ESPERA)
