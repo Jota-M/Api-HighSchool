@@ -717,7 +717,7 @@ class PreInscripcionController {
   static async reenviarWhatsApp(req, res) {
     try {
       const { id } = req.params;
-      const { observaciones } = req.body;
+      const { observaciones, tipo } = req.body;
 
       const preinscripcion = await PreInscripcion.obtenerPorId(id);
       if (!preinscripcion) {
@@ -735,7 +735,12 @@ class PreInscripcionController {
         );
       }
 
-      const resultado = await WhatsAppService.notificarCambioEstado(preinscripcion, null);
+      let resultado;
+      if (tipo === 'confirmacion' || tipo === 'creacion') {
+        resultado = await WhatsAppService.notificarPreinscripcionCreada(preinscripcion);
+      } else {
+        resultado = await WhatsAppService.notificarCambioEstado(preinscripcion, null);
+      }
 
       if (resultado.success) {
         return res.json({

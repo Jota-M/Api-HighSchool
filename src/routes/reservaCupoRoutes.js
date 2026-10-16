@@ -23,6 +23,12 @@ router.post('/validar-estudiante', ReservaCupoController.validarEstudiante);
 router.get('/disponibilidad-hermano', ReservaCupoController.consultarDisponibilidadHermano);
 
 /**
+ * GET /api/reserva-cupo/verificar-hermano
+ * Verifica si un hermano ya existe en el sistema por CI o nombres para evitar duplicaciones.
+ */
+router.get('/verificar-hermano', ReservaCupoController.verificarHermano);
+
+/**
  * POST /api/reserva-cupo/confirmar
  * Registra la reserva de cupo con los datos de quien reserva (tutor/familiar).
  */
@@ -121,6 +127,12 @@ router.post('/admin/hermanos/:id/anular', authenticate, ReservaCupoController.an
  * Restablece la reserva de un hermano desde el panel administrativo.
  */
 router.post('/admin/hermanos/:id/reactivar', authenticate, ReservaCupoController.reactivarHermanoAdmin);
+
+/**
+ * DELETE /api/reserva-cupo/admin/hermanos/:id
+ * Elimina definitivamente el registro de un hermano (ej. registros duplicados) liberando cupo.
+ */
+router.delete('/admin/hermanos/:id', authenticate, ReservaCupoController.eliminarHermanoAdmin);
 
 /**
  * POST /api/reserva-cupo/notificar-whatsapp/:codigo

@@ -209,6 +209,170 @@ class ReservaCupoHermano {
   }
 
   /**
+   * Verifica si un hermano ya existe en el sistema (por CI o nombres completos)
+   * Revisa:
+   * 1. reserva_cupo_hermano (ya tiene reserva activa)
+   * 2. estudiante (ya es estudiante regular)
+   * 3. pre_inscripcion (ya tiene preinscripción activa)
+   */
+  static async verificarExistenciaHermano({
+    ci = null,
+    nombres = null,
+    apellido_paterno = null,
+    apellido_materno = null,
+    periodo_academico_id = null,
+    client = null
+  }) {
+    const conn = client || pool;
+    const ciLimpio = ci ? ci.trim() : '';
+    const nomLimpio = nombres ? nombres.trim() : '';
+    const patLimpio = apellido_paterno ? apellido_paterno.trim() : '';
+    const matLimpio = apellido_materno ? apellido_materno.trim() : '';
+
+    if (!ciLimpio && (!nomLimpio || !patLimpio)) {
+      return { existe: false };
+    }
+
+    // 1. Verificar si ya existe en reserva_cupo_hermano para ese periodo
+    let queryReserva = `
+      SELECT rh.id, rh.codigo_reserva, rh.nombres, rh.apellido_paterno, rh.apellido_materno, rh.ci, rh.estado, g.nombre as grado_nombre, t.nombre as turno_nombre
+      FROM reserva_cupo_hermano rh
+      INNER JOIN grado g ON rh.grado_solicitado_id = g.id
+      INNER JOIN turno t ON rh.turno_solicitado_id = t.id
+      WHERE rh.deleted_at IS NULL
+        AND rh.estado NOT IN ('anulada', 'cancelada')
+    `;
+    const paramsReserva = [];
+    let pIdx = 1;
+
+    if (periodo_academico_id) {
+      queryReserva += ` AND rh.periodo_academico_id = $${pIdx++}`;
+      paramsReserva.push(periodo_academico_id);
+    }
+
+    if (ciLimpio && nomLimpio && patLimpio) {
+      queryReserva += ` AND (
+        LOWER(TRIM(rh.ci)) = LOWER(TRIM($${pIdx}))
+        OR (
+          LOWER(TRIM(rh.nombres)) = LOWER(TRIM($${pIdx + 1}))
+          AND LOWER(TRIM(rh.apellido_paterno)) = LOWER(TRIM($${pIdx + 2}))
+        )
+      )`;
+      paramsReserva.push(ciLimpio, nomLimpio, patLimpio);
+      pIdx += 3;
+    } else if (ciLimpio) {
+      queryReserva += ` AND LOWER(TRIM(rh.ci)) = LOWER(TRIM($${pIdx++}))`;
+      paramsReserva.push(ciLimpio);
+    } else {
+      queryReserva += ` AND LOWER(TRIM(rh.nombres)) = LOWER(TRIM($${pIdx}))
+        AND LOWER(TRIM(rh.apellido_paterno)) = LOWER(TRIM($${pIdx + 1}))`;
+      paramsReserva.push(nomLimpio, patLimpio);
+      pIdx += 2;
+    }
+
+    queryReserva += ' LIMIT 1';
+
+    const resHerm = await conn.query(queryReserva, paramsReserva);
+    if (resHerm.rows.length > 0) {
+      const h = resHerm.rows[0];
+      const nomCompleto = `${h.nombres} ${h.apellido_paterno} ${h.apellido_materno || ''}`.trim();
+      return {
+        existe: true,
+        tipo: 'reserva_hermano_existente',
+        mensaje: `El hermano postulante ${nomCompleto} (CI: ${h.ci || 'Sin CI'}) ya cuenta con una reserva de cupo registrada (Código: ${h.codigo_reserva}) en ${h.grado_nombre} (${h.turno_nombre}). No se puede registrar dos veces.`,
+        datos: h
+      };
+    }
+
+    // 2. Verificar si ya es un estudiante regular del colegio en la tabla estudiante
+    if (ciLimpio || (nomLimpio && patLimpio)) {
+      let queryEst = `
+        SELECT e.id, e.codigo, e.ci, e.nombres, e.apellido_paterno, e.apellido_materno, g.nombre as grado_actual
+        FROM estudiante e
+        LEFT JOIN matricula m ON e.id = m.estudiante_id AND m.estado = 'activo' AND m.deleted_at IS NULL
+        LEFT JOIN paralelo p ON m.paralelo_id = p.id
+        LEFT JOIN grado g ON p.grado_id = g.id
+        WHERE e.deleted_at IS NULL AND e.activo = true
+      `;
+      const paramsEst = [];
+      let pEstIdx = 1;
+
+      if (ciLimpio && nomLimpio && patLimpio) {
+        queryEst += ` AND (
+          LOWER(TRIM(e.ci)) = LOWER(TRIM($${pEstIdx}))
+          OR (
+            LOWER(TRIM(e.nombres)) = LOWER(TRIM($${pEstIdx + 1}))
+            AND LOWER(TRIM(e.apellido_paterno)) = LOWER(TRIM($${pEstIdx + 2}))
+          )
+        )`;
+        paramsEst.push(ciLimpio, nomLimpio, patLimpio);
+      } else if (ciLimpio) {
+        queryEst += ` AND LOWER(TRIM(e.ci)) = LOWER(TRIM($${pEstIdx++}))`;
+        paramsEst.push(ciLimpio);
+      } else {
+        queryEst += ` AND LOWER(TRIM(e.nombres)) = LOWER(TRIM($${pEstIdx}))
+          AND LOWER(TRIM(e.apellido_paterno)) = LOWER(TRIM($${pEstIdx + 1}))`;
+        paramsEst.push(nomLimpio, patLimpio);
+      }
+
+      queryEst += ' LIMIT 1';
+
+      const resEst = await conn.query(queryEst, paramsEst);
+      if (resEst.rows.length > 0) {
+        const est = resEst.rows[0];
+        const nomCompleto = `${est.nombres} ${est.apellido_paterno} ${est.apellido_materno || ''}`.trim();
+        return {
+          existe: true,
+          tipo: 'estudiante_regular_existente',
+          mensaje: `El estudiante ${nomCompleto} (CI: ${est.ci || 'Sin CI'}) ya es un estudiante regular inscrito en el colegio (Código: ${est.codigo}, Curso: ${est.grado_actual || 'Vigente'}). Debe seleccionarlo en la lista de reservas de estudiantes regulares y no como nuevo hermano.`,
+          datos: est
+        };
+      }
+    }
+
+    // 3. Verificar si ya cuenta con una preinscripción activa en pre_inscripcion
+    if (ciLimpio || (nomLimpio && patLimpio)) {
+      let queryPre = `
+        SELECT pi.id, pi.codigo_inscripcion, pi.estudiante_nombres, pi.estudiante_apellido_paterno, g.nombre as grado_nombre
+        FROM pre_inscripcion pi
+        LEFT JOIN grado g ON pi.grado_id = g.id
+        WHERE pi.deleted_at IS NULL AND pi.estado NOT IN ('cancelada', 'rechazada')
+      `;
+      const paramsPre = [];
+      let pPreIdx = 1;
+
+      if (periodo_academico_id) {
+        queryPre += ` AND pi.periodo_academico_id = $${pPreIdx++}`;
+        paramsPre.push(periodo_academico_id);
+      }
+
+      if (ciLimpio) {
+        queryPre += ` AND LOWER(TRIM(pi.estudiante_ci)) = LOWER(TRIM($${pPreIdx++}))`;
+        paramsPre.push(ciLimpio);
+      } else {
+        queryPre += ` AND LOWER(TRIM(pi.estudiante_nombres)) = LOWER(TRIM($${pPreIdx}))
+          AND LOWER(TRIM(pi.estudiante_apellido_paterno)) = LOWER(TRIM($${pPreIdx + 1}))`;
+        paramsPre.push(nomLimpio, patLimpio);
+      }
+
+      queryPre += ' LIMIT 1';
+
+      const resPre = await conn.query(queryPre, paramsPre);
+      if (resPre.rows.length > 0) {
+        const pi = resPre.rows[0];
+        return {
+          existe: true,
+          tipo: 'preinscripcion_existente',
+          mensaje: `Este estudiante ya tiene una solicitud de preinscripción registrada (Código: ${pi.codigo_inscripcion}) en ${pi.grado_nombre || 'el colegio'}.`,
+          datos: pi
+        };
+      }
+    }
+
+    return { existe: false };
+  }
+
+  /**
    * Crea un registro de hermano en reserva_cupo_hermano dentro de una transacción activa
    */
   static async crearReservaHermanoTransaccional(datosHermano, client) {
@@ -229,6 +393,20 @@ class ReservaCupoHermano {
       tutor_telefono,
       observaciones
     } = datosHermano;
+
+    // Verificar si el hermano ya existe antes de registrarlo
+    const checkExistencia = await this.verificarExistenciaHermano({
+      ci,
+      nombres,
+      apellido_paterno,
+      apellido_materno,
+      periodo_academico_id,
+      client
+    });
+
+    if (checkExistencia.existe) {
+      throw new Error(checkExistencia.mensaje);
+    }
 
     // Año del periodo para prefijo (ej: 2027)
     const periodoQuery = await client.query('SELECT nombre FROM periodo_academico WHERE id = $1', [periodo_academico_id]);
@@ -676,6 +854,53 @@ class ReservaCupoHermano {
     }
 
     return await this.obtenerPorId(id);
+  }
+
+  /**
+   * Eliminar definitivamente la reserva de un hermano (soft-delete con deleted_at)
+   * Libera el cupo inmediatamente si estaba confirmado y reordena la lista de espera si estaba en espera.
+   * Especialmente útil para eliminar registros duplicados de padres que registraron dos veces.
+   */
+  static async eliminarReserva(id, { motivo = null, usuario_id = null } = {}) {
+    const hermano = await this.obtenerPorId(id);
+    if (!hermano) throw new Error('Reserva de hermano no encontrada');
+
+    const obsActual = hermano.observaciones || '';
+    const obsNueva = motivo 
+      ? `${obsActual} [Eliminado por admin: ${motivo.trim()}]`.trim() 
+      : `${obsActual} [Eliminado por admin]`.trim();
+
+    await pool.query(`
+      UPDATE reserva_cupo_hermano
+      SET 
+        deleted_at = NOW(),
+        estado = 'anulada',
+        posicion_espera = 0,
+        observaciones = $1,
+        updated_at = NOW()
+      WHERE id = $2
+    `, [obsNueva, id]);
+
+    // Si estaba en lista de espera, reordenar a los demás hermanos en espera
+    if (hermano.estado === 'en_espera') {
+      await pool.query(`
+        WITH reordenados AS (
+          SELECT id, ROW_NUMBER() OVER (ORDER BY id ASC) as nueva_pos
+          FROM reserva_cupo_hermano
+          WHERE grado_solicitado_id = $1 
+            AND turno_solicitado_id = $2 
+            AND periodo_academico_id = $3
+            AND estado = 'en_espera'
+            AND deleted_at IS NULL
+        )
+        UPDATE reserva_cupo_hermano rh
+        SET posicion_espera = r.nueva_pos
+        FROM reordenados r
+        WHERE rh.id = r.id;
+      `, [hermano.grado_solicitado_id, hermano.turno_solicitado_id, hermano.periodo_academico_id]);
+    }
+
+    return hermano;
   }
 
   /**

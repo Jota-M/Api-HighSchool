@@ -93,6 +93,42 @@ class ReservaCupoController {
   }
 
   /**
+   * 🔍 VERIFICAR SI UN HERMANO YA EXISTE EN EL SISTEMA (Público)
+   * GET /api/reserva-cupo/verificar-hermano
+   * Query params: ci, nombres, apellido_paterno, apellido_materno, periodo_academico_id
+   */
+  static async verificarHermano(req, res) {
+    try {
+      const { ci, nombres, apellido_paterno, apellido_materno, periodo_academico_id } = req.query;
+
+      let periodoId = periodo_academico_id ? parseInt(periodo_academico_id, 10) : null;
+      if (!periodoId) {
+        const p2027 = await ReservaCupo.obtenerPeriodoSiguiente();
+        periodoId = p2027?.id || null;
+      }
+
+      const resultado = await ReservaCupoHermano.verificarExistenciaHermano({
+        ci: ci ? String(ci) : null,
+        nombres: nombres ? String(nombres) : null,
+        apellido_paterno: apellido_paterno ? String(apellido_paterno) : null,
+        apellido_materno: apellido_materno ? String(apellido_materno) : null,
+        periodo_academico_id: periodoId
+      });
+
+      res.json({
+        success: true,
+        data: resultado
+      });
+    } catch (error) {
+      console.error('Error al verificar existencia de hermano:', error);
+      res.status(500).json({
+        success: false,
+        message: error.message
+      });
+    }
+  }
+
+  /**
    * ✅ CONFIRMAR RESERVA DE CUPO (REGULARES Y HERMANOS NUEVOS)
    * POST /api/reserva-cupo/confirmar
    * Público
@@ -875,6 +911,35 @@ class ReservaCupoController {
       });
     } catch (error) {
       console.error('Error al anular reserva de hermano:', error);
+      res.status(400).json({
+        success: false,
+        message: error.message
+      });
+    }
+  }
+
+  /**
+   * 🗑️ ELIMINAR RESERVA DE HERMANO (Panel Administrativo)
+   * DELETE /api/reserva-cupo/admin/hermanos/:id
+   */
+  static async eliminarHermanoAdmin(req, res) {
+    try {
+      const { id } = req.params;
+      const { motivo } = req.body || req.query || {};
+      const usuarioId = req.user?.id || null;
+
+      const resultado = await ReservaCupoHermano.eliminarReserva(parseInt(id, 10), {
+        motivo: motivo || 'Registro duplicado o eliminado por administración',
+        usuario_id: usuarioId
+      });
+
+      res.json({
+        success: true,
+        message: `El registro del hermano ${resultado.nombres} ${resultado.apellido_paterno} (${resultado.codigo_reserva}) ha sido eliminado exitosamente. El cupo ha quedado libre.`,
+        data: resultado
+      });
+    } catch (error) {
+      console.error('Error al eliminar reserva de hermano:', error);
       res.status(400).json({
         success: false,
         message: error.message
