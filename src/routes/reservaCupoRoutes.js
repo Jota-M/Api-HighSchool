@@ -152,4 +152,34 @@ router.post('/notificar-whatsapp/:codigo/documento', ReservaCupoController.envia
  */
 router.post('/admin/:id/enviar-whatsapp', authenticate, ReservaCupoController.enviarWhatsAppAdmin);
 
+/**
+ * POST /api/reserva-cupo/admin/recordatorio-continuidad/whatsapp
+ * Envía recordatorio oficial directo por WhatsApp vía Evolution API a un tutor
+ */
+router.post('/admin/recordatorio-continuidad/whatsapp', authenticate, ReservaCupoController.enviarRecordatorioContinuidadWhatsApp);
+
+/**
+ * POST /api/reserva-cupo/admin/recordatorio-continuidad/whatsapp-masivo
+ * Encola recordatorios masivos directos por WhatsApp vía Evolution API
+ */
+router.post('/admin/recordatorio-continuidad/whatsapp-masivo', authenticate, ReservaCupoController.enviarRecordatorioContinuidadMasivoWhatsApp);
+
+/**
+ * POST /api/reserva-cupo/admin/recordatorio-continuidad/campana-iniciar
+ * Inicia campaña masiva con arquitectura Anti-Baneo (colegio completo o grado)
+ */
+router.post('/admin/recordatorio-continuidad/campana-iniciar', authenticate, ReservaCupoController.iniciarCampanaRecordatoriosMasivos);
+
+/**
+ * GET /api/reserva-cupo/admin/recordatorio-continuidad/campana-estado
+ * Consulta en tiempo real el progreso de la campaña de envíos
+ */
+router.get('/admin/recordatorio-continuidad/campana-estado', authenticate, ReservaCupoController.obtenerEstadoCampanaWhatsApp);
+
+/**
+ * POST /api/reserva-cupo/admin/recordatorio-continuidad/campana-detener
+ * Detiene o aborta la campaña masiva en curso
+ */
+router.post('/admin/recordatorio-continuidad/campana-detener', authenticate, ReservaCupoController.detenerCampanaWhatsApp);
+
 export default router;

@@ -14,6 +14,24 @@ class WhatsAppService {
         // Rango de pausa aleatoria entre envíos sucesivos (3.0s a 6.0s)
         this.minDelayMs = 3000;
         this.maxDelayMs = 6000;
+
+        // ─── Cola y Estado de Campaña Masiva Anti-Baneo ──────────────
+        this.estadoCampana = {
+            activo: false,
+            detenerSolicitado: false,
+            id_campana: null,
+            total: 0,
+            enviados: 0,
+            fallidos: 0,
+            en_cola: 0,
+            estudiante_actual: null,
+            iniciado_at: null,
+            finalizado_at: null,
+            ultimo_envio_at: null,
+            mensajes_consecutivos: 0,
+            delay_min_seg: 7,
+            delay_max_seg: 14
+        };
     }
 
     // ─── Utilidad: Pausa Asíncrona ────────────────────────────────
@@ -824,6 +842,298 @@ class WhatsAppService {
         const body = this.generarMensajeReservaIndividual(reserva);
         const resultado = await this.enviarMensaje({ to: telefono, body });
         return resultado;
+    }
+
+    // ─── Generar Mensaje de Recordatorio de Continuidad (Cupo Asegurado) ─
+    generarMensajeRecordatorioContinuidad({
+        estudiante_nombre,
+        estudiante_ci,
+        grado_destino_nombre,
+        turno_destino_nombre,
+        tutor_nombre = null,
+        anio_destino = 2027
+    }) {
+        const nomTutor = tutor_nombre?.trim() || 'Padre/Madre/Tutor';
+        const saludo = this._obtenerSaludoAleatorio(nomTutor);
+        const avisoAntiReporte = this._obtenerDespedidaAntiReporte();
+        const frontUrl = process.env.FRONTEND_URL || 'https://uepclavozdecristo.site';
+        const linkReserva = `${frontUrl}/reserva-cupo`;
+
+        const lineas = [
+            `📢 *¡Recordatorio Oficial de Cupo Asegurado!*`,
+            `🏫 *Unidad Educativa Particular La Voz de Cristo*`,
+            ``,
+            saludo,
+            `Le recordamos cordialmente que su hijo(a) cuenta con su *CUPO ASEGURADO* para la *Gestión ${anio_destino}*:`,
+            ``,
+            `🎓 *Estudiante:* *${estudiante_nombre}*`,
+            estudiante_ci ? `📌 *CI:* ${estudiante_ci}` : null,
+            grado_destino_nombre ? `📚 *Curso Proyectado:* *${grado_destino_nombre}*` : null,
+            turno_destino_nombre ? `⏰ *Turno:* *${turno_destino_nombre}*` : null,
+            `⏳ *Estado Actual:* *PENDIENTE DE CONFIRMACIÓN*`,
+            ``,
+            `⚠️ *Aviso Importante:*`,
+            `Para asegurar la correcta planificación escolar y asignación de vacantes, le solicitamos ingresar a la brevedad para:`,
+            `  ✅ *Validar y confirmar* su cupo definitivo para 2027, o`,
+            `  ❌ *Anular / registrar constancia de no continuidad* en caso de que no continúe en la institución, permitiendo así liberar la vacante.`,
+            ``,
+            `🔗 *Acceda al portal de reserva de cupo aquí:*`,
+            linkReserva,
+            ``,
+            `📌 _Solo necesitará ingresar el número de carnet de identidad (CI) del estudiante._`,
+            ``,
+            avisoAntiReporte,
+            `📞 _Consultas / Secretaría: +591 69624189_`,
+            `_Mensaje institucional automático._`
+        ].filter(Boolean);
+
+        return lineas.join('\n');
+    }
+
+    // ─── Notificar Recordatorio de Continuidad a Tutor ──────────────
+    async notificarRecordatorioContinuidad({
+        estudiante,
+        telefonoDestino = null,
+        tutor_nombre = null,
+        mensaje_personalizado = null,
+        anio_destino = 2027
+    }) {
+        const telefono = telefonoDestino || estudiante?.tutor_telefono;
+        if (!telefono) {
+            return { success: false, error: 'Sin número de celular o WhatsApp de contacto registrado' };
+        }
+
+        const body = mensaje_personalizado || this.generarMensajeRecordatorioContinuidad({
+            estudiante_nombre: estudiante.nombre_completo || estudiante.estudiante_nombre_completo,
+            estudiante_ci: estudiante.ci || estudiante.estudiante_ci,
+            grado_destino_nombre: estudiante.grado_destino_nombre,
+            turno_destino_nombre: estudiante.turno_destino_nombre,
+            tutor_nombre: tutor_nombre || estudiante.tutor_nombre,
+            anio_destino
+        });
+
+        const resultado = await this.enviarMensaje({ to: telefono, body });
+        return resultado;
+    }
+
+    // ─── Generador con Spintax Anti-Spam para Campañas Masivas ────
+    generarMensajeRecordatorioContinuidadConSpintax({
+        estudiante_nombre,
+        estudiante_ci,
+        grado_destino_nombre,
+        turno_destino_nombre,
+        tutor_nombre = null,
+        anio_destino = 2027
+    }) {
+        const nomTutor = tutor_nombre?.trim() || 'Padre/Madre/Tutor';
+        const saludo = this._obtenerSaludoAleatorio(nomTutor);
+        const avisoAntiReporte = this._obtenerDespedidaAntiReporte();
+        const frontUrl = process.env.FRONTEND_URL || 'https://uepclavozdecristo.site';
+        const linkReserva = `${frontUrl}/reserva-cupo`;
+
+        // Variaciones dinámicas de título para romper la firma hash de spam de Meta
+        const encabezados = [
+            `📢 *¡Recordatorio Oficial de Cupo Asegurado!*`,
+            `📋 *Comunicado Institucional: Continuidad y Reserva de Cupo*`,
+            `🎓 *Aviso de Continuidad Escolar - Gestión ${anio_destino}*`,
+            `🏫 *La Voz de Cristo - Confirmación de Cupo Escolar*`,
+        ];
+        const encabezado = encabezados[Math.floor(Math.random() * encabezados.length)];
+
+        // Variaciones de apertura
+        const intros = [
+            `Le recordamos cordialmente que su hijo(a) cuenta con su *CUPO ASEGURADO* para la *Gestión ${anio_destino}*:`,
+            `Nos comunicamos para informarle que su hijo(a) tiene asignado su *CUPO ASEGURADO* correspondiente a la *Gestión ${anio_destino}*:`,
+            `Por medio del presente aviso oficial le recordamos que su hijo(a) dispone de su *CUPO ASEGURADO* para el ciclo escolar *${anio_destino}*:`,
+        ];
+        const intro = intros[Math.floor(Math.random() * intros.length)];
+
+        // Código de control único aleatorio para garantizar un hash de texto 100% distinto
+        const codigoControl = Math.random().toString(36).substring(2, 7).toUpperCase();
+
+        const lineas = [
+            encabezado,
+            `🏫 *Unidad Educativa Particular La Voz de Cristo*`,
+            ``,
+            saludo,
+            intro,
+            ``,
+            `🎓 *Estudiante:* *${estudiante_nombre}*`,
+            estudiante_ci ? `📌 *CI:* ${estudiante_ci}` : null,
+            grado_destino_nombre ? `📚 *Curso Proyectado:* *${grado_destino_nombre}*` : null,
+            turno_destino_nombre ? `⏰ *Turno:* *${turno_destino_nombre}*` : null,
+            `⏳ *Estado Actual:* *PENDIENTE DE CONFIRMACIÓN*`,
+            ``,
+            `⚠️ *Aviso Importante:*`,
+            `Para garantizar la correcta planificación escolar y asignación de vacantes, le solicitamos ingresar a la brevedad para:`,
+            `  ✅ *Validar y confirmar* su cupo definitivo para ${anio_destino}, o`,
+            `  ❌ *Anular / registrar constancia de no continuidad* en caso de que no continúe en el colegio, permitiendo así liberar la vacante.`,
+            ``,
+            `🔗 *Acceda al portal de reserva de cupo aquí:*`,
+            linkReserva,
+            ``,
+            `📌 _Solo necesitará ingresar el número de carnet de identidad (CI) del estudiante._`,
+            ``,
+            avisoAntiReporte,
+            `📞 _Consultas / Secretaría: +591 69624189_`,
+            `_Ref: LVC-REC-${codigoControl}_`
+        ].filter(Boolean);
+
+        return lineas.join('\n');
+    }
+
+    // ─── Motor de Campaña Masiva Anti-Baneo ────────────────────────
+    /**
+     * Ejecuta una campaña masiva con arquitectura Anti-Baneo de alta seguridad:
+     * - Pausa humana aleatoria (Jitter) de 7 a 14 segundos entre envíos.
+     * - Micro-descanso preventivo de 30 a 50 segundos cada 8 mensajes.
+     * - Simulación de digitación previa (typing de 2.0 a 3.8s).
+     * - Spintax y hash de referencia único por mensaje.
+     * - Cancelación segura y control de progreso en tiempo real.
+     */
+    async ejecutarCampanaMasivaContinuidad({
+        estudiantes = [],
+        delayMinMs = 7000,
+        delayMaxMs = 14000,
+        tamanoLotePausa = 8,
+        pausaLoteMs = 35000,
+        anio_destino = 2027
+    }) {
+        if (this.estadoCampana.activo) {
+            throw new Error('Ya existe una campaña de envíos en ejecución. Espere a que termine o deténgala.');
+        }
+
+        const validos = estudiantes.filter(e => {
+            const num = this.normalizarNumero(e.tutor_telefono);
+            return Boolean(num);
+        });
+
+        if (validos.length === 0) {
+            throw new Error('No hay estudiantes con números de teléfono válidos para notificar.');
+        }
+
+        const idCampana = `CAMP-${Date.now()}`;
+        this.estadoCampana = {
+            activo: true,
+            detenerSolicitado: false,
+            id_campana: idCampana,
+            total: validos.length,
+            enviados: 0,
+            fallidos: 0,
+            en_cola: validos.length,
+            estudiante_actual: null,
+            iniciado_at: new Date().toISOString(),
+            finalizado_at: null,
+            ultimo_envio_at: null,
+            mensajes_consecutivos: 0,
+            delay_min_seg: Math.round(delayMinMs / 1000),
+            delay_max_seg: Math.round(delayMaxMs / 1000)
+        };
+
+        // Despachar en segundo plano sin bloquear el hilo principal
+        setImmediate(async () => {
+            console.log(`🚀 [Anti-Ban WA] Iniciando campaña masiva ${idCampana} para ${validos.length} tutores...`);
+
+            for (let i = 0; i < validos.length; i++) {
+                if (this.estadoCampana.detenerSolicitado) {
+                    console.log(`🛑 [Anti-Ban WA] Campaña ${idCampana} cancelada por el administrador.`);
+                    break;
+                }
+
+                const est = validos[i];
+                const telefono = this.normalizarNumero(est.tutor_telefono);
+                const nombreEst = est.nombre_completo || `${est.estudiante_nombres || ''} ${est.estudiante_apellido_paterno || ''}`.trim();
+                this.estadoCampana.estudiante_actual = nombreEst;
+
+                try {
+                    const mensaje = this.generarMensajeRecordatorioContinuidadConSpintax({
+                        estudiante_nombre: nombreEst,
+                        estudiante_ci: est.ci || est.estudiante_ci,
+                        grado_destino_nombre: est.grado_destino_nombre,
+                        turno_destino_nombre: est.turno_destino_nombre,
+                        tutor_nombre: est.tutor_nombre,
+                        anio_destino
+                    });
+
+                    // Simular presencia humana con typing en Evolution API
+                    const delayTyping = Math.floor(Math.random() * 1800) + 2000;
+
+                    const res = await fetch(`${process.env.EVOLUTION_API_URL}/send/text`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'apikey': process.env.EVOLUTION_INSTANCE_TOKEN,
+                        },
+                        body: JSON.stringify({
+                            number: telefono,
+                            text: mensaje,
+                            delay: delayTyping,
+                        }),
+                    });
+
+                    if (res.ok) {
+                        this.estadoCampana.enviados++;
+                        console.log(`✅ [Anti-Ban WA] [${this.estadoCampana.enviados}/${validos.length}] Entregado a ${nombreEst} (${telefono})`);
+                    } else {
+                        const errText = await res.text();
+                        this.estadoCampana.fallidos++;
+                        console.warn(`⚠️ [Anti-Ban WA] Error entregando a ${telefono}:`, errText);
+                    }
+                } catch (err) {
+                    this.estadoCampana.fallidos++;
+                    console.error(`❌ [Anti-Ban WA] Excepción enviando a ${telefono}:`, err.message);
+                }
+
+                this.estadoCampana.en_cola = validos.length - (this.estadoCampana.enviados + this.estadoCampana.fallidos);
+                this.estadoCampana.ultimo_envio_at = new Date().toISOString();
+                this.estadoCampana.mensajes_consecutivos++;
+
+                // Pausas entre envíos sucesivos si aún quedan mensajes
+                if (i < validos.length - 1 && !this.estadoCampana.detenerSolicitado) {
+                    // ¿Toca micro-descanso por lote para romper patrones de bot?
+                    if (this.estadoCampana.mensajes_consecutivos >= tamanoLotePausa) {
+                        const descanso = Math.floor(Math.random() * 15000) + pausaLoteMs;
+                        console.log(`☕ [Anti-Ban WA] Micro-descanso preventivo de ${(descanso / 1000).toFixed(0)}s tras ${tamanoLotePausa} mensajes...`);
+                        this.estadoCampana.mensajes_consecutivos = 0;
+                        await this._esperar(descanso);
+                    } else {
+                        // Pausa con Jitter aleatorio
+                        const pausa = Math.floor(Math.random() * (delayMaxMs - delayMinMs + 1)) + delayMinMs;
+                        console.log(`⏳ [Anti-Ban WA] Pausa humana de ${(pausa / 1000).toFixed(1)}s (${this.estadoCampana.en_cola} en cola)...`);
+                        await this._esperar(pausa);
+                    }
+                }
+            }
+
+            this.estadoCampana.activo = false;
+            this.estadoCampana.finalizado_at = new Date().toISOString();
+            this.estadoCampana.estudiante_actual = null;
+            console.log(`🏁 [Anti-Ban WA] Campaña finalizada. Enviados: ${this.estadoCampana.enviados}, Fallidos: ${this.estadoCampana.fallidos}`);
+        });
+
+        return {
+            success: true,
+            id_campana: idCampana,
+            total_programados: validos.length,
+            message: `Campaña iniciada para ${validos.length} tutores con protección anti-baneo activa (pausas de ${Math.round(delayMinMs / 1000)}s a ${Math.round(delayMaxMs / 1000)}s y micro-descansos automáticos).`
+        };
+    }
+
+    obtenerEstadoCampana() {
+        const total = this.estadoCampana.total;
+        const procesados = this.estadoCampana.enviados + this.estadoCampana.fallidos;
+        return {
+            ...this.estadoCampana,
+            porcentaje: total > 0 ? Math.round((procesados / total) * 100) : 0
+        };
+    }
+
+    detenerCampana() {
+        if (!this.estadoCampana.activo) {
+            return { success: false, message: 'No hay ninguna campaña activa en este momento.' };
+        }
+        this.estadoCampana.detenerSolicitado = true;
+        return { success: true, message: 'Se solicitó detener la campaña. Los envíos se pausarán inmediatamente.' };
     }
 }
 

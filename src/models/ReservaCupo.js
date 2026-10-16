@@ -1220,13 +1220,19 @@ class ReservaCupo {
         e.nombres ILIKE $${pIdx} OR 
         e.apellido_paterno ILIKE $${pIdx} OR 
         e.apellido_materno ILIKE $${pIdx} OR 
+        TRIM(CONCAT(e.nombres, ' ', e.apellido_paterno, ' ', COALESCE(e.apellido_materno, ''))) ILIKE $${pIdx} OR
+        TRIM(CONCAT(e.apellido_paterno, ' ', COALESCE(e.apellido_materno, ''), ' ', e.nombres)) ILIKE $${pIdx} OR
         e.ci ILIKE $${pIdx} OR 
         e.codigo ILIKE $${pIdx} OR
-        t.nombres ILIKE $${pIdx} OR
-        t.apellidos ILIKE $${pIdx} OR
-        t.telefono ILIKE $${pIdx} OR
+        pf.nombres ILIKE $${pIdx} OR
+        pf.apellido_paterno ILIKE $${pIdx} OR
+        pf.apellido_materno ILIKE $${pIdx} OR
+        TRIM(CONCAT(pf.nombres, ' ', pf.apellido_paterno, ' ', COALESCE(pf.apellido_materno, ''))) ILIKE $${pIdx} OR
+        pf.celular ILIKE $${pIdx} OR
+        pf.telefono ILIKE $${pIdx} OR
         r.tutor_nombre ILIKE $${pIdx} OR
-        r.tutor_telefono ILIKE $${pIdx}
+        r.tutor_telefono ILIKE $${pIdx} OR
+        r.codigo_recibo ILIKE $${pIdx}
       )`;
       params.push(`%${search.trim()}%`);
       pIdx++;

@@ -1834,6 +1834,223 @@ class ReservaCupoController {
       });
     }
   }
+
+  /**
+   * 📲 RECORDATORIO DE CONTINUIDAD POR WHATSAPP (EVOLUTION API)
+   * POST /api/reserva-cupo/admin/recordatorio-continuidad/whatsapp
+   */
+  static async enviarRecordatorioContinuidadWhatsApp(req, res) {
+    try {
+      const {
+        estudiante_id,
+        tutor_telefono,
+        tutor_nombre,
+        nombre_completo,
+        ci,
+        grado_destino_nombre,
+        turno_destino_nombre,
+        mensaje_personalizado,
+        anio_destino = 2027
+      } = req.body || {};
+
+      let telDestino = tutor_telefono;
+      let nomTutor = tutor_nombre;
+      let nomEst = nombre_completo;
+      let ciEst = ci;
+      let gradoDest = grado_destino_nombre;
+      let turnoDest = turno_destino_nombre;
+
+      // Si falta algún dato y se tiene el estudiante_id, buscarlo en la BD
+      if (estudiante_id && (!telDestino || !nomEst)) {
+        const estQuery = `
+          SELECT 
+            e.id, 
+            TRIM(CONCAT(e.nombres, ' ', e.apellido_paterno, ' ', COALESCE(e.apellido_materno, ''))) as nombre_completo,
+            e.ci,
+            COALESCE(pf.celular, pf.telefono, e.telefono) as telefono_tutor,
+            TRIM(CONCAT(pf.nombres, ' ', pf.apellido_paterno)) as nombre_tutor
+          FROM estudiante e
+          LEFT JOIN estudiante_tutor et ON et.estudiante_id = e.id AND et.es_tutor_principal = true
+          LEFT JOIN padre_familia pf ON et.padre_familia_id = pf.id
+          WHERE e.id = $1
+          LIMIT 1
+        `;
+        const estRes = await pool.query(estQuery, [estudiante_id]);
+        if (estRes.rows.length > 0) {
+          const row = estRes.rows[0];
+          nomEst = nomEst || row.nombre_completo;
+          ciEst = ciEst || row.ci;
+          telDestino = telDestino || row.telefono_tutor;
+          nomTutor = nomTutor || row.nombre_tutor;
+        }
+      }
+
+      if (!telDestino) {
+        return res.status(400).json({
+          success: false,
+          message: 'No hay número de WhatsApp registrado para este tutor/estudiante'
+        });
+      }
+
+      const resultado = await whatsappService.notificarRecordatorioContinuidad({
+        estudiante: {
+          nombre_completo: nomEst,
+          ci: ciEst,
+          grado_destino_nombre: gradoDest,
+          turno_destino_nombre: turnoDest,
+          tutor_nombre: nomTutor,
+          tutor_telefono: telDestino
+        },
+        telefonoDestino: telDestino,
+        tutor_nombre: nomTutor,
+        mensaje_personalizado,
+        anio_destino
+      });
+
+      if (!resultado.success) {
+        return res.status(500).json({
+          success: false,
+          message: resultado.error || 'No se pudo enviar el recordatorio vía WhatsApp (Evolution API)'
+        });
+      }
+
+      res.json({
+        success: true,
+        message: `Recordatorio de cupo asegurado enviado exitosamente vía WhatsApp a ${telDestino}`
+      });
+
+    } catch (error) {
+      console.error('Error al enviar recordatorio de continuidad vía WhatsApp:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al enviar recordatorio: ' + error.message
+      });
+    }
+  }
+
+  /**
+   * 📲 RECORDATORIOS DE CONTINUIDAD MASIVOS POR WHATSAPP (EVOLUTION API)
+   * POST /api/reserva-cupo/admin/recordatorio-continuidad/whatsapp-masivo
+   */
+  static async enviarRecordatorioContinuidadMasivoWhatsApp(req, res) {
+    try {
+      const { estudiantes = [], anio_destino = 2027 } = req.body || {};
+
+      if (!Array.isArray(estudiantes) || estudiantes.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'No se enviaron estudiantes para notificar'
+        });
+      }
+
+      const conTelefono = estudiantes.filter(e => Boolean(e.tutor_telefono));
+      if (conTelefono.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Ninguno de los estudiantes seleccionados cuenta con teléfono celular registrado'
+        });
+      }
+
+      // Ejecutar mediante el motor de campaña con cola Anti-Baneo
+      const resultado = await whatsappService.ejecutarCampanaMasivaContinuidad({
+        estudiantes: conTelefono,
+        anio_destino
+      });
+
+      res.json(resultado);
+
+    } catch (error) {
+      console.error('Error en envío masivo de recordatorios WhatsApp:', error);
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Error en envío masivo de recordatorios'
+      });
+    }
+  }
+
+  /**
+   * 🚀 INICIAR CAMPAÑA MASIVA DE RECORDATORIOS ANTI-BANEO (COLEGIO COMPLETO O GRADO)
+   * POST /api/reserva-cupo/admin/recordatorio-continuidad/campana-iniciar
+   */
+  static async iniciarCampanaRecordatoriosMasivos(req, res) {
+    try {
+      const {
+        grado_destino_id,
+        delay_min_seg = 7,
+        delay_max_seg = 14,
+        anio_destino = 2027
+      } = req.body || {};
+
+      // Consultar los estudiantes pendientes desde la base de datos
+      const resultado = await ReservaCupo.obtenerEstudiantesCuposAsegurados({
+        grado_destino_id: grado_destino_id && grado_destino_id !== 'todos' ? parseInt(grado_destino_id, 10) : undefined,
+        estado_filtro: 'pendiente',
+        anioDestino: anio_destino
+      });
+
+      const pendientes = resultado.estudiantes || [];
+      const conTelefono = pendientes.filter(e => Boolean(e.tutor_telefono));
+
+      if (conTelefono.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'No se encontraron estudiantes pendientes con teléfono registrado para esta campaña.'
+        });
+      }
+
+      const campanaRes = await whatsappService.ejecutarCampanaMasivaContinuidad({
+        estudiantes: conTelefono,
+        delayMinMs: Math.max(5000, parseInt(delay_min_seg, 10) * 1000),
+        delayMaxMs: Math.max(8000, parseInt(delay_max_seg, 10) * 1000),
+        anio_destino
+      });
+
+      res.json(campanaRes);
+    } catch (error) {
+      console.error('Error al iniciar campaña masiva de recordatorios:', error);
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Error al iniciar campaña masiva'
+      });
+    }
+  }
+
+  /**
+   * 📊 CONSULTAR ESTADO EN TIEMPO REAL DE LA CAMPAÑA MASIVA
+   * GET /api/reserva-cupo/admin/recordatorio-continuidad/campana-estado
+   */
+  static async obtenerEstadoCampanaWhatsApp(req, res) {
+    try {
+      const estado = whatsappService.obtenerEstadoCampana();
+      res.json({
+        success: true,
+        data: estado
+      });
+    } catch (error) {
+      console.error('Error al obtener estado de campaña:', error);
+      res.status(500).json({
+        success: false,
+        message: error.message
+      });
+    }
+  }
+
+  /**
+   * 🛑 DETENER CAMPAÑA MASIVA EN CURSO
+   * POST /api/reserva-cupo/admin/recordatorio-continuidad/campana-detener
+   */
+  static async detenerCampanaWhatsApp(req, res) {
+    try {
+      const resp = whatsappService.detenerCampana();
+      res.json(resp);
+    } catch (error) {
+      console.error('Error al detener campaña:', error);
+      res.status(500).json({
+        success: false,
+        message: error.message
+      });
+    }
+  }
 }
 
 export default ReservaCupoController;
