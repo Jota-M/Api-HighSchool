@@ -2,6 +2,7 @@
 import express from 'express';
 import multer from 'multer';
 import PreInscripcionController from '../controllers/preinscripcionController.js';
+import ReportesPreInscripcionController from '../controllers/reportes/reportesPreInscripcionController.js';
 import { authenticate } from '../Middlewares/auth.js';
 import { formDataConfigs } from '../Middlewares/parsFormDataJSON.js';
 
@@ -107,6 +108,16 @@ router.put(
 
 // Listar todas las preinscripciones
 router.get('/', authenticate, PreInscripcionController.listar);
+
+// Exportar preinscripciones a Excel o PDF
+router.get('/export/excel', authenticate, (req, res) => {
+  req.query.formato = 'excel';
+  return ReportesPreInscripcionController.reporteListado(req, res);
+});
+router.get('/export/pdf', authenticate, (req, res) => {
+  req.query.formato = 'pdf';
+  return ReportesPreInscripcionController.reporteListado(req, res);
+});
 
 // Obtener preinscripción por ID
 router.get('/:id', authenticate, PreInscripcionController.obtenerPorId);

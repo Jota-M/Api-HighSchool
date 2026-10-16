@@ -76,13 +76,13 @@ class ReportesPreInscripcionController {
   // ==========================================
   static async reporteListado(req, res) {
     try {
-      const { estado, fecha_inicio, fecha_fin, formato = 'pdf' } = req.query;
+      const { estado, fecha_inicio, fecha_fin, grado, turno, search, formato = 'pdf' } = req.query;
 
       let whereConditions = ['pi.deleted_at IS NULL'];
       let params = [];
       let paramCount = 1;
 
-      if (estado) {
+      if (estado && estado !== 'todos') {
         whereConditions.push(`pi.estado = $${paramCount}`);
         params.push(estado);
         paramCount++;
@@ -100,6 +100,34 @@ class ReportesPreInscripcionController {
         paramCount++;
       }
 
+      if (grado && grado !== 'todos') {
+        whereConditions.push(`(pe.grado_solicitado = $${paramCount} OR g.nombre = $${paramCount} OR pi.grado_id::text = $${paramCount})`);
+        params.push(grado);
+        paramCount++;
+      }
+
+      if (turno && turno !== 'todos') {
+        whereConditions.push(`(pe.turno_solicitado = $${paramCount} OR t.nombre = $${paramCount} OR pi.turno_preferido_id::text = $${paramCount})`);
+        params.push(turno);
+        paramCount++;
+      }
+
+      if (search && search.trim()) {
+        const queryTerm = `%${search.trim()}%`;
+        whereConditions.push(`(
+          pe.nombres ILIKE $${paramCount} OR
+          pe.apellido_paterno ILIKE $${paramCount} OR
+          pe.apellido_materno ILIKE $${paramCount} OR
+          pe.ci ILIKE $${paramCount} OR
+          pi.codigo_inscripcion ILIKE $${paramCount} OR
+          pt.nombres ILIKE $${paramCount} OR
+          pt.apellido_paterno ILIKE $${paramCount} OR
+          pt.telefono ILIKE $${paramCount}
+        )`);
+        params.push(queryTerm);
+        paramCount++;
+      }
+
       const whereClause = whereConditions.join(' AND ');
 
       // Obtener preinscripciones
@@ -113,8 +141,8 @@ class ReportesPreInscripcionController {
           pe.ci as estudiante_ci,
           pe.fecha_nacimiento,
           pe.genero,
-          pe.grado_solicitado,
-          pe.turno_solicitado,
+          COALESCE(g.nombre, pe.grado_solicitado) as grado_solicitado,
+          COALESCE(t.nombre, pe.turno_solicitado) as turno_solicitado,
           pt.nombres || ' ' || pt.apellido_paterno as tutor_nombre,
           pt.telefono as tutor_telefono,
           pt.email as tutor_email,
@@ -124,8 +152,10 @@ class ReportesPreInscripcionController {
         LEFT JOIN pre_estudiante pe ON pi.id = pe.pre_inscripcion_id
         LEFT JOIN pre_tutor pt ON pi.id = pt.pre_inscripcion_id AND pt.es_tutor_principal = true
         LEFT JOIN pre_documento pd ON pi.id = pd.pre_inscripcion_id
+        LEFT JOIN grado g ON pi.grado_id = g.id
+        LEFT JOIN turno t ON pi.turno_preferido_id = t.id
         WHERE ${whereClause}
-        GROUP BY pi.id, pe.id, pt.id
+        GROUP BY pi.id, pe.id, pt.id, g.nombre, t.nombre
         ORDER BY pi.created_at DESC
       `, params);
 

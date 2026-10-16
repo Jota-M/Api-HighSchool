@@ -89,7 +89,51 @@ class CupoPreinscripcion {
         g.nombre as grado_nombre,
         t.nombre as turno_nombre,
         na.nombre as nivel_academico_nombre,
-        ROUND((cp.cupos_ocupados::decimal / cp.cupos_totales * 100), 2) as porcentaje_ocupacion
+        ROUND((cp.cupos_ocupados::decimal / NULLIF(cp.cupos_totales, 0) * 100), 2) as porcentaje_ocupacion,
+        COALESCE((
+          SELECT COUNT(*)::int 
+          FROM reserva_cupo rc 
+          WHERE rc.grado_destino_id = cp.grado_id 
+            AND rc.turno_destino_id = cp.turno_id 
+            AND rc.periodo_academico_id = cp.periodo_academico_id 
+            AND rc.estado = 'confirmada' 
+            AND rc.deleted_at IS NULL
+        ), 0) as regulares_confirmados,
+        COALESCE((
+          SELECT COUNT(*)::int 
+          FROM reserva_cupo_hermano rch 
+          WHERE rch.grado_solicitado_id = cp.grado_id 
+            AND rch.turno_solicitado_id = cp.turno_id 
+            AND rch.periodo_academico_id = cp.periodo_academico_id 
+            AND rch.estado = 'confirmada' 
+            AND rch.deleted_at IS NULL
+        ), 0) as hermanos_confirmados,
+        COALESCE((
+          SELECT COUNT(*)::int 
+          FROM pre_inscripcion pi 
+          WHERE pi.grado_id = cp.grado_id 
+            AND pi.turno_preferido_id = cp.turno_id 
+            AND pi.periodo_academico_id = cp.periodo_academico_id 
+            AND (pi.tiene_cupo_asignado = true OR pi.estado = 'aprobada')
+            AND pi.deleted_at IS NULL
+        ), 0) as preinscripciones_aprobadas,
+        COALESCE((
+          SELECT COUNT(*)::int 
+          FROM pre_inscripcion pi 
+          WHERE pi.grado_id = cp.grado_id 
+            AND pi.turno_preferido_id = cp.turno_id 
+            AND pi.periodo_academico_id = cp.periodo_academico_id 
+            AND pi.deleted_at IS NULL
+        ), 0) as preinscripciones_total,
+        COALESCE((
+          SELECT COUNT(*)::int 
+          FROM pre_inscripcion pi 
+          WHERE pi.grado_id = cp.grado_id 
+            AND pi.turno_preferido_id = cp.turno_id 
+            AND pi.periodo_academico_id = cp.periodo_academico_id 
+            AND pi.estado = 'en_espera'
+            AND pi.deleted_at IS NULL
+        ), 0) as preinscripciones_en_espera
       FROM cupo_preinscripcion cp
       LEFT JOIN periodo_academico pa ON cp.periodo_academico_id = pa.id
       LEFT JOIN grado g ON cp.grado_id = g.id
