@@ -350,28 +350,96 @@ class PreInscripcion {
   // OBTENER TODAS
   // =============================================
   static async obtenerTodas(filters = {}) {
-    const { estado, page = 1, limit = 10 } = filters;
-    const offset = (page - 1) * limit;
+    const { estado, grado, turno, periodo, search, page = 1, limit = null } = filters;
+    const offset = limit ? (page - 1) * limit : 0;
 
     let whereConditions = ['pi.deleted_at IS NULL'];
     let params = [];
     let paramCount = 1;
 
-    if (estado) {
+    if (estado && estado !== 'todos') {
       whereConditions.push(`pi.estado = $${paramCount}`);
       params.push(estado);
       paramCount++;
     }
 
+    if (grado && grado !== 'todos') {
+      whereConditions.push(`(g.nombre = $${paramCount} OR pe.grado_solicitado = $${paramCount} OR pi.grado_id::text = $${paramCount})`);
+      params.push(grado);
+      paramCount++;
+    }
+
+    if (turno && turno !== 'todos') {
+      whereConditions.push(`(t.nombre = $${paramCount} OR pi.turno_preferido_id::text = $${paramCount})`);
+      params.push(turno);
+      paramCount++;
+    }
+
+    if (periodo && periodo !== 'todos') {
+      whereConditions.push(`(pa.nombre = $${paramCount} OR pi.periodo_academico_id::text = $${paramCount})`);
+      params.push(periodo);
+      paramCount++;
+    }
+
+    if (search && search.trim()) {
+      whereConditions.push(`(
+        pe.nombres ILIKE $${paramCount} OR
+        pe.apellido_paterno ILIKE $${paramCount} OR
+        pe.apellido_materno ILIKE $${paramCount} OR
+        pe.ci ILIKE $${paramCount} OR
+        pi.codigo_inscripcion ILIKE $${paramCount} OR
+        pt.nombres ILIKE $${paramCount} OR
+        pt.apellido_paterno ILIKE $${paramCount}
+      )`);
+      params.push(`%${search.trim()}%`);
+      paramCount++;
+    }
+
     const whereClause = whereConditions.join(' AND ');
 
+    // 1. Estadísticas globales (de toda la tabla pre_inscripcion no eliminada)
+    const statsQuery = `
+      SELECT 
+        COUNT(*) as total,
+        COUNT(*) FILTER (WHERE pi.estado IN ('iniciada', 'datos_completos', 'documentos_pendientes', 'en_revision')) as pendientes,
+        COUNT(*) FILTER (WHERE pi.estado IN ('aprobada', 'documentos_aprobados')) as aprobadas,
+        COUNT(*) FILTER (WHERE pi.estado = 'rechazada') as rechazadas,
+        COUNT(*) FILTER (WHERE pi.estado = 'convertida') as convertidas,
+        COUNT(*) FILTER (WHERE pi.estado = 'en_espera') as en_espera,
+        COUNT(*) FILTER (WHERE pi.tiene_cupo_asignado = true) as con_cupo_asignado,
+        COUNT(*) FILTER (WHERE pi.tiene_cupo_asignado = false OR pi.tiene_cupo_asignado IS NULL) as sin_cupo_asignado
+      FROM pre_inscripcion pi
+      WHERE pi.deleted_at IS NULL
+    `;
+    const statsResult = await pool.query(statsQuery);
+    const rawStats = statsResult.rows[0] || {};
+    const globalStats = {
+      total: parseInt(rawStats.total || 0),
+      pendientes: parseInt(rawStats.pendientes || 0),
+      aprobadas: parseInt(rawStats.aprobadas || 0),
+      rechazadas: parseInt(rawStats.rechazadas || 0),
+      convertidas: parseInt(rawStats.convertidas || 0),
+      en_espera: parseInt(rawStats.en_espera || 0),
+      con_cupo_asignado: parseInt(rawStats.con_cupo_asignado || 0),
+      sin_cupo_asignado: parseInt(rawStats.sin_cupo_asignado || 0),
+    };
+
+    // 2. Conteo de los registros filtrados
     const countQuery = `
-      SELECT COUNT(*) FROM pre_inscripcion pi WHERE ${whereClause}
+      SELECT COUNT(*) 
+      FROM pre_inscripcion pi 
+      LEFT JOIN pre_estudiante pe ON pi.id = pe.pre_inscripcion_id
+      LEFT JOIN pre_tutor pt ON pi.id = pt.pre_inscripcion_id AND pt.es_tutor_principal = true
+      LEFT JOIN grado g ON pi.grado_id = g.id
+      LEFT JOIN turno t ON pi.turno_preferido_id = t.id
+      LEFT JOIN periodo_academico pa ON pi.periodo_academico_id = pa.id
+      WHERE ${whereClause}
     `;
     const countResult = await pool.query(countQuery, params);
     const total = parseInt(countResult.rows[0].count);
 
-    const dataQuery = `
+    // 3. Consulta de datos
+    let dataQuery = `
       SELECT 
         pi.*,
         pe.nombres || ' ' || pe.apellido_paterno || ' ' || COALESCE(pe.apellido_materno, '') as estudiante_nombre,
@@ -382,27 +450,35 @@ class PreInscripcion {
         pt.telefono as tutor_telefono,
         g.nombre as grado_nombre,
         t.nombre as turno_nombre,
+        pa.nombre as periodo_nombre,
         cp.cupos_disponibles
       FROM pre_inscripcion pi
       LEFT JOIN pre_estudiante pe ON pi.id = pe.pre_inscripcion_id
       LEFT JOIN pre_tutor pt ON pi.id = pt.pre_inscripcion_id AND pt.es_tutor_principal = true
       LEFT JOIN grado g ON pi.grado_id = g.id
       LEFT JOIN turno t ON pi.turno_preferido_id = t.id
+      LEFT JOIN periodo_academico pa ON pi.periodo_academico_id = pa.id
       LEFT JOIN cupo_preinscripcion cp ON pi.cupo_preinscripcion_id = cp.id
       WHERE ${whereClause}
       ORDER BY ${estado === 'en_espera' ? 'pi.posicion_espera ASC, pi.created_at ASC' : 'pi.created_at DESC'}
-      LIMIT $${paramCount} OFFSET $${paramCount + 1}
     `;
 
-    const result = await pool.query(dataQuery, [...params, limit, offset]);
+    let queryParams = [...params];
+    if (limit) {
+      dataQuery += ` LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
+      queryParams.push(limit, offset);
+    }
+
+    const result = await pool.query(dataQuery, queryParams);
 
     return {
       preinscripciones: result.rows,
+      stats: globalStats,
       paginacion: {
         total,
         page: parseInt(page),
-        limit: parseInt(limit),
-        totalPages: Math.ceil(total / limit)
+        limit: limit ? parseInt(limit) : total,
+        totalPages: limit ? Math.ceil(total / limit) : 1
       }
     };
   }

@@ -519,12 +519,21 @@ class PreInscripcionController {
   // ========================================
   static async listar(req, res) {
     try {
-      const { estado, page, limit } = req.query;
+      const { estado, grado, turno, periodo, search, page, limit } = req.query;
+
+      let parsedLimit = null;
+      if (limit !== undefined && limit !== null && limit !== '' && limit !== 'todos' && limit !== 'all' && limit !== '0') {
+        parsedLimit = parseInt(limit);
+      }
 
       const filters = {
         estado,
+        grado,
+        turno,
+        periodo,
+        search,
         page: page ? parseInt(page) : 1,
-        limit: limit ? parseInt(limit) : 10
+        limit: parsedLimit
       };
 
       const resultado = await PreInscripcion.obtenerTodas(filters);
