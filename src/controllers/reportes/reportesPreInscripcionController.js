@@ -137,7 +137,10 @@ class ReportesPreInscripcionController {
           pi.codigo_inscripcion,
           pi.estado,
           pi.created_at as fecha_solicitud,
-          pe.nombres || ' ' || pe.apellido_paterno || ' ' || COALESCE(pe.apellido_materno, '') as estudiante_nombre,
+          TRIM(CONCAT(pe.apellido_paterno, ' ', COALESCE(pe.apellido_materno, ''), ' ', pe.nombres)) as estudiante_nombre,
+          pe.apellido_paterno,
+          pe.apellido_materno,
+          pe.nombres,
           pe.ci as estudiante_ci,
           pe.fecha_nacimiento,
           pe.genero,
@@ -156,7 +159,7 @@ class ReportesPreInscripcionController {
         LEFT JOIN turno t ON pi.turno_preferido_id = t.id
         WHERE ${whereClause}
         GROUP BY pi.id, pe.id, pt.id, g.nombre, t.nombre
-        ORDER BY pi.created_at DESC
+        ORDER BY pe.apellido_paterno ASC, pe.apellido_materno ASC, pe.nombres ASC, pi.created_at DESC
       `, params);
 
       const preinscripciones = query.rows;

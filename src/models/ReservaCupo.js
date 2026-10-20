@@ -773,7 +773,10 @@ class ReservaCupo {
         TO_CHAR(r.fecha_reserva, 'DD/MM/YYYY HH24:MI') as fecha_reserva_formateada,
         e.codigo as estudiante_codigo,
         e.ci as estudiante_ci,
-        TRIM(CONCAT(e.nombres, ' ', e.apellido_paterno, ' ', COALESCE(e.apellido_materno, ''))) as estudiante_nombre_completo,
+        e.nombres as estudiante_nombres,
+        e.apellido_paterno as estudiante_apellido_paterno,
+        e.apellido_materno as estudiante_apellido_materno,
+        TRIM(CONCAT(e.apellido_paterno, ' ', COALESCE(e.apellido_materno, ''), ' ', e.nombres)) as estudiante_nombre_completo,
         pa.nombre as periodo_nombre,
         ga.nombre as grado_actual_nombre,
         gd.nombre as grado_destino_nombre,
@@ -1272,7 +1275,7 @@ class ReservaCupo {
         e.nombres as estudiante_nombres,
         e.apellido_paterno as estudiante_apellido_paterno,
         e.apellido_materno as estudiante_apellido_materno,
-        TRIM(CONCAT(e.nombres, ' ', e.apellido_paterno, ' ', COALESCE(e.apellido_materno, ''))) as estudiante_nombre_completo,
+        TRIM(CONCAT(e.apellido_paterno, ' ', COALESCE(e.apellido_materno, ''), ' ', e.nombres)) as estudiante_nombre_completo,
         e.foto_url as estudiante_foto_url,
         ep.grado_origen_nombre,
         ep.paralelo_origen_nombre,
@@ -1301,7 +1304,7 @@ class ReservaCupo {
       LEFT JOIN estudiante_tutor et ON et.estudiante_id = e.id AND et.es_tutor_principal = true
       LEFT JOIN padre_familia pf ON et.padre_familia_id = pf.id
       WHERE 1=1 ${whereExtra}
-      ORDER BY gd.orden ASC, e.apellido_paterno ASC, e.nombres ASC
+      ORDER BY e.apellido_paterno ASC, e.apellido_materno ASC, e.nombres ASC
     `;
 
     const result = await pool.query(query, params);
@@ -1318,6 +1321,9 @@ class ReservaCupo {
     const formateados = estudiantes.map(e => ({
       estudiante_id: e.estudiante_id,
       codigo_estudiante: e.estudiante_codigo,
+      apellido_paterno: e.estudiante_apellido_paterno,
+      apellido_materno: e.estudiante_apellido_materno,
+      nombres: e.estudiante_nombres,
       nombre_completo: e.estudiante_nombre_completo,
       ci: e.estudiante_ci || '',
       curso_actual_2026: `${e.grado_origen_nombre} (${e.paralelo_origen_nombre || 'A'}) - ${e.turno_origen_nombre || ''}`,
@@ -1331,7 +1337,10 @@ class ReservaCupo {
       fecha_reserva: e.fecha_reserva_formateada || null,
       tutor_nombre: e.tutor_nombre || null,
       tutor_telefono: e.tutor_telefono || null,
-      tutor_parentesco: e.tutor_parentesco || null
+      tutor_parentesco: e.tutor_parentesco || null,
+      motivo_no_continua: e.motivo_no_continua || null,
+      motivo_anulacion: e.motivo_anulacion || null,
+      ha_llenado_formulario: e.estado_reserva !== 'pendiente',
     }));
 
     return {

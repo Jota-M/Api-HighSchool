@@ -1061,26 +1061,107 @@ class ReservaCupoController {
         titulo_reporte
       } = req.query;
 
-      const resultado = await ReservaCupo.listar({
-        periodo_academico_id: periodo_academico_id ? parseInt(periodo_academico_id, 10) : undefined,
-        grado_destino_id: grado_destino_id ? parseInt(grado_destino_id, 10) : undefined,
-        nivel_destino_id: nivel_destino_id ? parseInt(nivel_destino_id, 10) : undefined,
-        turno_destino_id: turno_destino_id ? parseInt(turno_destino_id, 10) : undefined,
-        estado,
-        search,
-        page: 1,
-        limit: 5000
-      });
+      let reservas = [];
+      const tipo = tipo_reporte || '';
 
-      const reservas = resultado.reservas || [];
+      if (tipo === 'general') {
+        // ══ REPORTE GENERAL CONSOLIDADO: NÓMINA COMPLETA (CONFIRMADOS + NO CONTINÚAN + SIN FORMULARIO) ══
+        const resultadoAsegurados = await ReservaCupo.obtenerEstudiantesCuposAsegurados({
+          grado_destino_id: grado_destino_id ? parseInt(grado_destino_id, 10) : undefined,
+          turno_id: turno_destino_id ? parseInt(turno_destino_id, 10) : undefined,
+          search: search?.trim() || undefined,
+        });
+
+        reservas = (resultadoAsegurados.estudiantes || []).map(e => {
+          const esConfirmada = e.estado_confirmacion === 'CONFIRMADO';
+          const sinFormulario = e.estado_confirmacion === 'PENDIENTE';
+
+          let estadoFinal = 'no_continua';
+          if (esConfirmada) estadoFinal = 'confirmada';
+          else if (e.estado_confirmacion === 'SOLICITUD_ANULACION') estadoFinal = 'solicitud_anulacion';
+          else if (e.estado_confirmacion === 'ANULADA') estadoFinal = 'anulada';
+          else estadoFinal = 'no_continua';
+
+          return {
+            estudiante_id: e.estudiante_id,
+            estudiante_codigo: e.codigo_estudiante,
+            estudiante_ci: e.ci,
+            estudiante_nombre_completo: e.nombre_completo,
+            apellido_paterno: e.apellido_paterno || '',
+            apellido_materno: e.apellido_materno || '',
+            nombres: e.nombres || '',
+            grado_actual_nombre: e.curso_actual_2026,
+            grado_destino_id: e.grado_destino_id,
+            grado_destino_nombre: e.grado_destino_nombre,
+            turno_destino_id: e.turno_destino_id,
+            turno_destino_nombre: e.turno_destino_nombre,
+            codigo_recibo: e.codigo_reserva || '—',
+            codigo_reserva: e.codigo_reserva || (sinFormulario ? 'SIN REGISTRO' : '—'),
+            estado: estadoFinal,
+            ha_llenado_formulario: !sinFormulario,
+            sin_formulario: sinFormulario,
+            motivo_no_continua: sinFormulario
+              ? 'No llenó formulario (No continuará)'
+              : (e.motivo_no_continua || (estadoFinal === 'no_continua' ? 'Declarado por tutor' : null)),
+            tutor_nombre: e.tutor_nombre || 'Sin registrar',
+            tutor_parentesco: e.tutor_parentesco || 'Tutor',
+            tutor_ci: e.tutor_ci || '',
+            tutor_telefono: e.tutor_telefono || '—',
+            fecha_reserva: e.fecha_reserva,
+            fecha_reserva_formateada: e.fecha_reserva || '—',
+          };
+        });
+
+      } else {
+        const resultado = await ReservaCupo.listar({
+          periodo_academico_id: periodo_academico_id ? parseInt(periodo_academico_id, 10) : undefined,
+          grado_destino_id: grado_destino_id ? parseInt(grado_destino_id, 10) : undefined,
+          nivel_destino_id: nivel_destino_id ? parseInt(nivel_destino_id, 10) : undefined,
+          turno_destino_id: turno_destino_id ? parseInt(turno_destino_id, 10) : undefined,
+          estado,
+          search,
+          page: 1,
+          limit: 5000
+        });
+
+        reservas = (resultado.reservas || []).map(r => ({
+          ...r,
+          apellido_paterno: r.estudiante_apellido_paterno || '',
+          apellido_materno: r.estudiante_apellido_materno || '',
+          nombres: r.estudiante_nombres || '',
+          ha_llenado_formulario: true,
+          sin_formulario: false,
+        }));
+      }
+
+      // ══ ORDENAR ALFABÉTICAMENTE POR APELLIDO PATERNO (A-Z), MATERNO Y NOMBRES ══
+      reservas.sort((a, b) => {
+        const apA = (a.apellido_paterno || a.estudiante_apellido_paterno || '').trim();
+        const apB = (b.apellido_paterno || b.estudiante_apellido_paterno || '').trim();
+        if (apA && apB) {
+          const compP = apA.localeCompare(apB, 'es', { sensitivity: 'base' });
+          if (compP !== 0) return compP;
+        }
+
+        const amA = (a.apellido_materno || a.estudiante_apellido_materno || '').trim();
+        const amB = (b.apellido_materno || b.estudiante_apellido_materno || '').trim();
+        if (amA && amB) {
+          const compM = amA.localeCompare(amB, 'es', { sensitivity: 'base' });
+          if (compM !== 0) return compM;
+        }
+
+        const nomA = (a.estudiante_nombre_completo || a.nombres || '').trim();
+        const nomB = (b.estudiante_nombre_completo || b.nombres || '').trim();
+        return nomA.localeCompare(nomB, 'es', { sensitivity: 'base' });
+      });
 
       // Metadatos para encabezados (obtenidos del primer registro o a través del modelo)
       let gradoNombre = null;
       let turnoNombre = null;
 
       if (reservas.length > 0) {
-        if (grado_destino_id) gradoNombre = reservas[0].grado_destino_nombre;
-        if (turno_destino_id) turnoNombre = reservas[0].turno_destino_nombre;
+        if (grado_destino_id) gradoNombre = reservas.find(r => r.grado_destino_id === parseInt(grado_destino_id, 10))?.grado_destino_nombre || reservas[0].grado_destino_nombre;
+        if (turno_destino_id) turnoNombre = reservas.find(r => r.turno_destino_id === parseInt(turno_destino_id, 10))?.turno_destino_nombre || reservas[0].turno_destino_nombre;
       }
 
       if ((!gradoNombre && grado_destino_id) || (!turnoNombre && turno_destino_id) || nivel_destino_id) {
@@ -1109,9 +1190,18 @@ class ReservaCupoController {
 
       // Tarjetas dinámicas según el tipo de reporte solicitado
       let statsCards = [];
-      const tipo = tipo_reporte || '';
 
-      if (tipo === 'no_continua' || estado === 'no_continua') {
+      if (tipo === 'general') {
+        const totalNoContinuaDeclarado = reservas.filter(r => r.estado === 'no_continua' && r.ha_llenado_formulario).length;
+        const totalSinFormulario = reservas.filter(r => r.estado === 'no_continua' && !r.ha_llenado_formulario).length;
+
+        statsCards = [
+          { label: 'Total Matrícula', value: reservas.length },
+          { label: 'Confirmadas', value: totalConfirmadas },
+          { label: 'No Continúa (Declarado)', value: totalNoContinuaDeclarado },
+          { label: 'Sin Formulario (No Continúa)', value: totalSinFormulario },
+        ];
+      } else if (tipo === 'no_continua' || estado === 'no_continua') {
         const manana = reservas.filter(r => (r.turno_destino_nombre || '').toLowerCase().includes('mañana') || r.turno_destino_id === 1).length;
         const tarde = reservas.filter(r => (r.turno_destino_nombre || '').toLowerCase().includes('tarde') || r.turno_destino_id === 2).length;
         statsCards = [
@@ -1157,7 +1247,8 @@ class ReservaCupoController {
 
       let tituloReporteFinal = titulo_reporte || null;
       if (!tituloReporteFinal) {
-        if (tipo === 'no_continua') tituloReporteFinal = 'CONSTANCIAS DE NO CONTINUIDAD 2027';
+        if (tipo === 'general') tituloReporteFinal = 'REPORTE GENERAL CONSOLIDADO DE MATRÍCULA 2027';
+        else if (tipo === 'no_continua') tituloReporteFinal = 'CONSTANCIAS DE NO CONTINUIDAD 2027';
         else if (tipo === 'anulaciones') tituloReporteFinal = 'CONTROL DE SOLICITUDES Y BAJAS DE CUPO 2027';
         else if (tipo === 'por_grado_turno') tituloReporteFinal = 'NÓMINA OFICIAL POR GRADO Y TURNO 2027';
         else if (tipo === 'por_grado') tituloReporteFinal = 'NÓMINA OFICIAL POR GRADO DESTINO 2027';
@@ -1215,6 +1306,8 @@ class ReservaCupoController {
     ];
     if (meta.gradoNombre) {
       infoItems.push({ label: 'Grado Destino', value: meta.gradoNombre });
+    } else {
+      infoItems.push({ label: 'Grado Destino', value: 'Todos los Grados (Consolidado)' });
     }
     if (meta.turnoNombre) {
       infoItems.push({ label: 'Turno', value: `Turno ${meta.turnoNombre}` });
@@ -1242,7 +1335,8 @@ class ReservaCupoController {
     const headers = ['#', 'Nº Recibo', 'Cód. Reserva', 'Estudiante', 'CI', 'Grado 2027', 'Turno', 'Decisión / Estado', 'Persona que Tramitó', 'Teléfono'];
     const colWidths = [20, 60, 60, 130, 50, 85, 55, 75, 100, 55];
 
-    const formatearEstado = (est) => {
+    const formatearEstado = (est, r) => {
+      if (r?.sin_formulario) return 'NO CONT. (SIN FORM.)';
       switch (est) {
         case 'confirmada': return 'CONFIRMADA';
         case 'no_continua': return 'NO CONTINÚA';
@@ -1261,7 +1355,7 @@ class ReservaCupoController {
       r.estudiante_ci || '—',
       r.grado_destino_nombre || '—',
       r.turno_destino_nombre ? `Turno ${r.turno_destino_nombre}` : '—',
-      formatearEstado(r.estado),
+      formatearEstado(r.estado, r),
       `${r.tutor_nombre} (${r.tutor_parentesco})`,
       r.tutor_telefono || '—'
     ]);
@@ -1294,9 +1388,13 @@ class ReservaCupoController {
     ];
     if (meta.gradoNombre) {
       infoBoxItems.push({ label: 'Grado Destino', value: meta.gradoNombre });
+    } else {
+      infoBoxItems.push({ label: 'Grado Destino', value: 'Todos los Grados (Consolidado)' });
     }
     if (meta.turnoNombre) {
       infoBoxItems.push({ label: 'Turno', value: `Turno ${meta.turnoNombre}` });
+    } else {
+      infoBoxItems.push({ label: 'Turnos', value: 'Consolidado Global (Mañana y Tarde)' });
     }
     infoBoxItems.push({ label: 'Total Registros', value: reservas.length });
     infoBoxItems.push({ label: 'Confirmadas', value: resumen?.total_confirmadas || 0 });
@@ -1314,10 +1412,11 @@ class ReservaCupoController {
       ];
     excel.addStats(ws, cardsToDrawExcel, cardsToDrawExcel.length);
 
-    const formatearEstado = (est) => {
+    const formatearEstado = (est, r) => {
+      if (r?.sin_formulario) return 'No llenó formulario (No continuará)';
       switch (est) {
         case 'confirmada': return 'Confirmada';
-        case 'no_continua': return 'No Continuará';
+        case 'no_continua': return 'No Continuará (Declarado)';
         case 'solicitud_anulacion': return 'Solicitud Anulación';
         case 'anulada': return 'Anulada';
         case 'cancelada': return 'Cancelada';
@@ -1325,28 +1424,46 @@ class ReservaCupoController {
       }
     };
 
-    const headers = ['#', 'Nº Recibo', 'Cód. Reserva', 'Estudiante', 'CI', 'Grado Actual', 'Grado Destino (2027)', 'Turno Destino', 'Estado / Decisión', 'Motivo Detallado', 'Persona que Tramitó', 'Parentesco', 'CI Tutor', 'Teléfono / WhatsApp', 'Fecha Registro'];
+    const headers = [
+      '#',
+      'Nº Recibo',
+      'Cód. Reserva',
+      'Estudiante',
+      'CI',
+      'Grado Actual',
+      'Grado Destino (2027)',
+      'Turno Destino',
+      'Estado / Decisión',
+      'Situación Formulario',
+      'Motivo Detallado',
+      'Persona que Tramitó',
+      'Parentesco',
+      'CI Tutor',
+      'Teléfono / WhatsApp',
+      'Fecha Registro'
+    ];
     const rows = reservas.map((r, idx) => [
       idx + 1,
-      r.codigo_recibo,
-      r.codigo_reserva,
-      r.estudiante_nombre_completo,
-      r.estudiante_ci,
+      r.codigo_recibo || '—',
+      r.codigo_reserva || '—',
+      r.estudiante_nombre_completo || '—',
+      r.estudiante_ci || '—',
       r.grado_actual_nombre || '—',
-      r.grado_destino_nombre,
+      r.grado_destino_nombre || '—',
       r.turno_destino_nombre ? `Turno ${r.turno_destino_nombre}` : '—',
-      formatearEstado(r.estado),
-      r.motivo_no_continua || r.motivo_anulacion || r.observaciones || '—',
-      r.tutor_nombre,
-      r.tutor_parentesco,
-      r.tutor_ci,
-      r.tutor_telefono,
-      r.fecha_reserva_formateada
+      formatearEstado(r.estado, r),
+      r.sin_formulario ? 'Sin Formulario' : (r.ha_llenado_formulario ? 'Formulario Completado' : '—'),
+      r.motivo_no_continua || r.motivo_anulacion || r.observaciones || (r.sin_formulario ? 'No llenó formulario (No continuará)' : '—'),
+      r.tutor_nombre || '—',
+      r.tutor_parentesco || '—',
+      r.tutor_ci || '—',
+      r.tutor_telefono || '—',
+      r.fecha_reserva_formateada || '—'
     ]);
 
     excel.addTable(ws, headers, rows, {
       sectionTitle: 'LISTA DE ESTUDIANTES REGULARES (GESTIÓN 2027)',
-      columnWidths: [6, 16, 16, 28, 14, 18, 20, 16, 18, 26, 24, 14, 14, 16, 18]
+      columnWidths: [6, 16, 16, 28, 14, 18, 20, 16, 22, 20, 28, 24, 14, 14, 16, 18]
     });
 
     excel.addFooter(ws);
