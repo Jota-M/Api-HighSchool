@@ -95,11 +95,20 @@ class ReservaCupoController {
   /**
    * 🔍 VERIFICAR SI UN HERMANO YA EXISTE EN EL SISTEMA (Público)
    * GET /api/reserva-cupo/verificar-hermano
-   * Query params: ci, nombres, apellido_paterno, apellido_materno, periodo_academico_id
+   * Query params: ci, periodo_academico_id
+   * Verifica duplicados únicamente por CI (al igual que la verificación de tutores)
    */
   static async verificarHermano(req, res) {
     try {
-      const { ci, nombres, apellido_paterno, apellido_materno, periodo_academico_id } = req.query;
+      const { ci, periodo_academico_id } = req.query;
+
+      const ciLimpio = ci ? String(ci).trim() : '';
+      if (!ciLimpio || ciLimpio.length < 4) {
+        return res.json({
+          success: true,
+          data: { existe: false }
+        });
+      }
 
       let periodoId = periodo_academico_id ? parseInt(periodo_academico_id, 10) : null;
       if (!periodoId) {
@@ -108,10 +117,7 @@ class ReservaCupoController {
       }
 
       const resultado = await ReservaCupoHermano.verificarExistenciaHermano({
-        ci: ci ? String(ci) : null,
-        nombres: nombres ? String(nombres) : null,
-        apellido_paterno: apellido_paterno ? String(apellido_paterno) : null,
-        apellido_materno: apellido_materno ? String(apellido_materno) : null,
+        ci: ciLimpio,
         periodo_academico_id: periodoId
       });
 
@@ -831,6 +837,7 @@ class ReservaCupoController {
         grado_solicitado_id,
         turno_solicitado_id,
         estado,
+        estado_entrevista,
         search,
         page,
         limit
@@ -841,6 +848,7 @@ class ReservaCupoController {
         grado_solicitado_id: grado_solicitado_id ? parseInt(grado_solicitado_id, 10) : undefined,
         turno_solicitado_id: turno_solicitado_id ? parseInt(turno_solicitado_id, 10) : undefined,
         estado,
+        estado_entrevista,
         search,
         page: parseInt(page, 10) || 1,
         limit: parseInt(limit, 10) || 20
@@ -970,6 +978,236 @@ class ReservaCupoController {
     } catch (error) {
       console.error('Error al reactivar reserva de hermano:', error);
       res.status(400).json({
+        success: false,
+        message: error.message
+      });
+    }
+  }
+
+  /**
+   * 👨‍👩‍👧‍👦 OBTENER HERMANOS DE LA MISMA FAMILIA (Panel Administrativo)
+   * GET /api/reserva-cupo/admin/hermanos/:id/familia
+   */
+  static async obtenerFamiliaHermano(req, res) {
+    try {
+      const { id } = req.params;
+      const hermano = await ReservaCupoHermano.obtenerPorId(parseInt(id, 10));
+      if (!hermano) {
+        return res.status(404).json({ success: false, message: 'Hermano no encontrado' });
+      }
+
+      const hermanosFamilia = await ReservaCupoHermano.obtenerHermanosMismaFamilia(parseInt(id, 10));
+      res.json({
+        success: true,
+        data: {
+          hermano,
+          hermanosFamilia
+        }
+      });
+    } catch (error) {
+      console.error('Error al obtener familia de hermano:', error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * 📅 AGENDAR ENTREVISTA PARA HERMANO O FAMILIA (Panel Administrativo)
+   * PATCH /api/reserva-cupo/admin/hermanos/:id/agendar-entrevista
+   */
+  static async agendarEntrevistaHermano(req, res) {
+    try {
+      const { id } = req.params;
+      const {
+        fecha_entrevista,
+        modalidad_entrevista,
+        lugar_entrevista,
+        enlace_entrevista,
+        observaciones_entrevista,
+        notificar_whatsapp,
+        hermano_ids
+      } = req.body;
+
+      if (!fecha_entrevista) {
+        return res.status(400).json({
+          success: false,
+          message: 'Debe especificar la fecha y hora de la entrevista'
+        });
+      }
+
+      const idsToSchedule = Array.isArray(hermano_ids) && hermano_ids.length > 0
+        ? hermano_ids.map(Number)
+        : [parseInt(id, 10)];
+
+      const hermanosActualizados = idsToSchedule.length > 1
+        ? await ReservaCupoHermano.agendarEntrevistaFamiliar(idsToSchedule, {
+            fecha_entrevista,
+            modalidad_entrevista: modalidad_entrevista || 'presencial',
+            lugar_entrevista: lugar_entrevista || 'Dirección del Colegio - Oficina Principal',
+            enlace_entrevista,
+            observaciones_entrevista
+          })
+        : [await ReservaCupoHermano.agendarEntrevista(parseInt(id, 10), {
+            fecha_entrevista,
+            modalidad_entrevista: modalidad_entrevista || 'presencial',
+            lugar_entrevista: lugar_entrevista || 'Dirección del Colegio - Oficina Principal',
+            enlace_entrevista,
+            observaciones_entrevista
+          })];
+
+      const hermanoPrincipal = hermanosActualizados[0];
+
+      let whatsappStatus = null;
+      if (notificar_whatsapp) {
+        try {
+          const fechaObj = new Date(fecha_entrevista);
+          const fechaTexto = hermanoPrincipal.fecha_entrevista_solo_fecha ||
+            fechaObj.toLocaleDateString('es-BO', { day: '2-digit', month: '2-digit', year: 'numeric' });
+          const horaTexto = hermanoPrincipal.fecha_entrevista_hora ||
+            fechaObj.toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' });
+
+          const waRes = await whatsappService.notificarEntrevistaHermano({
+            hermano: hermanoPrincipal,
+            hermanos: hermanosActualizados,
+            fecha_texto: fechaTexto,
+            hora_texto: horaTexto,
+            modalidad: hermanoPrincipal.modalidad_entrevista,
+            lugar: hermanoPrincipal.lugar_entrevista,
+            enlace: hermanoPrincipal.enlace_entrevista,
+            observaciones: observaciones_entrevista
+          });
+
+          if (waRes?.success) {
+            for (const hId of idsToSchedule) {
+              await ReservaCupoHermano.registrarNotificacionWhatsApp(hId);
+            }
+            whatsappStatus = { enviado: true };
+          } else {
+            whatsappStatus = { enviado: false, error: waRes?.error || waRes?.message };
+          }
+        } catch (waErr) {
+          console.warn('⚠️ Error enviando WhatsApp de entrevista:', waErr);
+          whatsappStatus = { enviado: false, error: waErr.message };
+        }
+      }
+
+      const mensaje = hermanosActualizados.length > 1
+        ? `Entrevista familiar única agendada exitosamente para ${hermanosActualizados.length} hermanos postulantes.`
+        : `Entrevista agendada exitosamente para ${hermanoPrincipal.nombres} ${hermanoPrincipal.apellido_paterno}.`;
+
+      res.json({
+        success: true,
+        message,
+        data: hermanoPrincipal,
+        hermanos: hermanosActualizados,
+        whatsapp: whatsappStatus
+      });
+    } catch (error) {
+      console.error('Error al agendar entrevista de hermano:', error);
+      res.status(400).json({
+        success: false,
+        message: error.message
+      });
+    }
+  }
+
+  /**
+   * 🔄 ACTUALIZAR ESTADO DE ENTREVISTA (Panel Administrativo)
+   * PATCH /api/reserva-cupo/admin/hermanos/:id/estado-entrevista
+   */
+  static async actualizarEstadoEntrevistaHermano(req, res) {
+    try {
+      const { id } = req.params;
+      const { estado_entrevista, observaciones_entrevista, hermano_ids } = req.body;
+
+      if (!estado_entrevista) {
+        return res.status(400).json({
+          success: false,
+          message: 'Debe especificar el nuevo estado de la entrevista'
+        });
+      }
+
+      const idsToUpdate = Array.isArray(hermano_ids) && hermano_ids.length > 0
+        ? hermano_ids.map(Number)
+        : [parseInt(id, 10)];
+
+      const actualizados = [];
+      for (const hId of idsToUpdate) {
+        const h = await ReservaCupoHermano.actualizarEstadoEntrevista(hId, {
+          estado_entrevista,
+          observaciones_entrevista
+        });
+        actualizados.push(h);
+      }
+
+      const mensaje = actualizados.length > 1
+        ? `Estado de entrevista actualizado a "${estado_entrevista}" para los ${actualizados.length} hermanos.`
+        : `Estado de entrevista actualizado a "${estado_entrevista}".`;
+
+      res.json({
+        success: true,
+        message,
+        data: actualizados[0],
+        hermanos: actualizados
+      });
+    } catch (error) {
+      console.error('Error al actualizar estado de entrevista:', error);
+      res.status(400).json({
+        success: false,
+        message: error.message
+      });
+    }
+  }
+
+  /**
+   * 💬 NOTIFICAR O REENVIAR CITACIÓN DE ENTREVISTA POR WHATSAPP
+   * POST /api/reserva-cupo/admin/hermanos/:id/notificar-entrevista-whatsapp
+   */
+  static async notificarEntrevistaHermanoWhatsApp(req, res) {
+    try {
+      const { id } = req.params;
+      const { telefonoDestino } = req.body || {};
+
+      const hermano = await ReservaCupoHermano.obtenerPorId(parseInt(id, 10));
+      if (!hermano) {
+        return res.status(404).json({ success: false, message: 'Hermano no encontrado' });
+      }
+
+      if (!hermano.fecha_entrevista) {
+        return res.status(400).json({
+          success: false,
+          message: 'El postulante no tiene una entrevista programada con fecha y hora.'
+        });
+      }
+
+      const fechaObj = new Date(hermano.fecha_entrevista);
+      const fechaTexto = hermano.fecha_entrevista_solo_fecha ||
+        fechaObj.toLocaleDateString('es-BO', { day: '2-digit', month: '2-digit', year: 'numeric' });
+      const horaTexto = hermano.fecha_entrevista_hora ||
+        fechaObj.toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' });
+
+      const waRes = await whatsappService.notificarEntrevistaHermano({
+        hermano,
+        fecha_texto: fechaTexto,
+        hora_texto: horaTexto,
+        modalidad: hermano.modalidad_entrevista,
+        lugar: hermano.lugar_entrevista,
+        enlace: hermano.enlace_entrevista,
+        observaciones: hermano.observaciones_entrevista,
+        telefonoDestino
+      });
+
+      if (waRes?.success) {
+        await ReservaCupoHermano.registrarNotificacionWhatsApp(parseInt(id, 10));
+      }
+
+      res.json({
+        success: waRes?.success || false,
+        message: waRes?.success ? 'Citación enviada por WhatsApp al tutor exitosamente.' : 'No se pudo enviar el mensaje por WhatsApp.',
+        data: waRes
+      });
+    } catch (error) {
+      console.error('Error al notificar entrevista por WhatsApp:', error);
+      res.status(500).json({
         success: false,
         message: error.message
       });

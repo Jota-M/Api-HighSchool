@@ -135,6 +135,30 @@ router.post('/admin/hermanos/:id/reactivar', authenticate, ReservaCupoController
 router.delete('/admin/hermanos/:id', authenticate, ReservaCupoController.eliminarHermanoAdmin);
 
 /**
+ * GET /api/reserva-cupo/admin/hermanos/:id/familia
+ * Obtiene todos los hermanos postulantes registrados de la misma familia / tutor.
+ */
+router.get('/admin/hermanos/:id/familia', authenticate, ReservaCupoController.obtenerFamiliaHermano);
+
+/**
+ * PATCH /api/reserva-cupo/admin/hermanos/:id/agendar-entrevista
+ * Agenda o reprograma la entrevista de un hermano postulante o familia y opcionalmente notifica por WhatsApp.
+ */
+router.patch('/admin/hermanos/:id/agendar-entrevista', authenticate, ReservaCupoController.agendarEntrevistaHermano);
+
+/**
+ * PATCH /api/reserva-cupo/admin/hermanos/:id/estado-entrevista
+ * Actualiza el estado de la entrevista de un hermano (pendiente, programada, realizada, aprobada, no_asistio).
+ */
+router.patch('/admin/hermanos/:id/estado-entrevista', authenticate, ReservaCupoController.actualizarEstadoEntrevistaHermano);
+
+/**
+ * POST /api/reserva-cupo/admin/hermanos/:id/notificar-entrevista-whatsapp
+ * Envía o reenvía la citación de entrevista al tutor vía WhatsApp.
+ */
+router.post('/admin/hermanos/:id/notificar-entrevista-whatsapp', authenticate, ReservaCupoController.notificarEntrevistaHermanoWhatsApp);
+
+/**
  * POST /api/reserva-cupo/notificar-whatsapp/:codigo
  * Envía / reenvía mensaje oficial de confirmación vía WhatsApp al tutor
  */

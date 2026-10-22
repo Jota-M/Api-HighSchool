@@ -209,31 +209,27 @@ class ReservaCupoHermano {
   }
 
   /**
-   * Verifica si un hermano ya existe en el sistema (por CI o nombres completos)
+   * Verifica si un hermano ya existe en el sistema ÚNICAMENTE por su CI
+   * (Al igual que la búsqueda de tutores en registro de estudiantes)
    * Revisa:
-   * 1. reserva_cupo_hermano (ya tiene reserva activa)
-   * 2. estudiante (ya es estudiante regular)
-   * 3. pre_inscripcion (ya tiene preinscripción activa)
+   * 1. reserva_cupo_hermano (ya tiene reserva activa con ese CI)
+   * 2. estudiante (ya es estudiante regular con ese CI)
+   * 3. pre_inscripcion / pre_estudiante (ya tiene preinscripción activa con ese CI)
    */
   static async verificarExistenciaHermano({
     ci = null,
-    nombres = null,
-    apellido_paterno = null,
-    apellido_materno = null,
     periodo_academico_id = null,
     client = null
   }) {
     const conn = client || pool;
     const ciLimpio = ci ? ci.trim() : '';
-    const nomLimpio = nombres ? nombres.trim() : '';
-    const patLimpio = apellido_paterno ? apellido_paterno.trim() : '';
-    const matLimpio = apellido_materno ? apellido_materno.trim() : '';
 
-    if (!ciLimpio && (!nomLimpio || !patLimpio)) {
+    // Si no hay CI o tiene menos de 4 caracteres, no se considera duplicado
+    if (!ciLimpio || ciLimpio.length < 4) {
       return { existe: false };
     }
 
-    // 1. Verificar si ya existe en reserva_cupo_hermano para ese periodo
+    // 1. Verificar si ya existe en reserva_cupo_hermano con ese CI para ese periodo
     let queryReserva = `
       SELECT rh.id, rh.codigo_reserva, rh.nombres, rh.apellido_paterno, rh.apellido_materno, rh.ci, rh.estado, g.nombre as grado_nombre, t.nombre as turno_nombre
       FROM reserva_cupo_hermano rh
@@ -241,33 +237,14 @@ class ReservaCupoHermano {
       INNER JOIN turno t ON rh.turno_solicitado_id = t.id
       WHERE rh.deleted_at IS NULL
         AND rh.estado NOT IN ('anulada', 'cancelada')
+        AND rh.ci IS NOT NULL
+        AND LOWER(TRIM(rh.ci)) = LOWER(TRIM($1))
     `;
-    const paramsReserva = [];
-    let pIdx = 1;
+    const paramsReserva = [ciLimpio];
 
     if (periodo_academico_id) {
-      queryReserva += ` AND rh.periodo_academico_id = $${pIdx++}`;
+      queryReserva += ` AND rh.periodo_academico_id = $2`;
       paramsReserva.push(periodo_academico_id);
-    }
-
-    if (ciLimpio && nomLimpio && patLimpio) {
-      queryReserva += ` AND (
-        LOWER(TRIM(rh.ci)) = LOWER(TRIM($${pIdx}))
-        OR (
-          LOWER(TRIM(rh.nombres)) = LOWER(TRIM($${pIdx + 1}))
-          AND LOWER(TRIM(rh.apellido_paterno)) = LOWER(TRIM($${pIdx + 2}))
-        )
-      )`;
-      paramsReserva.push(ciLimpio, nomLimpio, patLimpio);
-      pIdx += 3;
-    } else if (ciLimpio) {
-      queryReserva += ` AND LOWER(TRIM(rh.ci)) = LOWER(TRIM($${pIdx++}))`;
-      paramsReserva.push(ciLimpio);
-    } else {
-      queryReserva += ` AND LOWER(TRIM(rh.nombres)) = LOWER(TRIM($${pIdx}))
-        AND LOWER(TRIM(rh.apellido_paterno)) = LOWER(TRIM($${pIdx + 1}))`;
-      paramsReserva.push(nomLimpio, patLimpio);
-      pIdx += 2;
     }
 
     queryReserva += ' LIMIT 1';
@@ -279,94 +256,66 @@ class ReservaCupoHermano {
       return {
         existe: true,
         tipo: 'reserva_hermano_existente',
-        mensaje: `El hermano postulante ${nomCompleto} (CI: ${h.ci || 'Sin CI'}) ya cuenta con una reserva de cupo registrada (Código: ${h.codigo_reserva}) en ${h.grado_nombre} (${h.turno_nombre}). No se puede registrar dos veces.`,
+        mensaje: `El hermano postulante con CI ${h.ci} (${nomCompleto}) ya cuenta con una reserva de cupo registrada (Código: ${h.codigo_reserva}) en ${h.grado_nombre} (${h.turno_nombre}).`,
         datos: h
       };
     }
 
-    // 2. Verificar si ya es un estudiante regular del colegio en la tabla estudiante
-    if (ciLimpio || (nomLimpio && patLimpio)) {
-      let queryEst = `
-        SELECT e.id, e.codigo, e.ci, e.nombres, e.apellido_paterno, e.apellido_materno, g.nombre as grado_actual
-        FROM estudiante e
-        LEFT JOIN matricula m ON e.id = m.estudiante_id AND m.estado = 'activo' AND m.deleted_at IS NULL
-        LEFT JOIN paralelo p ON m.paralelo_id = p.id
-        LEFT JOIN grado g ON p.grado_id = g.id
-        WHERE e.deleted_at IS NULL AND e.activo = true
-      `;
-      const paramsEst = [];
-      let pEstIdx = 1;
-
-      if (ciLimpio && nomLimpio && patLimpio) {
-        queryEst += ` AND (
-          LOWER(TRIM(e.ci)) = LOWER(TRIM($${pEstIdx}))
-          OR (
-            LOWER(TRIM(e.nombres)) = LOWER(TRIM($${pEstIdx + 1}))
-            AND LOWER(TRIM(e.apellido_paterno)) = LOWER(TRIM($${pEstIdx + 2}))
-          )
-        )`;
-        paramsEst.push(ciLimpio, nomLimpio, patLimpio);
-      } else if (ciLimpio) {
-        queryEst += ` AND LOWER(TRIM(e.ci)) = LOWER(TRIM($${pEstIdx++}))`;
-        paramsEst.push(ciLimpio);
-      } else {
-        queryEst += ` AND LOWER(TRIM(e.nombres)) = LOWER(TRIM($${pEstIdx}))
-          AND LOWER(TRIM(e.apellido_paterno)) = LOWER(TRIM($${pEstIdx + 1}))`;
-        paramsEst.push(nomLimpio, patLimpio);
-      }
-
-      queryEst += ' LIMIT 1';
-
-      const resEst = await conn.query(queryEst, paramsEst);
-      if (resEst.rows.length > 0) {
-        const est = resEst.rows[0];
-        const nomCompleto = `${est.nombres} ${est.apellido_paterno} ${est.apellido_materno || ''}`.trim();
-        return {
-          existe: true,
-          tipo: 'estudiante_regular_existente',
-          mensaje: `El estudiante ${nomCompleto} (CI: ${est.ci || 'Sin CI'}) ya es un estudiante regular inscrito en el colegio (Código: ${est.codigo}, Curso: ${est.grado_actual || 'Vigente'}). Debe seleccionarlo en la lista de reservas de estudiantes regulares y no como nuevo hermano.`,
-          datos: est
-        };
-      }
+    // 2. Verificar si ya es un estudiante regular del colegio con ese CI
+    const queryEst = `
+      SELECT e.id, e.codigo, e.ci, e.nombres, e.apellido_paterno, e.apellido_materno, g.nombre as grado_actual
+      FROM estudiante e
+      LEFT JOIN matricula m ON e.id = m.estudiante_id AND m.estado = 'activo' AND m.deleted_at IS NULL
+      LEFT JOIN paralelo p ON m.paralelo_id = p.id
+      LEFT JOIN grado g ON p.grado_id = g.id
+      WHERE e.deleted_at IS NULL
+        AND e.activo = true
+        AND e.ci IS NOT NULL
+        AND LOWER(TRIM(e.ci)) = LOWER(TRIM($1))
+      LIMIT 1
+    `;
+    const resEst = await conn.query(queryEst, [ciLimpio]);
+    if (resEst.rows.length > 0) {
+      const est = resEst.rows[0];
+      const nomCompleto = `${est.nombres} ${est.apellido_paterno} ${est.apellido_materno || ''}`.trim();
+      return {
+        existe: true,
+        tipo: 'estudiante_regular_existente',
+        mensaje: `El CI ${est.ci} pertenece a un estudiante regular del colegio (${nomCompleto}, Código: ${est.codigo}, Curso: ${est.grado_actual || 'Vigente'}). Debe seleccionarlo en la lista de reservas de estudiantes regulares y no como nuevo hermano.`,
+        datos: est
+      };
     }
 
-    // 3. Verificar si ya cuenta con una preinscripción activa en pre_inscripcion
-    if (ciLimpio || (nomLimpio && patLimpio)) {
-      let queryPre = `
-        SELECT pi.id, pi.codigo_inscripcion, pi.estudiante_nombres, pi.estudiante_apellido_paterno, g.nombre as grado_nombre
-        FROM pre_inscripcion pi
-        LEFT JOIN grado g ON pi.grado_id = g.id
-        WHERE pi.deleted_at IS NULL AND pi.estado NOT IN ('cancelada', 'rechazada')
-      `;
-      const paramsPre = [];
-      let pPreIdx = 1;
+    // 3. Verificar si ya cuenta con una preinscripción activa en pre_inscripcion con ese CI
+    let queryPre = `
+      SELECT pi.id, pi.codigo_inscripcion, pe.ci, pe.nombres as estudiante_nombres, pe.apellido_paterno as estudiante_apellido_paterno, g.nombre as grado_nombre
+      FROM pre_inscripcion pi
+      INNER JOIN pre_estudiante pe ON pi.id = pe.pre_inscripcion_id
+      LEFT JOIN grado g ON pi.grado_id = g.id
+      WHERE pi.deleted_at IS NULL
+        AND pi.estado NOT IN ('cancelada', 'rechazada')
+        AND pe.ci IS NOT NULL
+        AND LOWER(TRIM(pe.ci)) = LOWER(TRIM($1))
+    `;
+    const paramsPre = [ciLimpio];
 
-      if (periodo_academico_id) {
-        queryPre += ` AND pi.periodo_academico_id = $${pPreIdx++}`;
-        paramsPre.push(periodo_academico_id);
-      }
+    if (periodo_academico_id) {
+      queryPre += ` AND pi.periodo_academico_id = $2`;
+      paramsPre.push(periodo_academico_id);
+    }
 
-      if (ciLimpio) {
-        queryPre += ` AND LOWER(TRIM(pi.estudiante_ci)) = LOWER(TRIM($${pPreIdx++}))`;
-        paramsPre.push(ciLimpio);
-      } else {
-        queryPre += ` AND LOWER(TRIM(pi.estudiante_nombres)) = LOWER(TRIM($${pPreIdx}))
-          AND LOWER(TRIM(pi.estudiante_apellido_paterno)) = LOWER(TRIM($${pPreIdx + 1}))`;
-        paramsPre.push(nomLimpio, patLimpio);
-      }
+    queryPre += ' LIMIT 1';
 
-      queryPre += ' LIMIT 1';
-
-      const resPre = await conn.query(queryPre, paramsPre);
-      if (resPre.rows.length > 0) {
-        const pi = resPre.rows[0];
-        return {
-          existe: true,
-          tipo: 'preinscripcion_existente',
-          mensaje: `Este estudiante ya tiene una solicitud de preinscripción registrada (Código: ${pi.codigo_inscripcion}) en ${pi.grado_nombre || 'el colegio'}.`,
-          datos: pi
-        };
-      }
+    const resPre = await conn.query(queryPre, paramsPre);
+    if (resPre.rows.length > 0) {
+      const pi = resPre.rows[0];
+      const nomCompleto = `${pi.estudiante_nombres || ''} ${pi.estudiante_apellido_paterno || ''}`.trim();
+      return {
+        existe: true,
+        tipo: 'preinscripcion_existente',
+        mensaje: `El CI ${pi.ci || ciLimpio} ya tiene una solicitud de preinscripción registrada (Código: ${pi.codigo_inscripcion}${nomCompleto ? `, ${nomCompleto}` : ''}) en ${pi.grado_nombre || 'el colegio'}.`,
+        datos: pi
+      };
     }
 
     return { existe: false };
@@ -394,12 +343,9 @@ class ReservaCupoHermano {
       observaciones
     } = datosHermano;
 
-    // Verificar si el hermano ya existe antes de registrarlo
+    // Verificar si el hermano ya existe antes de registrarlo (únicamente por CI)
     const checkExistencia = await this.verificarExistenciaHermano({
       ci,
-      nombres,
-      apellido_paterno,
-      apellido_materno,
       periodo_academico_id,
       client
     });
@@ -520,6 +466,11 @@ class ReservaCupoHermano {
         t.nombre as turno_solicitado_nombre,
         t.hora_inicio as turno_hora_inicio,
         t.hora_fin as turno_hora_fin,
+        TO_CHAR(rh.fecha_entrevista, 'DD/MM/YYYY HH24:MI') as fecha_entrevista_formateada,
+        TO_CHAR(rh.fecha_entrevista, 'YYYY-MM-DD"T"HH24:MI') as fecha_entrevista_iso,
+        TO_CHAR(rh.fecha_entrevista, 'DD/MM/YYYY') as fecha_entrevista_solo_fecha,
+        TO_CHAR(rh.fecha_entrevista, 'HH24:MI') as fecha_entrevista_hora,
+        TO_CHAR(rh.fecha_notificacion_entrevista, 'DD/MM/YYYY HH24:MI') as fecha_notificacion_formateada,
         -- Datos del estudiante regular que respalda al hermanito
         e.codigo as regular_codigo,
         e.ci as regular_ci,
@@ -554,6 +505,11 @@ class ReservaCupoHermano {
         t.nombre as turno_solicitado_nombre,
         t.hora_inicio as turno_hora_inicio,
         t.hora_fin as turno_hora_fin,
+        TO_CHAR(rh.fecha_entrevista, 'DD/MM/YYYY HH24:MI') as fecha_entrevista_formateada,
+        TO_CHAR(rh.fecha_entrevista, 'YYYY-MM-DD"T"HH24:MI') as fecha_entrevista_iso,
+        TO_CHAR(rh.fecha_entrevista, 'DD/MM/YYYY') as fecha_entrevista_solo_fecha,
+        TO_CHAR(rh.fecha_entrevista, 'HH24:MI') as fecha_entrevista_hora,
+        TO_CHAR(rh.fecha_notificacion_entrevista, 'DD/MM/YYYY HH24:MI') as fecha_notificacion_formateada,
         e.codigo as regular_codigo,
         e.ci as regular_ci,
         TRIM(CONCAT(e.nombres, ' ', e.apellido_paterno, ' ', COALESCE(e.apellido_materno, ''))) as regular_nombre_completo
@@ -587,6 +543,11 @@ class ReservaCupoHermano {
         t.nombre as turno_solicitado_nombre,
         t.hora_inicio as turno_hora_inicio,
         t.hora_fin as turno_hora_fin,
+        TO_CHAR(rh.fecha_entrevista, 'DD/MM/YYYY HH24:MI') as fecha_entrevista_formateada,
+        TO_CHAR(rh.fecha_entrevista, 'YYYY-MM-DD"T"HH24:MI') as fecha_entrevista_iso,
+        TO_CHAR(rh.fecha_entrevista, 'DD/MM/YYYY') as fecha_entrevista_solo_fecha,
+        TO_CHAR(rh.fecha_entrevista, 'HH24:MI') as fecha_entrevista_hora,
+        TO_CHAR(rh.fecha_notificacion_entrevista, 'DD/MM/YYYY HH24:MI') as fecha_notificacion_formateada,
         e.codigo as regular_codigo,
         e.ci as regular_ci,
         TRIM(CONCAT(e.nombres, ' ', e.apellido_paterno, ' ', COALESCE(e.apellido_materno, ''))) as regular_nombre_completo,
@@ -613,6 +574,7 @@ class ReservaCupoHermano {
       grado_solicitado_id,
       turno_solicitado_id,
       estado,
+      estado_entrevista,
       search,
       page = 1,
       limit = 20
@@ -637,6 +599,10 @@ class ReservaCupoHermano {
     if (estado) {
       whereConditions.push(`rh.estado = $${pIdx++}`);
       params.push(estado);
+    }
+    if (estado_entrevista) {
+      whereConditions.push(`rh.estado_entrevista = $${pIdx++}`);
+      params.push(estado_entrevista);
     }
     if (search && search.trim()) {
       whereConditions.push(`(
@@ -674,6 +640,11 @@ class ReservaCupoHermano {
         g.nombre as grado_solicitado_nombre,
         na.nombre as nivel_solicitado_nombre,
         t.nombre as turno_solicitado_nombre,
+        TO_CHAR(rh.fecha_entrevista, 'DD/MM/YYYY HH24:MI') as fecha_entrevista_formateada,
+        TO_CHAR(rh.fecha_entrevista, 'YYYY-MM-DD"T"HH24:MI') as fecha_entrevista_iso,
+        TO_CHAR(rh.fecha_entrevista, 'DD/MM/YYYY') as fecha_entrevista_solo_fecha,
+        TO_CHAR(rh.fecha_entrevista, 'HH24:MI') as fecha_entrevista_hora,
+        TO_CHAR(rh.fecha_notificacion_entrevista, 'DD/MM/YYYY HH24:MI') as fecha_notificacion_formateada,
         e.codigo as regular_codigo,
         e.ci as regular_ci,
         TRIM(CONCAT(e.nombres, ' ', e.apellido_paterno, ' ', COALESCE(e.apellido_materno, ''))) as regular_nombre_completo,
@@ -937,6 +908,177 @@ class ReservaCupoHermano {
   }
 
   /**
+   * Obtiene todos los hermanos postulantes que pertenecen a la misma familia / tutor
+   * ya sea por compartir el mismo hermano_regular_id, tutor_ci o tutor_telefono
+   */
+  static async obtenerHermanosMismaFamilia(hermanoId) {
+    const hermano = await this.obtenerPorId(hermanoId);
+    if (!hermano) return [];
+
+    const query = `
+      SELECT 
+        rh.*,
+        TO_CHAR(rh.fecha_reserva, 'DD/MM/YYYY HH24:MI') as fecha_reserva_formateada,
+        TO_CHAR(rh.fecha_entrevista, 'DD/MM/YYYY HH24:MI') as fecha_entrevista_formateada,
+        TO_CHAR(rh.fecha_entrevista, 'YYYY-MM-DD"T"HH24:MI') as fecha_entrevista_iso,
+        TO_CHAR(rh.fecha_entrevista, 'DD/MM/YYYY') as fecha_entrevista_solo_fecha,
+        TO_CHAR(rh.fecha_entrevista, 'HH24:MI') as fecha_entrevista_hora,
+        TO_CHAR(rh.fecha_notificacion_entrevista, 'DD/MM/YYYY HH24:MI') as fecha_notificacion_formateada,
+        TRIM(CONCAT(rh.nombres, ' ', rh.apellido_paterno, ' ', COALESCE(rh.apellido_materno, ''))) as nombre_completo,
+        pa.nombre as periodo_nombre,
+        g.nombre as grado_solicitado_nombre,
+        na.nombre as nivel_solicitado_nombre,
+        t.nombre as turno_solicitado_nombre,
+        e.codigo as regular_codigo,
+        e.ci as regular_ci,
+        TRIM(CONCAT(e.nombres, ' ', e.apellido_paterno, ' ', COALESCE(e.apellido_materno, ''))) as regular_nombre_completo,
+        e.foto_url as regular_foto_url
+      FROM reserva_cupo_hermano rh
+      INNER JOIN estudiante e ON rh.hermano_regular_id = e.id
+      INNER JOIN periodo_academico pa ON rh.periodo_academico_id = pa.id
+      INNER JOIN grado g ON rh.grado_solicitado_id = g.id
+      INNER JOIN nivel_academico na ON g.nivel_academico_id = na.id
+      INNER JOIN turno t ON rh.turno_solicitado_id = t.id
+      WHERE rh.deleted_at IS NULL
+        AND rh.estado NOT IN ('anulada', 'cancelada')
+        AND (
+          rh.hermano_regular_id = $1
+          OR (rh.tutor_ci IS NOT NULL AND rh.tutor_ci != '' AND rh.tutor_ci = $2)
+          OR (rh.tutor_telefono IS NOT NULL AND rh.tutor_telefono != '' AND rh.tutor_telefono = $3)
+        )
+      ORDER BY rh.id ASC
+    `;
+
+    const res = await pool.query(query, [
+      hermano.hermano_regular_id,
+      hermano.tutor_ci || '',
+      hermano.tutor_telefono || ''
+    ]);
+
+    return res.rows;
+  }
+
+  /**
+   * Agenda la entrevista de forma conjunta para varios hermanos de la misma familia
+   */
+  static async agendarEntrevistaFamiliar(ids = [], {
+    fecha_entrevista,
+    modalidad_entrevista = 'presencial',
+    lugar_entrevista = 'Dirección del Colegio - Oficina Principal',
+    enlace_entrevista = null,
+    observaciones_entrevista = null
+  }) {
+    if (!Array.isArray(ids) || ids.length === 0) {
+      throw new Error('Debe proporcionar al menos un ID de hermano');
+    }
+
+    await pool.query(`
+      UPDATE reserva_cupo_hermano
+      SET 
+        estado_entrevista = 'programada',
+        fecha_entrevista = $1,
+        modalidad_entrevista = $2,
+        lugar_entrevista = $3,
+        enlace_entrevista = $4,
+        observaciones_entrevista = $5,
+        updated_at = NOW()
+      WHERE id = ANY($6::int[])
+    `, [
+      fecha_entrevista,
+      modalidad_entrevista,
+      lugar_entrevista,
+      enlace_entrevista,
+      observaciones_entrevista,
+      ids
+    ]);
+
+    const actualizados = [];
+    for (const id of ids) {
+      const h = await this.obtenerPorId(id);
+      if (h) actualizados.push(h);
+    }
+    return actualizados;
+  }
+
+  /**
+   * Agendar o reprogramar la entrevista de un hermano postulante
+   */
+  static async agendarEntrevista(id, {
+    fecha_entrevista,
+    modalidad_entrevista = 'presencial',
+    lugar_entrevista = 'Dirección del Colegio - Oficina Principal',
+    enlace_entrevista = null,
+    observaciones_entrevista = null
+  }) {
+    const hermano = await this.obtenerPorId(id);
+    if (!hermano) throw new Error('No se encontró el registro de hermano');
+
+    const updateRes = await pool.query(`
+      UPDATE reserva_cupo_hermano
+      SET 
+        estado_entrevista = 'programada',
+        fecha_entrevista = $1,
+        modalidad_entrevista = $2,
+        lugar_entrevista = $3,
+        enlace_entrevista = $4,
+        observaciones_entrevista = $5,
+        updated_at = NOW()
+      WHERE id = $6
+      RETURNING *
+    `, [
+      fecha_entrevista,
+      modalidad_entrevista,
+      lugar_entrevista,
+      enlace_entrevista,
+      observaciones_entrevista,
+      id
+    ]);
+
+    return await this.obtenerPorId(id);
+  }
+
+  /**
+   * Actualizar el estado de la entrevista (realizada, aprobada, no_asistio, pendiente)
+   */
+  static async actualizarEstadoEntrevista(id, {
+    estado_entrevista,
+    observaciones_entrevista = null
+  }) {
+    const hermano = await this.obtenerPorId(id);
+    if (!hermano) throw new Error('No se encontró el registro de hermano');
+
+    const validos = ['pendiente', 'programada', 'realizada', 'aprobada', 'no_asistio'];
+    if (!validos.includes(estado_entrevista)) {
+      throw new Error(`Estado de entrevista no válido: ${estado_entrevista}`);
+    }
+
+    await pool.query(`
+      UPDATE reserva_cupo_hermano
+      SET 
+        estado_entrevista = $1,
+        observaciones_entrevista = COALESCE($2, observaciones_entrevista),
+        updated_at = NOW()
+      WHERE id = $3
+    `, [estado_entrevista, observaciones_entrevista, id]);
+
+    return await this.obtenerPorId(id);
+  }
+
+  /**
+   * Marcar la notificación de WhatsApp como enviada
+   */
+  static async registrarNotificacionWhatsApp(id) {
+    await pool.query(`
+      UPDATE reserva_cupo_hermano
+      SET 
+        notificado_whatsapp = true,
+        fecha_notificacion_entrevista = NOW(),
+        updated_at = NOW()
+      WHERE id = $1
+    `, [id]);
+  }
+
+  /**
    * Obtiene estadísticas y resumen cuantitativo de hermanos postulantes
    */
   static async obtenerEstadisticas(periodoId = null) {
@@ -953,7 +1095,10 @@ class ReservaCupoHermano {
         COUNT(CASE WHEN rh.estado = 'confirmada' THEN 1 END)::int as total_confirmadas,
         COUNT(CASE WHEN rh.estado = 'en_espera' THEN 1 END)::int as total_en_espera,
         COUNT(CASE WHEN rh.estado = 'solicitud_anulacion' THEN 1 END)::int as total_solicitud_anulacion,
-        COUNT(CASE WHEN rh.estado IN ('anulada', 'cancelada') THEN 1 END)::int as total_anuladas
+        COUNT(CASE WHEN rh.estado IN ('anulada', 'cancelada') THEN 1 END)::int as total_anuladas,
+        COUNT(CASE WHEN rh.estado_entrevista = 'pendiente' THEN 1 END)::int as total_entrevista_pendiente,
+        COUNT(CASE WHEN rh.estado_entrevista = 'programada' THEN 1 END)::int as total_entrevista_programada,
+        COUNT(CASE WHEN rh.estado_entrevista IN ('aprobada', 'realizada') THEN 1 END)::int as total_entrevista_completada
       FROM reserva_cupo_hermano rh
       WHERE rh.deleted_at IS NULL ${wherePeriodo}
     `;
@@ -966,7 +1111,10 @@ class ReservaCupoHermano {
       total_confirmadas: row.total_confirmadas || 0,
       total_en_espera: row.total_en_espera || 0,
       total_solicitud_anulacion: row.total_solicitud_anulacion || 0,
-      total_anuladas: row.total_anuladas || 0
+      total_anuladas: row.total_anuladas || 0,
+      total_entrevista_pendiente: row.total_entrevista_pendiente || 0,
+      total_entrevista_programada: row.total_entrevista_programada || 0,
+      total_entrevista_completada: row.total_entrevista_completada || 0,
     };
   }
 }
