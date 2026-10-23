@@ -553,7 +553,7 @@ class WhatsAppService {
             `📌 *Próximos pasos:*`,
             `Una vez revisada la información enviada, nos contactaremos con usted por este medio (WhatsApp) para la entrevista correspondiente.`,
             ``,
-            `🗓️ Las entrevistas se realizarán a partir del *20 de octubre*. La fecha y hora exacta le será enviada por este medio.`,
+            `🗓️ Las entrevistas se realizarán a partir del *28 de octubre*. La fecha y hora exacta le será enviada por este medio.`,
             ``,
             avisoAntiReporte,
             `📞 _Secretaría: +591 69624189_`,
@@ -621,7 +621,7 @@ class WhatsAppService {
         if (preinscripcion.estado === 'entrevista_pendiente') {
             lineas.push(
                 ``,
-                `🗓️ *Entrevistas:* Se realizarán a partir del *20 de octubre*. Nos comunicaremos por este medio (WhatsApp) para coordinar la fecha y hora exacta.`
+                `🗓️ *Entrevistas:* Se realizarán a partir del *28 de octubre*. Nos comunicaremos por este medio (WhatsApp) para coordinar la fecha y hora exacta.`
             );
         }
 

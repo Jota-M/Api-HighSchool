@@ -101,13 +101,13 @@ class ReportesPreInscripcionController {
       }
 
       if (grado && grado !== 'todos') {
-        whereConditions.push(`(pe.grado_solicitado = $${paramCount} OR g.nombre = $${paramCount} OR pi.grado_id::text = $${paramCount})`);
+        whereConditions.push(`(pe.grado_solicitado ILIKE $${paramCount} OR g.nombre ILIKE $${paramCount} OR pi.grado_id::text = $${paramCount})`);
         params.push(grado);
         paramCount++;
       }
 
       if (turno && turno !== 'todos') {
-        whereConditions.push(`(pe.turno_solicitado = $${paramCount} OR t.nombre = $${paramCount} OR pi.turno_preferido_id::text = $${paramCount})`);
+        whereConditions.push(`(pe.turno_solicitado ILIKE $${paramCount} OR t.nombre ILIKE $${paramCount} OR pi.turno_preferido_id::text = $${paramCount})`);
         params.push(turno);
         paramCount++;
       }
@@ -178,6 +178,9 @@ class ReportesPreInscripcionController {
           COUNT(CASE WHEN pe.genero = 'femenino' THEN 1 END) as femenino
         FROM pre_inscripcion pi
         LEFT JOIN pre_estudiante pe ON pi.id = pe.pre_inscripcion_id
+        LEFT JOIN pre_tutor pt ON pi.id = pt.pre_inscripcion_id AND pt.es_tutor_principal = true
+        LEFT JOIN grado g ON pi.grado_id = g.id
+        LEFT JOIN turno t ON pi.turno_preferido_id = t.id
         WHERE ${whereClause}
       `, params);
 
@@ -186,7 +189,7 @@ class ReportesPreInscripcionController {
       const data = {
         preinscripciones,
         stats,
-        filtros: { estado, fecha_inicio, fecha_fin }
+        filtros: { estado, fecha_inicio, fecha_fin, grado, turno, search }
       };
 
       if (formato === 'excel') {
@@ -391,9 +394,11 @@ class ReportesPreInscripcionController {
 
     // Encabezado
     let subtitulo = 'Todas las pre-inscripciones';
-    if (data.filtros.estado) {
-      subtitulo = `Estado: ${data.filtros.estado.toUpperCase()}`;
-    }
+    const partes = [];
+    if (data.filtros.estado && data.filtros.estado !== 'todos') partes.push(`Estado: ${data.filtros.estado.toUpperCase()}`);
+    if (data.filtros.turno && data.filtros.turno !== 'todos') partes.push(`Turno: ${data.filtros.turno.toUpperCase()}`);
+    if (data.filtros.grado && data.filtros.grado !== 'todos') partes.push(`Grado: ${data.filtros.grado}`);
+    if (partes.length > 0) subtitulo = partes.join(' | ');
     pdf.drawHeader('LISTADO DE PRE-INSCRIPCIONES', subtitulo);
 
     // Estadísticas
@@ -414,6 +419,7 @@ class ReportesPreInscripcionController {
       p.estudiante_nombre,
       p.estudiante_ci || 'N/A',
       p.grado_solicitado || 'N/A',
+      p.turno_solicitado || 'N/A',
       p.tutor_nombre,
       formatearTelefono(p.tutor_telefono),
       p.estado,
@@ -421,10 +427,10 @@ class ReportesPreInscripcionController {
     ]);
 
     pdf.drawTable(
-      ['Código', 'Estudiante', 'CI', 'Grado', 'Tutor', 'Teléfono', 'Estado', 'Fecha'],
+      ['Código', 'Estudiante', 'CI', 'Grado', 'Turno', 'Tutor', 'Teléfono', 'Estado', 'Fecha'],
       rows,
       { 
-        columnWidths: [80, 120, 70, 60, 100, 80, 80, 70],
+        columnWidths: [75, 120, 65, 60, 60, 100, 75, 75, 60],
         rowHeight: 20
       }
     );
@@ -540,7 +546,14 @@ class ReportesPreInscripcionController {
     const excel = new ExcelGenerator();
     const ws = excel.createSheet('Listado');
 
-    excel.addTitle(ws, 'LISTADO DE PRE-INSCRIPCIONES');
+    let subtitulo = '';
+    const partes = [];
+    if (data.filtros.estado && data.filtros.estado !== 'todos') partes.push(`Estado: ${data.filtros.estado.toUpperCase()}`);
+    if (data.filtros.turno && data.filtros.turno !== 'todos') partes.push(`Turno: ${data.filtros.turno.toUpperCase()}`);
+    if (data.filtros.grado && data.filtros.grado !== 'todos') partes.push(`Grado: ${data.filtros.grado}`);
+    if (partes.length > 0) subtitulo = `Filtros: ${partes.join(' | ')}`;
+
+    excel.addTitle(ws, 'LISTADO DE PRE-INSCRIPCIONES', subtitulo);
 
     // Estadísticas
     excel.addStats(ws, [
@@ -556,6 +569,7 @@ class ReportesPreInscripcionController {
       p.estudiante_nombre,
       p.estudiante_ci || 'N/A',
       p.grado_solicitado || 'N/A',
+      p.turno_solicitado || 'N/A',
       p.tutor_nombre,
       p.tutor_telefono,
       p.estado,
@@ -563,9 +577,9 @@ class ReportesPreInscripcionController {
     ]);
 
     excel.addTable(ws,
-      ['Código', 'Estudiante', 'CI', 'Grado', 'Tutor', 'Teléfono', 'Estado', 'Fecha'],
+      ['Código', 'Estudiante', 'CI', 'Grado', 'Turno', 'Tutor', 'Teléfono', 'Estado', 'Fecha'],
       rows,
-      { sectionTitle: 'DETALLE', columnWidths: [15, 30, 12, 15, 25, 15, 15, 12] }
+      { sectionTitle: 'DETALLE', columnWidths: [15, 30, 12, 15, 15, 25, 15, 15, 12] }
     );
 
     excel.addFooter(ws);
