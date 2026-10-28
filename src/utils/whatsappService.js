@@ -1175,7 +1175,7 @@ class WhatsAppService {
                 const nom = h.nombre_completo || `${h.nombres || ''} ${h.apellido_paterno || ''} ${h.apellido_materno || ''}`.trim();
                 const cur = h.grado_solicitado_nombre || h.grado_nombre || '';
                 const tur = h.turno_solicitado_nombre || h.turno_nombre || '';
-                lineas.push(`  ${idx + 1}. *${nom}* - Curso: *${cur}* (${tur}) · Cód: *${h.codigo_reserva}*`);
+                lineas.push(`  ${idx + 1}. *${nom}* - Curso: *${cur}* (${tur})`);
             });
             if (regularNom) {
                 lineas.push(``, `🔗 Hermanos del estudiante regular: *${regularNom}*`);
@@ -1187,7 +1187,6 @@ class WhatsAppService {
             const tur = h.turno_solicitado_nombre || h.turno_nombre || '';
             lineas.push(
                 `👤 Postulante: *${nom}*`,
-                h.codigo_reserva ? `📋 Código de Reserva: *${h.codigo_reserva}*` : null,
                 cur ? `📚 Curso Solicitado: *${cur}*` : null,
                 tur ? `⏰ Turno: *${tur}*` : null,
                 regularNom ? `🔗 Hermano(a) de: *${regularNom}*` : null,

@@ -656,7 +656,7 @@ class ReservaCupoHermano {
       INNER JOIN nivel_academico na ON g.nivel_academico_id = na.id
       INNER JOIN turno t ON rh.turno_solicitado_id = t.id
       WHERE ${whereClause}
-      ORDER BY rh.estado ASC, rh.posicion_espera ASC, rh.id DESC
+      ORDER BY rh.fecha_reserva ASC, rh.id ASC
       LIMIT $${pIdx++} OFFSET $${pIdx++}
     `;
 
