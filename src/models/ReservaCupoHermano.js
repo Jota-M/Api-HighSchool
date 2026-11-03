@@ -576,6 +576,9 @@ class ReservaCupoHermano {
       estado,
       estado_entrevista,
       search,
+      orden_por = 'fecha_reserva',
+      orden_dir = 'ASC',
+      solo_con_entrevista = false,
       page = 1,
       limit = 20
     } = filtros;
@@ -604,12 +607,17 @@ class ReservaCupoHermano {
       whereConditions.push(`rh.estado_entrevista = $${pIdx++}`);
       params.push(estado_entrevista);
     }
+    if (solo_con_entrevista) {
+      whereConditions.push(`rh.fecha_entrevista IS NOT NULL`);
+    }
     if (search && search.trim()) {
       whereConditions.push(`(
         rh.codigo_reserva ILIKE $${pIdx} OR 
         rh.nombres ILIKE $${pIdx} OR 
         rh.apellido_paterno ILIKE $${pIdx} OR 
         rh.ci ILIKE $${pIdx} OR
+        rh.tutor_nombre ILIKE $${pIdx} OR
+        rh.tutor_telefono ILIKE $${pIdx} OR
         e.nombres ILIKE $${pIdx} OR
         e.apellido_paterno ILIKE $${pIdx}
       )`);
@@ -628,6 +636,12 @@ class ReservaCupoHermano {
 
     const offset = (page - 1) * limit;
     params.push(limit, offset);
+
+    let orderByClause = 'rh.fecha_reserva ASC, rh.id ASC';
+    if (orden_por === 'fecha_entrevista') {
+      const dir = orden_dir.toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
+      orderByClause = `CASE WHEN rh.fecha_entrevista IS NULL THEN 1 ELSE 0 END, rh.fecha_entrevista ${dir}, rh.id ASC`;
+    }
 
     const dataQuery = `
       SELECT 
@@ -656,7 +670,7 @@ class ReservaCupoHermano {
       INNER JOIN nivel_academico na ON g.nivel_academico_id = na.id
       INNER JOIN turno t ON rh.turno_solicitado_id = t.id
       WHERE ${whereClause}
-      ORDER BY rh.fecha_reserva ASC, rh.id ASC
+      ORDER BY ${orderByClause}
       LIMIT $${pIdx++} OFFSET $${pIdx++}
     `;
 

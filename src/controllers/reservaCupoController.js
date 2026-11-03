@@ -1725,15 +1725,22 @@ class ReservaCupoController {
         grado_solicitado_id,
         turno_solicitado_id,
         estado,
+        estado_entrevista,
+        tipo_reporte = 'padron',
         search
       } = req.query;
+
+      const esCronograma = tipo_reporte === 'cronograma' || tipo_reporte === 'cronograma_entrevistas';
 
       const resultado = await ReservaCupoHermano.listarAdmin({
         periodo_academico_id: periodo_academico_id ? parseInt(periodo_academico_id, 10) : undefined,
         grado_solicitado_id: grado_solicitado_id ? parseInt(grado_solicitado_id, 10) : undefined,
         turno_solicitado_id: turno_solicitado_id ? parseInt(turno_solicitado_id, 10) : undefined,
         estado: estado || undefined,
+        estado_entrevista: estado_entrevista || undefined,
         search: search || undefined,
+        orden_por: esCronograma ? 'fecha_entrevista' : 'fecha_reserva',
+        orden_dir: 'ASC',
         page: 1,
         limit: 5000
       });
@@ -1751,6 +1758,14 @@ class ReservaCupoController {
         total_solicitud_anulacion: totalSolAnulacionHermanos,
         total_anuladas: totalAnuladasHermanos,
       };
+
+      if (esCronograma) {
+        if (formato === 'excel') {
+          return await ReservaCupoController._excelCronogramaHermanos(res, hermanos, resumen);
+        } else {
+          return ReservaCupoController._pdfCronogramaHermanos(res, hermanos, resumen);
+        }
+      }
 
       if (formato === 'excel') {
         return await ReservaCupoController._excelHermanos(res, hermanos, resumen);
@@ -1928,6 +1943,186 @@ class ReservaCupoController {
     const fechaStr = new Date().toISOString().slice(0, 10);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename=Reporte_Hermanos_Postulantes_2027_${fechaStr}.xlsx`);
+    await excel.write(res);
+    res.end();
+  }
+
+  /**
+   * 📅 Generación de PDF oficial para Cronograma de Entrevistas (Prioridad Familiar)
+   */
+  static _pdfCronogramaHermanos(res, hermanos, resumen) {
+    const pdf = new PDFGenerator({ margin: 35, landscape: true, title: 'Cronograma Oficial de Entrevistas 2027' });
+    const fechaStr = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=Cronograma_Entrevistas_Hermanos_2027_${fechaStr}.pdf`);
+    pdf.pipe(res);
+
+    pdf.drawHeader(
+      'CRONOGRAMA OFICIAL DE ENTREVISTAS - PRIORIDAD FAMILIAR 2027',
+      'Agenda Cronológica Institucional · Unidad Educativa Privada La Voz de Cristo'
+    );
+
+    const totalProgramadas = hermanos.filter(h => h.estado_entrevista === 'programada').length;
+    const totalAprobadas = hermanos.filter(h => h.estado_entrevista === 'aprobada' || h.estado_entrevista === 'realizada').length;
+    const totalPendientes = hermanos.filter(h => !h.fecha_entrevista || h.estado_entrevista === 'pendiente').length;
+    const totalNoAsistio = hermanos.filter(h => h.estado_entrevista === 'no_asistio').length;
+
+    pdf.drawInfoBox([
+      { label: 'Gestión Académica', value: 'Gestión 2027' },
+      { label: 'Fecha de Emisión', value: formatearFecha(new Date(), 'largo') },
+      { label: 'Total Postulantes', value: (hermanos.length).toString() },
+      { label: 'Citas Programadas', value: totalProgramadas.toString() },
+      { label: 'Entrevistas Aprobadas', value: totalAprobadas.toString() },
+      { label: 'Pendientes por Agendar', value: totalPendientes.toString() },
+    ], 3);
+
+    pdf.drawSection('ESTADO GENERAL DEL CRONOGRAMA');
+    pdf.drawStatsGrid([
+      { label: 'Programadas (En Agenda)', value: totalProgramadas },
+      { label: 'Aprobadas / Realizadas', value: totalAprobadas },
+      { label: 'Pendientes de Agendar', value: totalPendientes },
+      { label: 'No Asistieron', value: totalNoAsistio },
+    ], 4);
+
+    pdf.drawSection('AGENDA DE ENTREVISTAS (ORDEN CRONOLÓGICO)');
+    const headers = [
+      '#',
+      'Fecha / Hora',
+      'Hermanito(a) Postulante',
+      'Grado y Turno',
+      'Hermano Regular (Respaldo)',
+      'Tutor / Familiar',
+      'Teléfono WhatsApp',
+      'Modalidad y Ubicación',
+      'Estado Cita'
+    ];
+    const colWidths = [20, 75, 110, 95, 115, 105, 65, 85, 52];
+
+    const formatearEstadoEntrevista = (h) => {
+      if (h.estado_entrevista === 'programada') return 'PROGRAMADA';
+      if (h.estado_entrevista === 'aprobada') return 'APROBADA';
+      if (h.estado_entrevista === 'realizada') return 'REALIZADA';
+      if (h.estado_entrevista === 'no_asistio') return 'NO ASISTIÓ';
+      if (!h.fecha_entrevista) return 'SIN AGENDAR';
+      return (h.estado_entrevista || 'PENDIENTE').toUpperCase();
+    };
+
+    const formatearUbicacion = (h) => {
+      if (h.modalidad_entrevista === 'virtual') {
+        return h.enlace_entrevista ? `Virtual: ${h.enlace_entrevista}` : 'Virtual (Meet)';
+      }
+      return h.lugar_entrevista || 'Dirección del Colegio';
+    };
+
+    const rows = hermanos.map((h, idx) => [
+      (idx + 1).toString(),
+      h.fecha_entrevista_formateada || (h.fecha_entrevista ? new Date(h.fecha_entrevista).toLocaleString('es-BO', { dateStyle: 'short', timeStyle: 'short' }) : 'Sin agendar'),
+      h.nombre_completo || `${h.nombres} ${h.apellido_paterno}`,
+      `${h.grado_solicitado_nombre || '—'} (${h.turno_solicitado_nombre || '—'})`,
+      `${h.regular_nombre_completo || '—'} [${h.regular_codigo || '—'}]`,
+      `${h.tutor_nombre} (${h.tutor_parentesco})`,
+      h.tutor_telefono || '—',
+      formatearUbicacion(h),
+      formatearEstadoEntrevista(h)
+    ]);
+
+    pdf.drawTable(headers, rows, { columnWidths: colWidths });
+    pdf.end();
+  }
+
+  /**
+   * 📅 Generación de Excel oficial para Cronograma de Entrevistas (Prioridad Familiar)
+   */
+  static async _excelCronogramaHermanos(res, hermanos, resumen) {
+    const excel = new ExcelGenerator();
+    const ws = excel.createSheet('Cronograma Entrevistas 2027', { landscape: true });
+
+    excel.addTitle(
+      ws,
+      'CRONOGRAMA OFICIAL DE ENTREVISTAS - PRIORIDAD FAMILIAR 2027',
+      'Agenda Cronológica Institucional · Unidad Educativa Privada La Voz de Cristo'
+    );
+
+    const totalProgramadas = hermanos.filter(h => h.estado_entrevista === 'programada').length;
+    const totalAprobadas = hermanos.filter(h => h.estado_entrevista === 'aprobada' || h.estado_entrevista === 'realizada').length;
+    const totalPendientes = hermanos.filter(h => !h.fecha_entrevista || h.estado_entrevista === 'pendiente').length;
+    const totalNoAsistio = hermanos.filter(h => h.estado_entrevista === 'no_asistio').length;
+
+    excel.addInfoBox(ws, [
+      { label: 'Gestión Destino', value: 'Gestión 2027' },
+      { label: 'Fecha de Emisión', value: formatearFecha(new Date(), 'largo') },
+      { label: 'Total Postulantes', value: hermanos.length },
+      { label: 'Citas Programadas', value: totalProgramadas },
+      { label: 'Entrevistas Aprobadas', value: totalAprobadas },
+      { label: 'Pendientes por Agendar', value: totalPendientes },
+    ]);
+
+    excel.addStats(ws, [
+      { label: 'Programadas (En Agenda)', value: totalProgramadas },
+      { label: 'Aprobadas / Realizadas', value: totalAprobadas },
+      { label: 'Pendientes de Agendar', value: totalPendientes },
+      { label: 'No Asistieron', value: totalNoAsistio },
+    ], 4);
+
+    const formatearEstadoEntrevista = (h) => {
+      if (h.estado_entrevista === 'programada') return 'Programada';
+      if (h.estado_entrevista === 'aprobada') return 'Aprobada';
+      if (h.estado_entrevista === 'realizada') return 'Realizada';
+      if (h.estado_entrevista === 'no_asistio') return 'No Asistió';
+      if (!h.fecha_entrevista) return 'Sin Agendar';
+      return h.estado_entrevista || 'Pendiente';
+    };
+
+    const headers = [
+      '#',
+      'Fecha Entrevista',
+      'Hora',
+      'Estado Cita',
+      'Modalidad',
+      'Lugar / Enlace',
+      'Hermanito(a) Postulante',
+      'CI Postulante',
+      'Grado Solicitado',
+      'Turno Solicitado',
+      'Hermano Regular (Colegio)',
+      'Código Regular',
+      'Tutor / Familiar',
+      'Parentesco',
+      'Teléfono / WhatsApp',
+      'Código Reserva',
+      'Observaciones'
+    ];
+
+    const rows = hermanos.map((h, idx) => [
+      idx + 1,
+      h.fecha_entrevista_solo_fecha || '—',
+      h.fecha_entrevista_hora || '—',
+      formatearEstadoEntrevista(h),
+      h.modalidad_entrevista ? h.modalidad_entrevista.toUpperCase() : 'PRESENCIAL',
+      h.modalidad_entrevista === 'virtual' ? (h.enlace_entrevista || 'Virtual Meet') : (h.lugar_entrevista || 'Dirección del Colegio'),
+      h.nombre_completo || `${h.nombres} ${h.apellido_paterno}`,
+      h.ci || 'Sin CI',
+      h.grado_solicitado_nombre || '—',
+      h.turno_solicitado_nombre || '—',
+      h.regular_nombre_completo || '—',
+      h.regular_codigo || '—',
+      h.tutor_nombre || '—',
+      h.tutor_parentesco || '—',
+      h.tutor_telefono || '—',
+      h.codigo_reserva || '—',
+      h.observaciones_entrevista || '—'
+    ]);
+
+    excel.addTable(ws, headers, rows, {
+      sectionTitle: 'AGENDA CRONOLÓGICA DE ENTREVISTAS (GESTIÓN 2027)',
+      columnWidths: [6, 16, 12, 16, 14, 28, 26, 14, 18, 16, 26, 16, 24, 14, 18, 16, 30]
+    });
+
+    excel.addFooter(ws);
+
+    const fechaStr = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename=Cronograma_Entrevistas_Hermanos_2027_${fechaStr}.xlsx`);
     await excel.write(res);
     res.end();
   }
