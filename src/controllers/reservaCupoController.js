@@ -1179,6 +1179,9 @@ class ReservaCupoController {
         });
       }
 
+      const hermanosFamilia = await ReservaCupoHermano.obtenerHermanosMismaFamilia(parseInt(id, 10));
+      const listaHermanos = hermanosFamilia && hermanosFamilia.length > 0 ? hermanosFamilia : [hermano];
+
       const fechaObj = new Date(hermano.fecha_entrevista);
       const fechaTexto = hermano.fecha_entrevista_solo_fecha ||
         fechaObj.toLocaleDateString('es-BO', { day: '2-digit', month: '2-digit', year: 'numeric' });
@@ -1187,6 +1190,7 @@ class ReservaCupoController {
 
       const waRes = await whatsappService.notificarEntrevistaHermano({
         hermano,
+        hermanos: listaHermanos,
         fecha_texto: fechaTexto,
         hora_texto: horaTexto,
         modalidad: hermano.modalidad_entrevista,
@@ -1197,12 +1201,16 @@ class ReservaCupoController {
       });
 
       if (waRes?.success) {
-        await ReservaCupoHermano.registrarNotificacionWhatsApp(parseInt(id, 10));
+        for (const hItem of listaHermanos) {
+          await ReservaCupoHermano.registrarNotificacionWhatsApp(hItem.id);
+        }
       }
 
       res.json({
         success: waRes?.success || false,
-        message: waRes?.success ? 'Citación enviada por WhatsApp al tutor exitosamente.' : 'No se pudo enviar el mensaje por WhatsApp.',
+        message: waRes?.success
+          ? `Recordatorio enviado exitosamente vía bot de WhatsApp a ${hermano.tutor_nombre} (${hermano.tutor_telefono}).`
+          : (waRes?.message || 'El bot de WhatsApp no pudo entregar el mensaje al tutor.'),
         data: waRes
       });
     } catch (error) {
@@ -1996,7 +2004,8 @@ class ReservaCupoController {
       'Modalidad y Ubicación',
       'Estado Cita'
     ];
-    const colWidths = [20, 75, 110, 95, 115, 105, 65, 85, 52];
+    // Ancho total disponible en orientación horizontal = 722 pt
+    const colWidths = [18, 70, 114, 90, 112, 105, 54, 89, 70];
 
     const formatearEstadoEntrevista = (h) => {
       if (h.estado_entrevista === 'programada') return 'PROGRAMADA';
@@ -2009,9 +2018,13 @@ class ReservaCupoController {
 
     const formatearUbicacion = (h) => {
       if (h.modalidad_entrevista === 'virtual') {
-        return h.enlace_entrevista ? `Virtual: ${h.enlace_entrevista}` : 'Virtual (Meet)';
+        return h.enlace_entrevista ? `Virtual (${h.enlace_entrevista})` : 'Virtual (Meet)';
       }
-      return h.lugar_entrevista || 'Dirección del Colegio';
+      const lugar = (h.lugar_entrevista || '').trim();
+      if (!lugar || lugar.toLowerCase().includes('dirección') || lugar.toLowerCase().includes('direccion')) {
+        return 'Presencial (Dirección)';
+      }
+      return `Presencial (${lugar})`;
     };
 
     const rows = hermanos.map((h, idx) => [
@@ -2019,14 +2032,14 @@ class ReservaCupoController {
       h.fecha_entrevista_formateada || (h.fecha_entrevista ? new Date(h.fecha_entrevista).toLocaleString('es-BO', { dateStyle: 'short', timeStyle: 'short' }) : 'Sin agendar'),
       h.nombre_completo || `${h.nombres} ${h.apellido_paterno}`,
       `${h.grado_solicitado_nombre || '—'} (${h.turno_solicitado_nombre || '—'})`,
-      `${h.regular_nombre_completo || '—'} [${h.regular_codigo || '—'}]`,
-      `${h.tutor_nombre} (${h.tutor_parentesco})`,
+      h.regular_nombre_completo ? `${h.regular_nombre_completo}${h.regular_codigo ? ` [${h.regular_codigo}]` : ''}` : '—',
+      h.tutor_nombre ? `${h.tutor_nombre}${h.tutor_parentesco ? ` (${h.tutor_parentesco})` : ''}` : '—',
       h.tutor_telefono || '—',
       formatearUbicacion(h),
       formatearEstadoEntrevista(h)
     ]);
 
-    pdf.drawTable(headers, rows, { columnWidths: colWidths });
+    pdf.drawTable(headers, rows, { columnWidths: colWidths, fontSize: 7.5 });
     pdf.end();
   }
 

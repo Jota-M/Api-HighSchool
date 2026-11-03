@@ -1151,86 +1151,42 @@ class WhatsAppService {
         const esMultiple = listaHermanos.length > 1;
         const primerHermano = listaHermanos[0] || {};
         const nombreTutor = primerHermano.tutor_nombre?.trim() || 'Padre/Madre/Tutor';
-        const regularNom = primerHermano.regular_nombre_completo ||
-            [primerHermano.regular_nombres, primerHermano.regular_apellidos].filter(Boolean).join(' ') || '';
-        const saludo = this._obtenerSaludoAleatorio(nombreTutor);
-        const avisoAntiReporte = this._obtenerDespedidaAntiReporte();
 
-        const lineas = [
-            esMultiple
-                ? `📅 *Citación Oficial a Entrevista Familiar Única - Prioridad Hermanos*`
-                : `📅 *Citación Oficial a Entrevista - Prioridad Familiar*`,
-            `🏫 *Unidad Educativa Particular La Voz de Cristo*`,
-            ``,
-            saludo,
-            esMultiple
-                ? `Nos comunicamos referente a la postulación de sus *${listaHermanos.length} hijos* con *Prioridad Hermano*:`
-                : `Nos comunicamos referente a la postulación de su hijo(a) con *Prioridad Hermano*:`,
-            ``,
-        ];
+        const fechaHoraStr = (fecha_texto && hora_texto)
+            ? `${fecha_texto} ${hora_texto}`
+            : (primerHermano.fecha_entrevista_formateada || fecha_texto || 'Por coordinar');
 
-        if (esMultiple) {
-            lineas.push(`👥 *Hijos Postulantes Convocados a la misma cita:*`);
-            listaHermanos.forEach((h, idx) => {
-                const nom = h.nombre_completo || `${h.nombres || ''} ${h.apellido_paterno || ''} ${h.apellido_materno || ''}`.trim();
+        const nombresHijos = listaHermanos
+            .map((h) => {
+                const nom = h.nombre_completo || `${h.nombres || ''} ${h.apellido_paterno || ''}`.trim();
                 const cur = h.grado_solicitado_nombre || h.grado_nombre || '';
-                const tur = h.turno_solicitado_nombre || h.turno_nombre || '';
-                lineas.push(`  ${idx + 1}. *${nom}* - Curso: *${cur}* (${tur})`);
-            });
-            if (regularNom) {
-                lineas.push(``, `🔗 Hermanos del estudiante regular: *${regularNom}*`);
-            }
-        } else {
-            const h = primerHermano;
-            const nom = h.nombre_completo || `${h.nombres || ''} ${h.apellido_paterno || ''} ${h.apellido_materno || ''}`.trim();
-            const cur = h.grado_solicitado_nombre || h.grado_nombre || '';
-            const tur = h.turno_solicitado_nombre || h.turno_nombre || '';
-            lineas.push(
-                `👤 Postulante: *${nom}*`,
-                cur ? `📚 Curso Solicitado: *${cur}*` : null,
-                tur ? `⏰ Turno: *${tur}*` : null,
-                regularNom ? `🔗 Hermano(a) de: *${regularNom}*` : null,
-            );
-        }
+                return `*${nom}*${cur ? ` (${cur})` : ''}`;
+            })
+            .join(', ');
 
-        lineas.push(
-            ``,
-            esMultiple
-                ? `📌 *Detalles de la Entrevista Familiar Única:*`
-                : `📌 *Detalles de la Entrevista:*`,
-            `- 📅 Fecha: *${fecha_texto}*`,
-            `- ⏰ Hora: *${hora_texto}*`,
-            `- 📌 Modalidad: *${modalidad === 'presencial' ? 'Presencial' : 'Virtual'}*`,
-            modalidad === 'presencial'
-                ? `- 📍 Lugar: *${lugar || 'Dirección del Colegio - Oficina Principal'}*`
-                : (enlace ? `- 🌐 Enlace de Reunión: ${enlace}` : null),
-            ``,
-            `👥 *Asistencia Requerida (Obligatoria):*`,
-            esMultiple
-                ? `Para optimizar su tiempo, se realizará una *sola entrevista conjunta* para toda la familia. Es indispensable la presencia del *Padre, Madre o Tutor* junto con *los ${listaHermanos.length} postulantes citados*.`
-                : `Es indispensable la presencia del *Padre, Madre o Tutor* junto con el *postulante*.`
-        );
+        const textoHijos = esMultiple
+            ? `sus hijos postulantes: ${nombresHijos}`
+            : `su hijo(a) postulante: ${nombresHijos}`;
 
-        if (observaciones) {
-            lineas.push(``, `📝 *Instrucciones / Observaciones:*`, observaciones);
-        }
+        const lugarTexto = modalidad === 'virtual'
+            ? `Virtual (Google Meet): ${enlace || 'Se enviará el enlace por este medio'}`
+            : `Presencial: ${lugar || 'Dirección del Colegio - Oficina Principal'}`;
 
-        if (modalidad === 'presencial') {
-            lineas.push(
-                ``,
-                `📍 *Ubicación del Colegio (Google Maps):*`,
-                `https://maps.app.goo.gl/dWapCMNPguGBMUTv9`
-            );
-        }
+        const linkMaps = modalidad !== 'virtual'
+            ? `\n\n📍 *Ubicación del Colegio (Google Maps):*\nhttps://maps.app.goo.gl/dWapCMNPguGBMUTv9`
+            : '';
 
-        lineas.push(
-            ``,
-            avisoAntiReporte,
-            `📞 _Secretaría / Consultas: +591 69624189_`,
-            `_Mensaje institucional automático._`
-        );
+        const notaMultiple = esMultiple
+            ? `\n\n💡 *Nota:* Para su comodidad y optimizar su tiempo, se llevará a cabo una sola entrevista conjunta para toda la familia.`
+            : '';
 
-        return lineas.filter(Boolean).join('\n');
+        const obsTexto = observaciones
+            ? `\n\n📝 *Observaciones:* ${observaciones}`
+            : '';
+
+        const texto = `Estimado/a ${nombreTutor}, le saludamos cordialmente de la Unidad Educativa Privada La Voz de Cristo.\n\nLe recordamos el cronograma oficial de la entrevista institucional de prioridad familiar para ${textoHijos}:\n\n📅 *Fecha y Hora:* ${fechaHoraStr}\n🏛️ *Modalidad:* ${modalidad === 'virtual' ? 'VIRTUAL' : 'PRESENCIAL'}\n📍 *Lugar:* ${lugarTexto}\n\nEs indispensable la asistencia del tutor junto con los postulantes.${notaMultiple}${obsTexto}${linkMaps}\n\nSecretaría General: +591 69624189`;
+
+        return texto;
     }
 
     // ─── Notificar Citación a Entrevista para Hermano o Hermanos vía WhatsApp ───

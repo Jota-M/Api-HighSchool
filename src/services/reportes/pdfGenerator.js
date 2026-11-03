@@ -242,8 +242,9 @@ class PDFGenerator {
     const m         = this._m;
     const tableW    = options.width || this._iW;
     const colWidths = options.columnWidths || this._autoColW(headers.length, tableW);
-    const ROW_H     = options.rowHeight || 20;
+    const minRowH   = options.rowHeight || 18;
     const HDR_H     = 24;
+    const fontSize  = options.fontSize || 7.5;
 
     const _pintarHeader = (y) => {
       doc.rect(m, y, tableW, HDR_H).fill(AZUL);
@@ -259,23 +260,36 @@ class PDFGenerator {
       return y + HDR_H;
     };
 
-    this._checkPageBreak(HDR_H + ROW_H * 2);
+    this._checkPageBreak(HDR_H + minRowH * 2);
     let y = _pintarHeader(doc.y);
 
     rows.forEach((row, ri) => {
-      // Salto de página si no cabe la fila
-      if (y + ROW_H > this._maxY) {
+      // 1. Calcular dinámicamente la altura exacta para que ningún texto se sobreponga
+      doc.font('Helvetica').fontSize(fontSize);
+      let rowH = minRowH;
+      row.forEach((cell, ci) => {
+        const txt = cell !== null && cell !== undefined ? String(cell) : '—';
+        const cellW = colWidths[ci] - 8;
+        const textH = doc.heightOfString(txt, { width: cellW, lineBreak: true });
+        const needed = textH + 7;
+        if (needed > rowH) {
+          rowH = needed;
+        }
+      });
+
+      // Salto de página si no cabe la fila completa
+      if (y + rowH > this._maxY) {
         doc.addPage();
         y = _pintarHeader(this._m);
       }
 
       // Fondo alternado
       if (ri % 2 !== 0) {
-        doc.rect(m, y, tableW, ROW_H).fill(BG_CAMPO);
+        doc.rect(m, y, tableW, rowH).fill(BG_CAMPO);
       }
 
       // Línea inferior
-      doc.moveTo(m, y + ROW_H).lineTo(m + tableW, y + ROW_H)
+      doc.moveTo(m, y + rowH).lineTo(m + tableW, y + rowH)
          .lineWidth(0.3).strokeColor(BORDE).stroke();
 
       let cx = m;
@@ -283,29 +297,30 @@ class PDFGenerator {
         const txt = cell !== null && cell !== undefined ? String(cell) : '—';
 
         if (ci > 0) {
-          doc.moveTo(cx, y).lineTo(cx, y + ROW_H)
+          doc.moveTo(cx, y).lineTo(cx, y + rowH)
              .lineWidth(0.3).strokeColor(BORDE).stroke();
         }
 
         let color = NEGRO;
         let font  = 'Helvetica';
-        if (txt === 'Aprobado'  || txt === 'APROBADO')  { color = '#27AE60'; font = 'Helvetica-Bold'; }
-        if (txt === 'Reprobado' || txt === 'REPROBADO') { color = ROJO;      font = 'Helvetica-Bold'; }
-        if (txt === 'AUSENTE')                           { color = '#E67E22'; font = 'Helvetica-Bold'; }
-        if (txt === 'Sin nota')                          { color = GRIS; }
+        if (txt === 'Aprobado'  || txt === 'APROBADO' || txt === 'Aprobada' || txt === 'APROBADA')  { color = '#15803D'; font = 'Helvetica-Bold'; }
+        else if (txt === 'Reprobado' || txt === 'REPROBADO' || txt === 'No Asistió' || txt === 'NO ASISTIÓ') { color = ROJO;      font = 'Helvetica-Bold'; }
+        else if (txt === 'Programada' || txt === 'PROGRAMADA') { color = '#1D4ED8'; font = 'Helvetica-Bold'; }
+        else if (txt === 'Pendiente' || txt === 'PENDIENTE' || txt === 'Sin agendar' || txt === 'SIN AGENDAR') { color = '#D97706'; font = 'Helvetica-Bold'; }
+        else if (txt === 'AUSENTE')                           { color = '#E67E22'; font = 'Helvetica-Bold'; }
+        else if (txt === 'Sin nota')                          { color = GRIS; }
 
-        doc.font(font).fontSize(8).fillColor(color)
-           .text(txt, cx + 4, y + (ROW_H - 9) / 2, {
+        doc.font(font).fontSize(fontSize).fillColor(color)
+           .text(txt, cx + 4, y + 3.5, {
              width: colWidths[ci] - 8,
-             align: ci <= 2 ? 'left' : 'center',
-             ellipsis: true,
-             lineBreak: false,
+             align: ci <= 1 ? 'center' : (ci === 6 || ci === 8 ? 'center' : 'left'),
+             lineBreak: true,
            });
 
         cx += colWidths[ci];
       });
 
-      y += ROW_H;
+      y += rowH;
     });
 
     // Borde exterior
