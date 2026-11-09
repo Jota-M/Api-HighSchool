@@ -468,6 +468,29 @@ async function cargarEstudiante(client, estudianteData, curso) {
             client, matriculaId, curso.periodo_academico_id, curso.nivel_academico_id
         );
 
+    let becaInfo = null;
+    if (estudianteData.beca?.es_becado) {
+        await marcarMatriculaBecada(client, matriculaId, estudianteData.beca);
+        const porcentaje = Number(estudianteData.beca.porcentaje_beca) || 0;
+        if (porcentaje > 0 && porcentaje < 100) {
+            await client.query(`
+                UPDATE mensualidad
+                SET monto_beca = ROUND(monto_original * ($1 / 100.0), 2),
+                    monto_final = monto_original - ROUND(monto_original * ($1 / 100.0), 2),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE matricula_id = $2
+                  AND estado != 'cancelado'
+            `, [porcentaje, matriculaId]);
+        }
+        becaInfo = await exonerarCuotasBeca(
+            client,
+            matriculaId,
+            cuotaIdPorNumero,
+            estudianteData.beca.cuotas_exoneradas || [],
+            estudianteData.mes_ingreso
+        );
+    }
+
     let insertados = 0;
     let saltados = 0;
 
@@ -560,18 +583,6 @@ async function cargarEstudiante(client, estudianteData, curso) {
         } else {
             throw new Error(`${nombre}: tipo de pago desconocido '${pago.tipo}'`);
         }
-    }
-
-    let becaInfo = null;
-    if (estudianteData.beca?.es_becado) {
-        await marcarMatriculaBecada(client, matriculaId, estudianteData.beca);
-        becaInfo = await exonerarCuotasBeca(
-            client,
-            matriculaId,
-            cuotaIdPorNumero,
-            estudianteData.beca.cuotas_exoneradas || [],
-            estudianteData.mes_ingreso
-        );
     }
 
     return { nombre, ci, insertados, saltados, paraleloId, becaInfo };

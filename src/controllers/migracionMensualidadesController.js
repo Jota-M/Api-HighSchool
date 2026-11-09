@@ -819,8 +819,9 @@ export class MigracionMensualidadesController {
         }
       }
 
-      // Aplicar o revertir exoneraciones
+      // Aplicar o revertir exoneraciones y becas parciales
       const cuotasExoneradasSet = new Set(cuotas_exoneradas.map(Number));
+      const porcentajeNum = Number(porcentaje_beca) || 0;
 
       for (let i = 1; i <= 10; i++) {
         const mensRes = await client.query(`
@@ -852,6 +853,20 @@ export class MigracionMensualidadesController {
               WHERE id = $1
             `, [mens.id]);
           }
+        } else if (es_becado && porcentajeNum > 0 && porcentajeNum < 100) {
+          // Beca parcial porcentual (ej. 30%)
+          const montoBecaCuota = Math.round((Number(mens.monto_original) * (porcentajeNum / 100)) * 100) / 100;
+          const montoFinalCuota = Number(mens.monto_original) - montoBecaCuota;
+          const nuevoEstado = totalPagado >= montoFinalCuota ? 'pagado' : (totalPagado > 0 ? 'pagado_parcial' : 'pendiente');
+          await client.query(`
+            UPDATE mensualidad
+            SET 
+              monto_beca = $1,
+              monto_final = $2,
+              estado = $3,
+              updated_at = CURRENT_TIMESTAMP
+            WHERE id = $4
+          `, [montoBecaCuota, montoFinalCuota, nuevoEstado, mens.id]);
         } else if (mens.estado === 'cancelado' && Number(mens.monto_beca) > 0 && totalPagado === 0) {
           // Revertir a pendiente si ya no está exonerado
           await client.query(`
@@ -863,6 +878,18 @@ export class MigracionMensualidadesController {
               updated_at = CURRENT_TIMESTAMP
             WHERE id = $1
           `, [mens.id]);
+        } else if (!es_becado && Number(mens.monto_beca) > 0) {
+          // Si ya no es becado, restaurar monto_original
+          const nuevoEstado = totalPagado >= Number(mens.monto_original) ? 'pagado' : (totalPagado > 0 ? 'pagado_parcial' : 'pendiente');
+          await client.query(`
+            UPDATE mensualidad
+            SET 
+              monto_beca = 0,
+              monto_final = monto_original,
+              estado = $1,
+              updated_at = CURRENT_TIMESTAMP
+            WHERE id = $2
+          `, [nuevoEstado, mens.id]);
         }
       }
 
@@ -900,7 +927,7 @@ export class MigracionMensualidadesController {
       }
 
       const matRes = await client.query(`
-        SELECT m.id AS matricula_id, g.nivel_academico_id, e.nombres, e.apellido_paterno
+        SELECT m.id AS matricula_id, g.nivel_academico_id, e.nombres, e.apellido_paterno, m.es_becado, m.porcentaje_beca
         FROM matricula m
         JOIN estudiante e ON e.id = m.estudiante_id
         JOIN paralelo p ON p.id = m.paralelo_id
@@ -916,10 +943,12 @@ export class MigracionMensualidadesController {
       for (const mat of matRes.rows) {
         const countRes = await client.query(`SELECT COUNT(*) FROM mensualidad WHERE matricula_id = $1`, [mat.matricula_id]);
         if (parseInt(countRes.rows[0].count) === 0) {
-          await client.query(`SELECT * FROM generar_mensualidades($1, $2, $3, 0)`, [
+          const becaPct = (mat.es_becado && Number(mat.porcentaje_beca) > 0) ? Number(mat.porcentaje_beca) : 0;
+          await client.query(`SELECT * FROM generar_mensualidades($1, $2, $3, $4)`, [
             mat.matricula_id,
             periodo_academico_id,
-            mat.nivel_academico_id
+            mat.nivel_academico_id,
+            becaPct
           ]);
           generadosCount++;
         }
@@ -1146,6 +1175,18 @@ export class MigracionMensualidadesController {
             }
           }
 
+          // Si es beca parcial (ej. 30%), aplicar descuento a todas las cuotas
+          if (porcentaje > 0 && porcentaje < 100) {
+            await client.query(`
+              UPDATE mensualidad
+              SET monto_beca = ROUND(monto_original * ($1 / 100.0), 2),
+                  monto_final = monto_original - ROUND(monto_original * ($1 / 100.0), 2),
+                  updated_at = CURRENT_TIMESTAMP
+              WHERE matricula_id = $2
+                AND estado != 'cancelado'
+            `, [porcentaje, matricula_id]);
+          }
+
           // Aplicar exoneraciones
           for (const numCuota of exoneradas) {
             await client.query(`
@@ -1351,9 +1392,22 @@ export class MigracionMensualidadesController {
         // Procesar beca si existe
         if (estJson.beca && estJson.beca.es_becado) {
           const exoneradas = Array.isArray(estJson.beca.cuotas_exoneradas) ? estJson.beca.cuotas_exoneradas.map(Number) : [];
+          const porcentajeBeca = estJson.beca.porcentaje_beca !== undefined ? Number(estJson.beca.porcentaje_beca) : 100;
           await client.query(`
             UPDATE matricula SET es_becado = true, porcentaje_beca = $1, tipo_beca = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3
-          `, [estJson.beca.porcentaje_beca || 100, estJson.beca.tipo_beca || 'becado', matriculaId]);
+          `, [porcentajeBeca, estJson.beca.tipo_beca || 'becado', matriculaId]);
+
+          // Si es beca parcial (ej. 30%), aplicar descuento a todas las cuotas existentes
+          if (porcentajeBeca > 0 && porcentajeBeca < 100) {
+            await client.query(`
+              UPDATE mensualidad
+              SET monto_beca = ROUND(monto_original * ($1 / 100.0), 2),
+                  monto_final = monto_original - ROUND(monto_original * ($1 / 100.0), 2),
+                  updated_at = CURRENT_TIMESTAMP
+              WHERE matricula_id = $2
+                AND estado != 'cancelado'
+            `, [porcentajeBeca, matriculaId]);
+          }
 
           for (const numCuota of exoneradas) {
             await client.query(`
@@ -1382,11 +1436,15 @@ export class MigracionMensualidadesController {
           if (mensRes.rows.length === 0) {
             const mesNombre = MESES_CUOTA[numCuota - 1] || `Cuota ${numCuota}`;
             const fechaVencimiento = new Date(new Date().getFullYear(), numCuota + 1, 10);
+            const porcentajeBeca = (estJson.beca && estJson.beca.es_becado && estJson.beca.porcentaje_beca > 0 && estJson.beca.porcentaje_beca < 100)
+              ? Number(estJson.beca.porcentaje_beca) : 0;
+            const montoBecaInit = porcentajeBeca > 0 ? Math.round((montoBaseCurso * (porcentajeBeca / 100)) * 100) / 100 : 0;
+            const montoFinalInit = montoBaseCurso - montoBecaInit;
             const nuevaM = await client.query(`
               INSERT INTO mensualidad (matricula_id, numero_cuota, mes_correspondiente, fecha_vencimiento, monto_original, monto_beca, monto_recargo, monto_final, estado)
-              VALUES ($1, $2, $3, $4, $5, 0, 0, $5, 'pendiente')
+              VALUES ($1, $2, $3, $4, $5, $6, 0, $7, 'pendiente')
               RETURNING id
-            `, [matriculaId, numCuota, mesNombre, fechaVencimiento, monto]);
+            `, [matriculaId, numCuota, mesNombre, fechaVencimiento, montoBaseCurso, montoBecaInit, montoFinalInit]);
             mensualidadId = nuevaM.rows[0].id;
           } else {
             mensualidadId = mensRes.rows[0].id;
