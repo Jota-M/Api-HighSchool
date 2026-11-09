@@ -119,14 +119,24 @@ router.get('/export/pdf', authenticate, (req, res) => {
   return ReportesPreInscripcionController.reporteListado(req, res);
 });
 
+// 📅 Agendar entrevista familiar conjunta (varios hermanos)
+router.post('/agendar-familiar', authenticate, PreInscripcionController.agendarEntrevistaFamiliar);
+
 // Obtener preinscripción por ID
 router.get('/:id', authenticate, PreInscripcionController.obtenerPorId);
+
+// 👨‍👩‍👧‍👦 Obtener grupo familiar (hermanos postulantes)
+router.get('/:id/familia', authenticate, PreInscripcionController.obtenerFamilia);
 
 // ✅ Cambiar estado (CORREGIDO: PUT → PATCH)
 router.patch('/:id/estado', authenticate, PreInscripcionController.cambiarEstado);
 
 // 📱 Reenviar notificación de WhatsApp (ADMIN)
 router.post('/:id/reenviar-whatsapp', authenticate, PreInscripcionController.reenviarWhatsApp);
+
+// ✏️ Actualizar preinscripción completa, estudiante y cupo (ADMIN)
+router.put('/:id/admin', authenticate, PreInscripcionController.actualizarAdmin);
+router.put('/:id', authenticate, PreInscripcionController.actualizarAdmin);
 
 // 🆕 Actualizar datos del estudiante (PÚBLICO)
 router.put('/:id/estudiante', PreInscripcionController.actualizarDatosEstudiante);

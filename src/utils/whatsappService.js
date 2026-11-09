@@ -1158,8 +1158,8 @@ class WhatsAppService {
 
         const nombresHijos = listaHermanos
             .map((h) => {
-                const nom = h.nombre_completo || `${h.nombres || ''} ${h.apellido_paterno || ''}`.trim();
-                const cur = h.grado_solicitado_nombre || h.grado_nombre || '';
+                const nom = h.nombre_completo || h.estudiante_nombre || `${h.nombres || ''} ${h.apellido_paterno || ''}`.trim();
+                const cur = h.grado_solicitado_nombre || h.grado_nombre || h.grado_solicitado || '';
                 return `*${nom}*${cur ? ` (${cur})` : ''}`;
             })
             .join(', ');

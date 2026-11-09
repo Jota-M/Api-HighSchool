@@ -773,6 +773,187 @@ class PreInscripcionController {
   }
 
   // ========================================
+  // OBTENER GRUPO FAMILIAR (HERMANOS POSTULANTES)
+  // ========================================
+  static async obtenerFamilia(req, res) {
+    try {
+      const { id } = req.params;
+      const familia = await PreInscripcion.obtenerFamilia(id);
+
+      res.json({
+        success: true,
+        data: familia,
+        familia
+      });
+    } catch (error) {
+      console.error('Error al obtener grupo familiar:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al obtener grupo familiar: ' + error.message
+      });
+    }
+  }
+
+  // ========================================
+  // AGENDAR ENTREVISTA FAMILIAR CONJUNTA
+  // ========================================
+  static async agendarEntrevistaFamiliar(req, res) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const {
+        preinscripcion_ids = [],
+        fecha_texto,
+        hora_texto,
+        modalidad = 'presencial',
+        lugar = 'Dirección del Colegio - Oficina Principal',
+        enlace = '',
+        observaciones = '',
+        notificarWhatsapp = true
+      } = req.body;
+
+      if (!Array.isArray(preinscripcion_ids) || preinscripcion_ids.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Debe seleccionar al menos un postulante para agendar.'
+        });
+      }
+
+      if (!fecha_texto || !hora_texto) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Debe especificar fecha y hora de la entrevista.'
+        });
+      }
+
+      // Obtener todos los registros a actualizar
+      const listaPreinscripciones = [];
+      for (const id of preinscripcion_ids) {
+        const item = await PreInscripcion.obtenerPorId(id);
+        if (item) {
+          listaPreinscripciones.push(item);
+        }
+      }
+
+      if (listaPreinscripciones.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({
+          success: false,
+          message: 'No se encontraron las preinscripciones indicadas.'
+        });
+      }
+
+      const nombresHijos = listaPreinscripciones
+        .map(p => {
+          const nom = `${p.estudiante?.nombres || ''} ${p.estudiante?.apellido_paterno || ''}`.trim();
+          const cur = p.grado_nombre || p.estudiante?.grado_solicitado || '';
+          return `${nom}${cur ? ` (${cur})` : ''}`;
+        })
+        .join(', ');
+
+      const lugarTexto = modalidad === 'virtual'
+        ? `Enlace Virtual: ${enlace || 'Se enviará por WhatsApp'}`
+        : `Lugar: ${lugar || 'Dirección del Colegio - Oficina Principal'}`;
+
+      const notasEntrevista = `
+Entrevista familiar agendada:
+- 📅 Fecha y Hora: *${fecha_texto}* a horas *${hora_texto}*
+- 📌 Modalidad: ${modalidad === 'presencial' ? 'Presencial' : 'Virtual'}
+- 📍 ${lugarTexto}
+- 👥 Postulantes incluidos: ${nombresHijos}
+- 👥 Asistencia Requerida: Es indispensable la presencia del tutor junto con los postulantes.
+${observaciones ? `\n- 📝 Observaciones: ${observaciones}` : ''}
+      `.trim();
+
+      // Actualizar todas las preinscripciones a estado 'entrevista_programada'
+      for (const id of preinscripcion_ids) {
+        await PreInscripcion.cambiarEstado(
+          id,
+          'entrevista_programada',
+          req.user?.id,
+          notasEntrevista,
+          client
+        );
+      }
+
+      await client.query('COMMIT');
+
+      // Notificar por WhatsApp de forma consolidada (1 solo mensaje para toda la familia)
+      let whatsappResult = null;
+      if (notificarWhatsapp !== false && notificarWhatsapp !== 'false') {
+        try {
+          const primerRegistro = listaPreinscripciones[0];
+          const tutor = primerRegistro.tutor || {};
+          const telefono = tutor.telefono || tutor.celular;
+
+          if (telefono) {
+            whatsappResult = await WhatsAppService.notificarEntrevistaHermano({
+              hermanos: listaPreinscripciones.map(p => ({
+                estudiante_nombre: `${p.estudiante?.nombres || ''} ${p.estudiante?.apellido_paterno || ''}`.trim(),
+                grado_nombre: p.grado_nombre || p.estudiante?.grado_solicitado,
+                tutor_nombre: `${tutor.nombres || ''} ${tutor.apellido_paterno || ''}`.trim(),
+                tutor_telefono: telefono
+              })),
+              fecha_texto,
+              hora_texto,
+              modalidad,
+              lugar,
+              enlace,
+              observaciones,
+              telefonoDestino: telefono
+            });
+          }
+        } catch (waErr) {
+          console.error('❌ Error enviando WhatsApp familiar:', waErr);
+        }
+      }
+
+      // Registrar en log de actividad
+      if (req.user) {
+        const reqInfo = RequestInfo.extract(req);
+        await ActividadLog.create({
+          usuario_id: req.user.id,
+          accion: 'agendar_entrevista_familiar',
+          modulo: 'preinscripcion',
+          tabla_afectada: 'pre_inscripcion',
+          datos_nuevos: {
+            preinscripcion_ids,
+            fecha_texto,
+            hora_texto,
+            modalidad,
+            total_postulantes: listaPreinscripciones.length,
+            whatsapp_enviado: Boolean(whatsappResult?.success)
+          },
+          ip_address: reqInfo.ip,
+          user_agent: reqInfo.userAgent,
+          resultado: 'exitoso',
+          mensaje: `Entrevista familiar agendada para ${listaPreinscripciones.length} hermano(s)`
+        });
+      }
+
+      res.json({
+        success: true,
+        message: `Entrevista familiar agendada exitosamente para ${listaPreinscripciones.length} postulante(s).`,
+        total_agendados: listaPreinscripciones.length,
+        whatsapp_enviado: Boolean(whatsappResult?.success),
+        whatsapp_detalle: whatsappResult
+      });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      console.error('Error al agendar entrevista familiar:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al agendar entrevista familiar: ' + error.message
+      });
+    } finally {
+      client.release();
+    }
+  }
+
+  // ========================================
   // CONVERTIR A ESTUDIANTE
   // ========================================
   static async convertirAEstudiante(req, res) {
@@ -1879,6 +2060,49 @@ class PreInscripcionController {
       res.status(400).json({
         success: false,
         message: error.message || 'Error al promover de lista de espera'
+      });
+    }
+  }
+
+  // ========================================
+  // ACTUALIZAR PREINSCRIPCIÓN COMPLETA (ADMIN)
+  // ========================================
+  static async actualizarAdmin(req, res) {
+    try {
+      const { id } = req.params;
+      const payload = req.body;
+
+      await PreInscripcion.actualizarAdmin(id, payload);
+
+      // Registrar actividad
+      if (req.user) {
+        const reqInfo = RequestInfo.extract(req);
+        await ActividadLog.create({
+          usuario_id: req.user.id,
+          accion: 'actualizar_preinscripcion_admin',
+          modulo: 'preinscripcion',
+          tabla_afectada: 'pre_inscripcion',
+          registro_id: id,
+          datos_nuevos: payload,
+          ip_address: reqInfo.ip,
+          user_agent: reqInfo.userAgent,
+          resultado: 'exitoso',
+          mensaje: `Preinscripción #${id} y cupo actualizados por administración.`
+        });
+      }
+
+      const preinscripcionCompleta = await PreInscripcion.obtenerPorId(id);
+
+      res.json({
+        success: true,
+        message: 'Preinscripción, estudiante y cupo actualizados exitosamente.',
+        data: preinscripcionCompleta
+      });
+    } catch (error) {
+      console.error('Error al actualizar preinscripción admin:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al actualizar preinscripción: ' + error.message
       });
     }
   }

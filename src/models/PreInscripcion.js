@@ -447,11 +447,44 @@ class PreInscripcion {
         pe.foto_url as estudiante_foto,
         pe.grado_solicitado,
         pt.nombres || ' ' || pt.apellido_paterno as tutor_nombre,
+        pt.ci as tutor_ci,
         pt.telefono as tutor_telefono,
         g.nombre as grado_nombre,
         t.nombre as turno_nombre,
         pa.nombre as periodo_nombre,
-        cp.cupos_disponibles
+        cp.cupos_disponibles,
+        COALESCE((
+          SELECT COUNT(*)::integer
+          FROM pre_inscripcion pi2
+          JOIN pre_tutor pt2 ON pi2.id = pt2.pre_inscripcion_id AND pt2.es_tutor_principal = true
+          WHERE pi2.deleted_at IS NULL
+            AND pi2.id != pi.id
+            AND (
+              (pt.ci IS NOT NULL AND pt.ci != '' AND pt2.ci = pt.ci)
+              OR (pt.telefono IS NOT NULL AND pt.telefono != '' AND pt2.telefono = pt.telefono)
+            )
+        ), 0) as total_hermanos,
+        COALESCE((
+          SELECT json_agg(json_build_object(
+            'id', pi2.id,
+            'codigo_inscripcion', pi2.codigo_inscripcion,
+            'estado', pi2.estado,
+            'estudiante_nombre', pe2.nombres || ' ' || pe2.apellido_paterno || ' ' || COALESCE(pe2.apellido_materno, ''),
+            'grado_nombre', COALESCE(g2.nombre, pe2.grado_solicitado),
+            'turno_nombre', COALESCE(t2.nombre, pe2.turno_solicitado)
+          ))
+          FROM pre_inscripcion pi2
+          JOIN pre_tutor pt2 ON pi2.id = pt2.pre_inscripcion_id AND pt2.es_tutor_principal = true
+          LEFT JOIN pre_estudiante pe2 ON pi2.id = pe2.pre_inscripcion_id
+          LEFT JOIN grado g2 ON pi2.grado_id = g2.id
+          LEFT JOIN turno t2 ON pi2.turno_preferido_id = t2.id
+          WHERE pi2.deleted_at IS NULL
+            AND pi2.id != pi.id
+            AND (
+              (pt.ci IS NOT NULL AND pt.ci != '' AND pt2.ci = pt.ci)
+              OR (pt.telefono IS NOT NULL AND pt.telefono != '' AND pt2.telefono = pt.telefono)
+            )
+        ), '[]'::json) as hermanos
       FROM pre_inscripcion pi
       LEFT JOIN pre_estudiante pe ON pi.id = pe.pre_inscripcion_id
       LEFT JOIN pre_tutor pt ON pi.id = pt.pre_inscripcion_id AND pt.es_tutor_principal = true
@@ -510,7 +543,81 @@ class PreInscripcion {
       GROUP BY pi.id, pe.*, pt.*, g.nombre, t.nombre, pa.nombre, cp.cupos_totales, cp.cupos_disponibles
     `, [id]);
 
-    return result.rows[0];
+    const data = result.rows[0];
+    if (!data) return null;
+
+    // Buscar hermanos postulantes de la misma familia
+    const tutorCi = data.tutor?.ci;
+    const tutorTel = data.tutor?.telefono || data.tutor?.celular;
+
+    if (tutorCi || tutorTel) {
+      const hermanosRes = await pool.query(`
+        SELECT 
+          pi.id,
+          pi.codigo_inscripcion,
+          pi.estado,
+          pi.observaciones,
+          pi.posicion_espera,
+          pi.tiene_cupo_asignado,
+          pe.nombres || ' ' || pe.apellido_paterno || ' ' || COALESCE(pe.apellido_materno, '') as estudiante_nombre,
+          pe.ci as estudiante_ci,
+          pe.foto_url as estudiante_foto,
+          COALESCE(g.nombre, pe.grado_solicitado) as grado_nombre,
+          COALESCE(t.nombre, pe.turno_solicitado) as turno_nombre,
+          pt.nombres || ' ' || pt.apellido_paterno as tutor_nombre,
+          pt.telefono as tutor_telefono
+        FROM pre_inscripcion pi
+        JOIN pre_tutor pt ON pi.id = pt.pre_inscripcion_id AND pt.es_tutor_principal = true
+        LEFT JOIN pre_estudiante pe ON pi.id = pe.pre_inscripcion_id
+        LEFT JOIN grado g ON pi.grado_id = g.id
+        LEFT JOIN turno t ON pi.turno_preferido_id = t.id
+        WHERE pi.deleted_at IS NULL
+          AND pi.id != $1
+          AND (
+            ($2::text IS NOT NULL AND $2::text != '' AND pt.ci = $2)
+            OR ($3::text IS NOT NULL AND $3::text != '' AND pt.telefono = $3)
+          )
+        ORDER BY pi.id ASC
+      `, [id, tutorCi || null, tutorTel || null]);
+
+      data.hermanos = hermanosRes.rows || [];
+    } else {
+      data.hermanos = [];
+    }
+
+    return data;
+  }
+
+  // =============================================
+  // OBTENER GRUPO FAMILIAR DE UNA PREINSCRIPCIÓN
+  // =============================================
+  static async obtenerFamilia(id) {
+    const pre = await this.obtenerPorId(id);
+    if (!pre) throw new Error('Preinscripción no encontrada');
+
+    const todos = [
+      {
+        id: pre.id,
+        codigo_inscripcion: pre.codigo_inscripcion,
+        estado: pre.estado,
+        observaciones: pre.observaciones,
+        posicion_espera: pre.posicion_espera,
+        tiene_cupo_asignado: pre.tiene_cupo_asignado,
+        estudiante_nombre: `${pre.estudiante?.nombres || ''} ${pre.estudiante?.apellido_paterno || ''} ${pre.estudiante?.apellido_materno || ''}`.trim(),
+        estudiante_ci: pre.estudiante?.ci,
+        estudiante_foto: pre.estudiante?.foto_url,
+        grado_nombre: pre.grado_nombre || pre.estudiante?.grado_solicitado,
+        turno_nombre: pre.turno_nombre || pre.estudiante?.turno_solicitado,
+        es_actual: true
+      },
+      ...(pre.hermanos || []).map(h => ({ ...h, es_actual: false }))
+    ];
+
+    return {
+      tutor: pre.tutor,
+      total_postulantes: todos.length,
+      postulantes: todos
+    };
   }
 
   // =============================================
@@ -988,6 +1095,200 @@ class PreInscripcion {
     const query = 'SELECT * FROM roles WHERE nombre = $1 LIMIT 1';
     const result = await client.query(query, [nombre]);
     return result.rows[0];
+  }
+
+  // =============================================
+  // ACTUALIZAR PREINSCRIPCIÓN COMPLETA (ADMINISTRADOR)
+  // =============================================
+  static async actualizarAdmin(id, payload, externalClient = null) {
+    const client = externalClient || await pool.connect();
+    const shouldManageTransaction = !externalClient;
+
+    try {
+      if (shouldManageTransaction) {
+        await client.query('BEGIN');
+      }
+
+      // 1. Obtener registro actual con bloqueo
+      const preRes = await client.query(
+        'SELECT * FROM pre_inscripcion WHERE id = $1 AND deleted_at IS NULL FOR UPDATE',
+        [id]
+      );
+      if (preRes.rows.length === 0) {
+        throw new Error('Preinscripción no encontrada');
+      }
+      const preActual = preRes.rows[0];
+
+      // 2. Extraer datos del payload
+      const {
+        grado_id,
+        turno_preferido_id,
+        estado,
+        observaciones,
+        estudiante = {},
+        tutor = {}
+      } = payload;
+
+      const nuevoGradoId = (grado_id !== undefined && grado_id !== '') ? Number(grado_id) : preActual.grado_id;
+      const nuevoTurnoId = (turno_preferido_id !== undefined && turno_preferido_id !== '') ? Number(turno_preferido_id) : preActual.turno_preferido_id;
+      const cambioCursoOTurno = nuevoGradoId !== preActual.grado_id || nuevoTurnoId !== preActual.turno_preferido_id;
+
+      let cupoId = preActual.cupo_preinscripcion_id;
+      let tieneCupo = preActual.tiene_cupo_asignado;
+      let posEspera = preActual.posicion_espera;
+
+      // 3. Si cambió curso o turno, recalcular cupo
+      if (cambioCursoOTurno) {
+        // Liberar cupo anterior si lo tenía ocupado
+        if (preActual.cupo_preinscripcion_id && preActual.tiene_cupo_asignado) {
+          await client.query(`
+            UPDATE cupo_preinscripcion
+            SET cupos_ocupados = GREATEST(0, cupos_ocupados - 1),
+                updated_at = NOW()
+            WHERE id = $1
+          `, [preActual.cupo_preinscripcion_id]);
+        }
+
+        // Consultar disponibilidad del nuevo grado y turno
+        const disp = await CupoPreinscripcion.calcularDisponibilidadDinamica({
+          gradoId: nuevoGradoId,
+          turnoId: nuevoTurnoId,
+          periodoAcademicoId: preActual.periodo_academico_id,
+          client
+        });
+
+        if (disp.tiene_cupos && disp.cupo_id) {
+          // Asignar cupo nuevo
+          await client.query(`
+            UPDATE cupo_preinscripcion
+            SET cupos_ocupados = cupos_ocupados + 1,
+                updated_at = NOW()
+            WHERE id = $1
+          `, [disp.cupo_id]);
+
+          cupoId = disp.cupo_id;
+          tieneCupo = true;
+          posEspera = 0;
+        } else {
+          // Sin cupo disponible: pasa a lista de espera
+          cupoId = null;
+          tieneCupo = false;
+          posEspera = disp.posicion_espera || 1;
+        }
+      }
+
+      // 4. Actualizar tabla pre_inscripcion
+      const updatePreRes = await client.query(`
+        UPDATE pre_inscripcion
+        SET
+          grado_id = $1,
+          turno_preferido_id = $2,
+          cupo_preinscripcion_id = $3,
+          tiene_cupo_asignado = $4,
+          posicion_espera = $5,
+          estado = COALESCE($6, estado),
+          observaciones = COALESCE($7, observaciones),
+          updated_at = NOW()
+        WHERE id = $8
+        RETURNING *
+      `, [
+        nuevoGradoId,
+        nuevoTurnoId,
+        cupoId,
+        tieneCupo,
+        posEspera,
+        estado || null,
+        observaciones !== undefined ? observaciones : null,
+        id
+      ]);
+
+      // 5. Obtener nombre del nuevo grado y turno para actualizar también pre_estudiante
+      let nombreGrado = null;
+      let nombreTurno = null;
+      if (nuevoGradoId) {
+        const gRes = await client.query('SELECT nombre FROM grado WHERE id = $1', [nuevoGradoId]);
+        nombreGrado = gRes.rows[0]?.nombre || null;
+      }
+      if (nuevoTurnoId) {
+        const tRes = await client.query('SELECT nombre FROM turno WHERE id = $1', [nuevoTurnoId]);
+        nombreTurno = tRes.rows[0]?.nombre || null;
+      }
+
+      // 6. Actualizar datos de pre_estudiante
+      await client.query(`
+        UPDATE pre_estudiante
+        SET
+          nombres = COALESCE($1, nombres),
+          apellido_paterno = COALESCE($2, apellido_paterno),
+          apellido_materno = $3,
+          ci = COALESCE($4, ci),
+          rude = $5,
+          fecha_nacimiento = COALESCE($6, fecha_nacimiento),
+          genero = COALESCE($7, genero),
+          telefono = $8,
+          email = $9,
+          direccion = $10,
+          grado_solicitado = COALESCE($11, grado_solicitado),
+          turno_solicitado = COALESCE($12, turno_solicitado),
+          updated_at = NOW()
+        WHERE pre_inscripcion_id = $13
+      `, [
+        estudiante.nombres !== undefined ? estudiante.nombres : null,
+        estudiante.apellido_paterno !== undefined ? estudiante.apellido_paterno : null,
+        estudiante.apellido_materno !== undefined ? estudiante.apellido_materno : null,
+        estudiante.ci !== undefined ? estudiante.ci : null,
+        estudiante.rude !== undefined ? estudiante.rude : null,
+        estudiante.fecha_nacimiento !== undefined ? estudiante.fecha_nacimiento : null,
+        estudiante.genero !== undefined ? estudiante.genero : null,
+        estudiante.telefono !== undefined ? estudiante.telefono : null,
+        estudiante.email !== undefined ? estudiante.email : null,
+        estudiante.direccion !== undefined ? estudiante.direccion : null,
+        nombreGrado,
+        nombreTurno,
+        id
+      ]);
+
+      // 7. Actualizar datos de pre_tutor (principal)
+      await client.query(`
+        UPDATE pre_tutor
+        SET
+          nombres = COALESCE($1, nombres),
+          apellido_paterno = COALESCE($2, apellido_paterno),
+          apellido_materno = $3,
+          ci = COALESCE($4, ci),
+          telefono = COALESCE($5, telefono),
+          celular = COALESCE($6, celular),
+          parentesco = COALESCE($7, parentesco),
+          email = $8,
+          updated_at = NOW()
+        WHERE pre_inscripcion_id = $9 AND es_tutor_principal = true
+      `, [
+        tutor.nombres !== undefined ? tutor.nombres : null,
+        tutor.apellido_paterno !== undefined ? tutor.apellido_paterno : null,
+        tutor.apellido_materno !== undefined ? tutor.apellido_materno : null,
+        tutor.ci !== undefined ? tutor.ci : null,
+        tutor.telefono !== undefined ? tutor.telefono : null,
+        tutor.celular !== undefined ? tutor.celular : (tutor.telefono !== undefined ? tutor.telefono : null),
+        tutor.parentesco !== undefined ? tutor.parentesco : null,
+        tutor.email !== undefined ? tutor.email : null,
+        id
+      ]);
+
+      if (shouldManageTransaction) {
+        await client.query('COMMIT');
+      }
+
+      return updatePreRes.rows[0];
+    } catch (error) {
+      if (shouldManageTransaction) {
+        await client.query('ROLLBACK');
+      }
+      throw error;
+    } finally {
+      if (shouldManageTransaction) {
+        client.release();
+      }
+    }
   }
 }
 
