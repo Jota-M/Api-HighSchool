@@ -218,6 +218,7 @@ app.use('/reportes', reportesRoutes);
 // ------------------------------
 app.use('/estudiante', estudianteRoutes);
 app.use('/padre-familia', padreFamiliaRoutes);
+app.use('/api/padre-familia', padreFamiliaRoutes);
 app.use('/registro-completo', registroCompletoRoutes);
 app.use('/matricula', matriculaRoutes);
 app.use('/matriculacion', matriculacionRoutes);

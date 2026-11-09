@@ -1397,6 +1397,19 @@ export class MigracionMensualidadesController {
             UPDATE matricula SET es_becado = true, porcentaje_beca = $1, tipo_beca = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3
           `, [porcentajeBeca, estJson.beca.tipo_beca || 'becado', matriculaId]);
 
+          // Asegurar que existan las mensualidades para este alumno antes de aplicar beca/exoneraciones
+          for (let i = 1; i <= 10; i++) {
+            const existe = await client.query(`SELECT id FROM mensualidad WHERE matricula_id = $1 AND numero_cuota = $2`, [matriculaId, i]);
+            if (existe.rows.length === 0) {
+              const mesNombre = MESES_CUOTA[i - 1];
+              const fechaVencimiento = new Date(new Date().getFullYear(), i + 1, 10);
+              await client.query(`
+                INSERT INTO mensualidad (matricula_id, numero_cuota, mes_correspondiente, fecha_vencimiento, monto_original, monto_beca, monto_recargo, monto_final, estado)
+                VALUES ($1, $2, $3, $4, $5, 0, 0, $5, 'pendiente')
+              `, [matriculaId, i, mesNombre, fechaVencimiento, montoBaseCurso]);
+            }
+          }
+
           // Si es beca parcial (ej. 30%), aplicar descuento a todas las cuotas existentes
           if (porcentajeBeca > 0 && porcentajeBeca < 100) {
             await client.query(`

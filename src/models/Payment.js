@@ -148,8 +148,32 @@ class Mensualidad {
    * Sistema de 10 mensualidades (febrero a noviembre)
    */
   static async findByMatricula(matricula_id) {
+    // Sincronizar cuotas vencidas cuya fecha de vencimiento ya pasó
+    try {
+      await pool.query(`
+        UPDATE mensualidad 
+        SET estado = 'vencido', updated_at = CURRENT_TIMESTAMP
+        WHERE matricula_id = $1
+          AND estado = 'pendiente'
+          AND fecha_vencimiento < CURRENT_DATE
+      `, [matricula_id]);
+    } catch (err) {
+      console.warn('⚠️ No se pudo actualizar estado vencido en BD:', err.message);
+    }
+
     const query = `
-      SELECT m.*,
+      SELECT m.id,
+        m.matricula_id,
+        m.numero_cuota,
+        m.mes_correspondiente,
+        m.fecha_vencimiento,
+        m.monto_original,
+        m.monto_beca,
+        m.monto_recargo,
+        m.monto_final,
+        m.observaciones,
+        m.created_at,
+        m.updated_at,
         mat.numero_matricula,
         e.nombres,
         e.apellidos,
@@ -167,7 +191,24 @@ class Mensualidad {
           FROM pago_mensualidad pm
           WHERE pm.mensualidad_id = m.id
             AND NOT pm.anulado
-        ), 0)) as saldo_pendiente
+        ), 0)) as saldo_pendiente,
+        -- Estado calculado dinámico en base a saldos y fecha actual
+        CASE
+          WHEN m.estado = 'pagado' THEN 'pagado'
+          WHEN m.estado = 'anulado' THEN 'anulado'
+          WHEN (m.monto_final - COALESCE((
+            SELECT SUM(pm.monto_pagado)
+            FROM pago_mensualidad pm
+            WHERE pm.mensualidad_id = m.id AND NOT pm.anulado
+          ), 0)) <= 0 THEN 'pagado'
+          WHEN m.fecha_vencimiento < CURRENT_DATE THEN 'vencido'
+          WHEN COALESCE((
+            SELECT SUM(pm.monto_pagado)
+            FROM pago_mensualidad pm
+            WHERE pm.mensualidad_id = m.id AND NOT pm.anulado
+          ), 0) > 0 THEN 'pagado_parcial'
+          ELSE m.estado
+        END as estado
       FROM mensualidad m
       INNER JOIN matricula mat ON m.matricula_id = mat.id
       INNER JOIN estudiante e ON mat.estudiante_id = e.id

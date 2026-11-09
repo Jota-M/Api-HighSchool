@@ -6,17 +6,24 @@ const router = express.Router();
 
 router.use(authenticate);
 
-// GET /api/padre-familia
+// GET /padre-familia
 router.get(
   '/',
-  authorize('padre_familia.leer'),
+  authorize('padre_familia.leer', 'pago_mensualidad.leer', 'pago_mensualidad.crear', 'mensualidad.leer'),
   PadreFamiliaController.listar
 );
 
-// GET /api/padre-familia/:id
+// GET /padre-familia/:id/estudiantes
+router.get(
+  '/:id/estudiantes',
+  authorize('padre_familia.leer', 'pago_mensualidad.leer', 'pago_mensualidad.crear', 'mensualidad.leer'),
+  PadreFamiliaController.obtenerEstudiantes
+);
+
+// GET /padre-familia/:id
 router.get(
   '/:id',
-  authorize('padre_familia.leer'),
+  authorize('padre_familia.leer', 'pago_mensualidad.leer', 'pago_mensualidad.crear', 'mensualidad.leer'),
   PadreFamiliaController.obtenerPorId
 );
 

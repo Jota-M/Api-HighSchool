@@ -1096,7 +1096,7 @@ class ReservaCupoController {
 
       res.json({
         success: true,
-        message,
+        message: mensaje,
         data: hermanoPrincipal,
         hermanos: hermanosActualizados,
         whatsapp: whatsappStatus
@@ -1145,7 +1145,7 @@ class ReservaCupoController {
 
       res.json({
         success: true,
-        message,
+        message: mensaje,
         data: actualizados[0],
         hermanos: actualizados
       });

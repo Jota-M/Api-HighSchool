@@ -1,4 +1,4 @@
-import { PadreFamilia } from '../models/Estudiantes.js';
+import { PadreFamilia } from '../models/PadreFamiliaModel.js';
 import ActividadLog from '../models/actividadLog.js';
 import RequestInfo from '../utils/requestInfo.js';
 
@@ -50,6 +50,25 @@ class PadreFamiliaController {
       res.status(500).json({
         success: false,
         message: 'Error al obtener tutor: ' + error.message
+      });
+    }
+  }
+
+  // Obtener estudiantes asociados a un tutor
+  static async obtenerEstudiantes(req, res) {
+    try {
+      const { id } = req.params;
+      const estudiantes = await PadreFamilia.getEstudiantes(id);
+
+      res.json({
+        success: true,
+        data: { estudiantes }
+      });
+    } catch (error) {
+      console.error('Error al obtener estudiantes del tutor:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al obtener estudiantes del tutor: ' + error.message
       });
     }
   }

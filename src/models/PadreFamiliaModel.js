@@ -154,10 +154,14 @@ class PadreFamilia {
       UPDATE padre_familia 
       SET deleted_at = NOW()
       WHERE id = $1 AND deleted_at IS NULL
-      RETURNING id
+      RETURNING *
     `;
     const result = await client.query(query, [id]);
     return result.rows[0];
+  }
+
+  static async softDelete(id, client = pool) {
+    return this.delete(id, client);
   }
 
   /**
@@ -168,22 +172,31 @@ class PadreFamilia {
       page = 1,
       limit = 10,
       search = '',
+      parentesco = null,
       activo = null
     } = filters;
 
     const offset = (page - 1) * limit;
-    const conditions = ['deleted_at IS NULL'];
+    const conditions = ['pf.deleted_at IS NULL'];
     const values = [];
     let counter = 1;
 
     if (search) {
       conditions.push(`(
-        LOWER(nombres || ' ' || apellido_paterno || ' ' || COALESCE(apellido_materno, '')) 
+        LOWER(pf.nombres || ' ' || pf.apellido_paterno || ' ' || COALESCE(pf.apellido_materno, '')) 
         LIKE LOWER($${counter})
-        OR ci LIKE $${counter}
-        OR LOWER(email) LIKE LOWER($${counter})
+        OR pf.ci LIKE $${counter}
+        OR LOWER(COALESCE(pf.email, '')) LIKE LOWER($${counter})
+        OR pf.celular LIKE $${counter}
+        OR pf.telefono LIKE $${counter}
       )`);
       values.push(`%${search}%`);
+      counter++;
+    }
+
+    if (parentesco) {
+      conditions.push(`pf.parentesco = $${counter}`);
+      values.push(parentesco);
       counter++;
     }
 
@@ -192,20 +205,33 @@ class PadreFamilia {
     // Query para contar total
     const countQuery = `
       SELECT COUNT(*) as total
-      FROM padre_familia
+      FROM padre_familia pf
       ${whereClause}
     `;
 
-    // Query para obtener datos
+    // Query para obtener datos enriquecidos con sus hijos
     const dataQuery = `
       SELECT 
         pf.*,
         u.username,
         u.email as usuario_email,
-        COUNT(DISTINCT et.estudiante_id) as total_estudiantes
+        COUNT(DISTINCT et.estudiante_id) as total_estudiantes,
+        COALESCE(
+          json_agg(
+            DISTINCT jsonb_build_object(
+              'id', e.id,
+              'codigo', e.codigo,
+              'nombres', e.nombres,
+              'apellido_paterno', e.apellido_paterno,
+              'apellido_materno', e.apellido_materno
+            )
+          ) FILTER (WHERE e.id IS NOT NULL),
+          '[]'
+        ) as hijos
       FROM padre_familia pf
       LEFT JOIN usuarios u ON pf.usuario_id = u.id
       LEFT JOIN estudiante_tutor et ON pf.id = et.padre_familia_id
+      LEFT JOIN estudiante e ON et.estudiante_id = e.id AND e.deleted_at IS NULL
       ${whereClause}
       GROUP BY pf.id, u.username, u.email
       ORDER BY pf.nombres, pf.apellido_paterno
