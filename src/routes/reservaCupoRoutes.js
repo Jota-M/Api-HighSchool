@@ -87,6 +87,12 @@ router.get('/admin/cupos-asegurados/estudiantes', authenticate, ReservaCupoContr
 router.get('/admin/exportar', authenticate, ReservaCupoController.exportarReservas);
 
 /**
+ * PUT /api/reserva-cupo/admin/:id
+ * Actualiza los datos de una reserva regular (estudiante, curso destino, turno, tutor, observaciones).
+ */
+router.put('/admin/:id', authenticate, ReservaCupoController.actualizarReservaAdmin);
+
+/**
  * POST /api/reserva-cupo/admin/:id/anular
  * Anula una reserva definitivamente desde el panel administrativo.
  */
@@ -127,6 +133,12 @@ router.post('/admin/hermanos/:id/anular', authenticate, ReservaCupoController.an
  * Restablece la reserva de un hermano desde el panel administrativo.
  */
 router.post('/admin/hermanos/:id/reactivar', authenticate, ReservaCupoController.reactivarHermanoAdmin);
+
+/**
+ * PUT /api/reserva-cupo/admin/hermanos/:id
+ * Actualiza los datos de un hermano postulante (nombres, curso, turno, tutor, observaciones).
+ */
+router.put('/admin/hermanos/:id', authenticate, ReservaCupoController.actualizarHermanoAdmin);
 
 /**
  * DELETE /api/reserva-cupo/admin/hermanos/:id

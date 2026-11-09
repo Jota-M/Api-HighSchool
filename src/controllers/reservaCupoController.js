@@ -498,6 +498,46 @@ class ReservaCupoController {
   }
 
   /**
+   * ✏️ ACTUALIZAR RESERVA REGULAR (Panel Admin)
+   * PUT /api/reserva-cupo/admin/:id
+   */
+  static async actualizarReservaAdmin(req, res) {
+    try {
+      const { id } = req.params;
+      const datos = req.body;
+
+      const resultado = await ReservaCupo.actualizar(parseInt(id, 10), datos);
+
+      // Registro de actividad
+      const reqInfo = RequestInfo.extract(req);
+      ActividadLog.create({
+        usuario_id: req.user?.id || null,
+        accion: 'actualizacion_reserva_admin',
+        modulo: 'reserva_cupo',
+        tabla_afectada: 'reserva_cupo',
+        registro_id: resultado.id,
+        datos_nuevos: datos,
+        ip_address: reqInfo.ip,
+        user_agent: reqInfo.userAgent,
+        resultado: 'exitoso',
+        mensaje: `Actualización de reserva regular ${resultado.codigo_reserva} (${resultado.estudiante_nombre_completo})`
+      }).catch(err => console.error('Error log actualización:', err));
+
+      res.json({
+        success: true,
+        message: 'Reserva de cupo actualizada exitosamente.',
+        data: resultado
+      });
+    } catch (error) {
+      console.error('Error al actualizar reserva admin:', error);
+      res.status(400).json({
+        success: false,
+        message: error.message
+      });
+    }
+  }
+
+  /**
    * Dibuja el recibo institucional
    */
   static async dibujarContenidoRecibo(doc, reserva) {
@@ -948,6 +988,46 @@ class ReservaCupoController {
       });
     } catch (error) {
       console.error('Error al eliminar reserva de hermano:', error);
+      res.status(400).json({
+        success: false,
+        message: error.message
+      });
+    }
+  }
+
+  /**
+   * ✏️ ACTUALIZAR HERMANO POSTULANTE (Panel Administrativo)
+   * PUT /api/reserva-cupo/admin/hermanos/:id
+   */
+  static async actualizarHermanoAdmin(req, res) {
+    try {
+      const { id } = req.params;
+      const datos = req.body;
+
+      const resultado = await ReservaCupoHermano.actualizar(parseInt(id, 10), datos);
+
+      // Registro de actividad
+      const reqInfo = RequestInfo.extract(req);
+      ActividadLog.create({
+        usuario_id: req.user?.id || null,
+        accion: 'actualizacion_hermano_admin',
+        modulo: 'reserva_cupo_hermano',
+        tabla_afectada: 'reserva_cupo_hermano',
+        registro_id: resultado.id,
+        datos_nuevos: datos,
+        ip_address: reqInfo.ip,
+        user_agent: reqInfo.userAgent,
+        resultado: 'exitoso',
+        mensaje: `Actualización de datos del hermano ${resultado.nombre_completo} (${resultado.codigo_reserva})`
+      }).catch(err => console.error('Error log actualización hermano:', err));
+
+      res.json({
+        success: true,
+        message: 'Datos del hermano postulante actualizados exitosamente.',
+        data: resultado
+      });
+    } catch (error) {
+      console.error('Error al actualizar hermano admin:', error);
       res.status(400).json({
         success: false,
         message: error.message

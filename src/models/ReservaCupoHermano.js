@@ -322,6 +322,60 @@ class ReservaCupoHermano {
   }
 
   /**
+   * Genera el siguiente código correlativo único para hermano (HER o ESP) garantizando que no haya duplicados
+   */
+  static async generarSiguienteCodigoHermano(prefijo, anioPrefijo, clientOrPool = pool, excludeId = null) {
+    // 1. Obtener todos los correlativos existentes con este prefijo y año
+    const res = await clientOrPool.query(`
+      SELECT codigo_reserva, codigo_recibo
+      FROM reserva_cupo_hermano
+      WHERE codigo_reserva LIKE $1 OR codigo_recibo LIKE $2
+    `, [`${prefijo}-${anioPrefijo}-%`, `REC-${prefijo}-${anioPrefijo}-%`]);
+
+    let maxNum = 0;
+    for (const row of res.rows) {
+      if (row.codigo_reserva) {
+        const parts = row.codigo_reserva.split('-');
+        const n = parseInt(parts[parts.length - 1], 10);
+        if (!isNaN(n) && n > maxNum) maxNum = n;
+      }
+      if (row.codigo_recibo) {
+        const parts = row.codigo_recibo.split('-');
+        const n = parseInt(parts[parts.length - 1], 10);
+        if (!isNaN(n) && n > maxNum) maxNum = n;
+      }
+    }
+
+    let siguienteNum = maxNum + 1;
+    let nuevoCodigoReserva = `${prefijo}-${anioPrefijo}-${siguienteNum.toString().padStart(4, '0')}`;
+    let nuevoCodigoRecibo = `REC-${prefijo}-${anioPrefijo}-${siguienteNum.toString().padStart(4, '0')}`;
+
+    // 2. Loop de seguridad anti-colisión
+    while (true) {
+      const params = excludeId
+        ? [nuevoCodigoReserva, nuevoCodigoRecibo, excludeId]
+        : [nuevoCodigoReserva, nuevoCodigoRecibo];
+      const sqlCheck = excludeId
+        ? `SELECT 1 FROM reserva_cupo_hermano WHERE (codigo_reserva = $1 OR codigo_recibo = $2) AND id != $3 LIMIT 1`
+        : `SELECT 1 FROM reserva_cupo_hermano WHERE (codigo_reserva = $1 OR codigo_recibo = $2) LIMIT 1`;
+
+      const check = await clientOrPool.query(sqlCheck, params);
+      if (check.rows.length === 0) {
+        break;
+      }
+      siguienteNum++;
+      nuevoCodigoReserva = `${prefijo}-${anioPrefijo}-${siguienteNum.toString().padStart(4, '0')}`;
+      nuevoCodigoRecibo = `REC-${prefijo}-${anioPrefijo}-${siguienteNum.toString().padStart(4, '0')}`;
+    }
+
+    return {
+      codigoReserva: nuevoCodigoReserva,
+      codigoRecibo: nuevoCodigoRecibo,
+      numero: siguienteNum
+    };
+  }
+
+  /**
    * Crea un registro de hermano en reserva_cupo_hermano dentro de una transacción activa
    */
   static async crearReservaHermanoTransaccional(datosHermano, client) {
@@ -376,27 +430,8 @@ class ReservaCupoHermano {
     const posicionEspera = disp.posicion_espera;
     const prefijo = tieneCupo ? 'HER' : 'ESP';
 
-    // Generar correlativo secuencial
-    const ultimoCodigoRes = await client.query(`
-      SELECT codigo_reserva
-      FROM reserva_cupo_hermano
-      WHERE codigo_reserva LIKE $1
-      ORDER BY id DESC
-      LIMIT 1
-    `, [`${prefijo}-${anioPrefijo}-%`]);
-
-    let siguienteNum = 1;
-    if (ultimoCodigoRes.rows.length > 0) {
-      const partes = ultimoCodigoRes.rows[0].codigo_reserva.split('-');
-      const ultNum = parseInt(partes[partes.length - 1], 10);
-      if (!isNaN(ultNum)) {
-        siguienteNum = ultNum + 1;
-      }
-    }
-
-    const seqStr = siguienteNum.toString().padStart(4, '0');
-    const codigoReserva = `${prefijo}-${anioPrefijo}-${seqStr}`;
-    const codigoRecibo = `REC-${prefijo}-${anioPrefijo}-${seqStr}`;
+    // Generar correlativo secuencial garantizado sin duplicados
+    const { codigoReserva, codigoRecibo } = await this.generarSiguienteCodigoHermano(prefijo, anioPrefijo, client);
 
     const insertResult = await client.query(`
       INSERT INTO reserva_cupo_hermano (
@@ -695,65 +730,137 @@ class ReservaCupoHermano {
     if (!hermano) throw new Error('Registro de hermano no encontrado');
     if (hermano.estado === 'confirmada') throw new Error('El hermano ya tiene cupo confirmado');
 
-    const yearMatch = hermano.periodo_nombre.match(/\d{4}/);
+    const yearMatch = hermano.periodo_nombre ? hermano.periodo_nombre.match(/\d{4}/) : null;
     const anioPrefijo = yearMatch ? yearMatch[0] : '2027';
 
-    // Generar correlativo oficial HER-2027-XXXX
-    const ultimoCodigoRes = await pool.query(`
-      SELECT codigo_reserva
-      FROM reserva_cupo_hermano
-      WHERE codigo_reserva LIKE $1
-      ORDER BY id DESC
-      LIMIT 1
-    `, [`HER-${anioPrefijo}-%`]);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('LOCK TABLE reserva_cupo_hermano IN SHARE ROW EXCLUSIVE MODE');
 
-    let siguienteNum = 1;
-    if (ultimoCodigoRes.rows.length > 0) {
-      const partes = ultimoCodigoRes.rows[0].codigo_reserva.split('-');
-      const ultNum = parseInt(partes[partes.length - 1], 10);
-      if (!isNaN(ultNum)) siguienteNum = ultNum + 1;
+      // Generar correlativo oficial HER-2027-XXXX 100% único sin riesgo de duplicados
+      const { codigoReserva: nuevoCodigoReserva, codigoRecibo: nuevoCodigoRecibo } =
+        await this.generarSiguienteCodigoHermano('HER', anioPrefijo, client, id);
+
+      await client.query(`
+        UPDATE reserva_cupo_hermano
+        SET 
+          codigo_reserva = $1,
+          codigo_recibo = $2,
+          estado = 'confirmada',
+          posicion_espera = 0,
+          motivo_reasignacion = $3,
+          updated_at = NOW()
+        WHERE id = $4
+      `, [
+        nuevoCodigoReserva,
+        nuevoCodigoRecibo,
+        motivo_reasignacion || 'Cupo asignado por administración tras liberación de vacante.',
+        id
+      ]);
+
+      // Recalcular posiciones de espera para los demás hermanos de ese grado y turno
+      await client.query(`
+        WITH reordenados AS (
+          SELECT id, ROW_NUMBER() OVER (ORDER BY id ASC) as nueva_pos
+          FROM reserva_cupo_hermano
+          WHERE grado_solicitado_id = $1 
+            AND turno_solicitado_id = $2 
+            AND periodo_academico_id = $3
+            AND estado = 'en_espera'
+            AND deleted_at IS NULL
+        )
+        UPDATE reserva_cupo_hermano rh
+        SET posicion_espera = r.nueva_pos
+        FROM reordenados r
+        WHERE rh.id = r.id;
+      `, [hermano.grado_solicitado_id, hermano.turno_solicitado_id, hermano.periodo_academico_id]);
+
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
     }
 
-    const seqStr = siguienteNum.toString().padStart(4, '0');
-    const nuevoCodigoReserva = `HER-${anioPrefijo}-${seqStr}`;
-    const nuevoCodigoRecibo = `REC-HER-${anioPrefijo}-${seqStr}`;
+    return await this.obtenerPorId(id);
+  }
+
+  /**
+   * Actualizar completamente los datos de un hermano postulante (nombres, curso solicitado, turno, tutor, observaciones, estado)
+   */
+  static async actualizar(id, {
+    nombres,
+    apellido_paterno,
+    apellido_materno,
+    ci,
+    fecha_nacimiento,
+    genero,
+    grado_solicitado_id,
+    turno_solicitado_id,
+    tutor_nombre,
+    tutor_ci,
+    tutor_parentesco,
+    tutor_telefono,
+    observaciones,
+    estado
+  } = {}) {
+    const hermano = await this.obtenerPorId(id);
+    if (!hermano) throw new Error('Registro de hermano no encontrado');
+
+    // Si cambió el CI, verificar que no colisione con otro hermano activo
+    if (ci && ci.trim() !== (hermano.ci || '').trim()) {
+      const check = await pool.query(`
+        SELECT id, nombres, apellido_paterno FROM reserva_cupo_hermano
+        WHERE ci = $1 AND periodo_academico_id = $2 AND id != $3 AND deleted_at IS NULL
+      `, [ci.trim(), hermano.periodo_academico_id, id]);
+
+      if (check.rows.length > 0) {
+        throw new Error(`Ya existe otro hermano registrado con el CI ${ci.trim()}`);
+      }
+    }
 
     await pool.query(`
       UPDATE reserva_cupo_hermano
       SET 
-        codigo_reserva = $1,
-        codigo_recibo = $2,
-        estado = 'confirmada',
-        posicion_espera = 0,
-        motivo_reasignacion = $3,
+        nombres = COALESCE($1, nombres),
+        apellido_paterno = COALESCE($2, apellido_paterno),
+        apellido_materno = COALESCE($3, apellido_materno),
+        ci = COALESCE($4, ci),
+        fecha_nacimiento = COALESCE($5, fecha_nacimiento),
+        genero = COALESCE($6, genero),
+        grado_solicitado_id = COALESCE($7, grado_solicitado_id),
+        turno_solicitado_id = COALESCE($8, turno_solicitado_id),
+        tutor_nombre = COALESCE($9, tutor_nombre),
+        tutor_ci = COALESCE($10, tutor_ci),
+        tutor_parentesco = COALESCE($11, tutor_parentesco),
+        tutor_telefono = COALESCE($12, tutor_telefono),
+        observaciones = COALESCE($13, observaciones),
+        estado = COALESCE($14, estado),
         updated_at = NOW()
-      WHERE id = $4
+      WHERE id = $15
     `, [
-      nuevoCodigoReserva,
-      nuevoCodigoRecibo,
-      motivo_reasignacion || 'Cupo asignado por administración tras liberación de vacante.',
+      nombres ? nombres.trim() : null,
+      apellido_paterno ? apellido_paterno.trim() : null,
+      apellido_materno !== undefined ? (apellido_materno ? apellido_materno.trim() : null) : null,
+      ci ? ci.trim() : null,
+      fecha_nacimiento || null,
+      genero || null,
+      grado_solicitado_id ? parseInt(grado_solicitado_id, 10) : null,
+      turno_solicitado_id ? parseInt(turno_solicitado_id, 10) : null,
+      tutor_nombre ? tutor_nombre.trim() : null,
+      tutor_ci ? tutor_ci.trim() : null,
+      tutor_parentesco ? tutor_parentesco.trim() : null,
+      tutor_telefono ? tutor_telefono.trim() : null,
+      observaciones !== undefined ? observaciones : null,
+      estado || null,
       id
     ]);
 
-    // Recalcular posiciones de espera para los demás hermanos de ese grado y turno
-    await pool.query(`
-      WITH reordenados AS (
-        SELECT id, ROW_NUMBER() OVER (ORDER BY id ASC) as nueva_pos
-        FROM reserva_cupo_hermano
-        WHERE grado_solicitado_id = $1 
-          AND turno_solicitado_id = $2 
-          AND periodo_academico_id = $3
-          AND estado = 'en_espera'
-          AND deleted_at IS NULL
-      )
-      UPDATE reserva_cupo_hermano rh
-      SET posicion_espera = r.nueva_pos
-      FROM reordenados r
-      WHERE rh.id = r.id;
-    `, [hermano.grado_solicitado_id, hermano.turno_solicitado_id, hermano.periodo_academico_id]);
-
     return await this.obtenerPorId(id);
   }
+
 
   /**
    * Solicitar anulación de reserva de hermano (por el tutor desde el recibo web)
@@ -842,6 +949,81 @@ class ReservaCupoHermano {
   }
 
   /**
+   * Actualizar completamente los datos de un hermano postulante (nombres, curso solicitado, turno, tutor, observaciones, estado)
+   */
+  static async actualizar(id, {
+    nombres,
+    apellido_paterno,
+    apellido_materno,
+    ci,
+    fecha_nacimiento,
+    genero,
+    grado_solicitado_id,
+    turno_solicitado_id,
+    tutor_nombre,
+    tutor_ci,
+    tutor_parentesco,
+    tutor_telefono,
+    observaciones,
+    estado
+  } = {}) {
+    const hermano = await this.obtenerPorId(id);
+    if (!hermano) throw new Error('Registro de hermano no encontrado');
+
+    // Si cambió el CI, verificar que no colisione con otro hermano activo
+    if (ci && ci.trim() !== (hermano.ci || '').trim()) {
+      const check = await pool.query(`
+        SELECT id, nombres, apellido_paterno FROM reserva_cupo_hermano
+        WHERE ci = $1 AND periodo_academico_id = $2 AND id != $3 AND deleted_at IS NULL
+      `, [ci.trim(), hermano.periodo_academico_id, id]);
+
+      if (check.rows.length > 0) {
+        throw new Error(`Ya existe otro hermano registrado con el CI ${ci.trim()}`);
+      }
+    }
+
+    await pool.query(`
+      UPDATE reserva_cupo_hermano
+      SET 
+        nombres = COALESCE($1, nombres),
+        apellido_paterno = COALESCE($2, apellido_paterno),
+        apellido_materno = COALESCE($3, apellido_materno),
+        ci = COALESCE($4, ci),
+        fecha_nacimiento = COALESCE($5, fecha_nacimiento),
+        genero = COALESCE($6, genero),
+        grado_solicitado_id = COALESCE($7, grado_solicitado_id),
+        turno_solicitado_id = COALESCE($8, turno_solicitado_id),
+        tutor_nombre = COALESCE($9, tutor_nombre),
+        tutor_ci = COALESCE($10, tutor_ci),
+        tutor_parentesco = COALESCE($11, tutor_parentesco),
+        tutor_telefono = COALESCE($12, tutor_telefono),
+        observaciones = COALESCE($13, observaciones),
+        estado = COALESCE($14, estado),
+        updated_at = NOW()
+      WHERE id = $15
+    `, [
+      nombres ? nombres.trim() : null,
+      apellido_paterno ? apellido_paterno.trim() : null,
+      apellido_materno !== undefined ? (apellido_materno ? apellido_materno.trim() : null) : null,
+      ci ? ci.trim() : null,
+      fecha_nacimiento || null,
+      genero || null,
+      grado_solicitado_id ? parseInt(grado_solicitado_id, 10) : null,
+      turno_solicitado_id ? parseInt(turno_solicitado_id, 10) : null,
+      tutor_nombre ? tutor_nombre.trim() : null,
+      tutor_ci ? tutor_ci.trim() : null,
+      tutor_parentesco ? tutor_parentesco.trim() : null,
+      tutor_telefono ? tutor_telefono.trim() : null,
+      observaciones !== undefined ? observaciones : null,
+      estado || null,
+      id
+    ]);
+
+    return await this.obtenerPorId(id);
+  }
+
+
+  /**
    * Eliminar definitivamente la reserva de un hermano (soft-delete con deleted_at)
    * Libera el cupo inmediatamente si estaba confirmado y reordena la lista de espera si estaba en espera.
    * Especialmente útil para eliminar registros duplicados de padres que registraron dos veces.
@@ -917,6 +1099,154 @@ class ReservaCupoHermano {
         updated_at = NOW()
       WHERE id = $4
     `, [nuevoEstado, nuevaPosicion, obsNueva, id]);
+
+    return await this.obtenerPorId(id);
+  }
+
+  /**
+   * Actualizar completamente los datos de un hermano postulante (nombres, curso solicitado, turno, tutor, observaciones, estado)
+   */
+  static async actualizar(id, {
+    nombres,
+    apellido_paterno,
+    apellido_materno,
+    ci,
+    fecha_nacimiento,
+    genero,
+    grado_solicitado_id,
+    turno_solicitado_id,
+    tutor_nombre,
+    tutor_ci,
+    tutor_parentesco,
+    tutor_telefono,
+    observaciones,
+    estado
+  } = {}) {
+    const hermano = await this.obtenerPorId(id);
+    if (!hermano) throw new Error('Registro de hermano no encontrado');
+
+    // Si cambió el CI, verificar que no colisione con otro hermano activo
+    if (ci && ci.trim() !== (hermano.ci || '').trim()) {
+      const check = await pool.query(`
+        SELECT id, nombres, apellido_paterno FROM reserva_cupo_hermano
+        WHERE ci = $1 AND periodo_academico_id = $2 AND id != $3 AND deleted_at IS NULL
+      `, [ci.trim(), hermano.periodo_academico_id, id]);
+
+      if (check.rows.length > 0) {
+        throw new Error(`Ya existe otro hermano registrado con el CI ${ci.trim()}`);
+      }
+    }
+
+    await pool.query(`
+      UPDATE reserva_cupo_hermano
+      SET 
+        nombres = COALESCE($1, nombres),
+        apellido_paterno = COALESCE($2, apellido_paterno),
+        apellido_materno = COALESCE($3, apellido_materno),
+        ci = COALESCE($4, ci),
+        fecha_nacimiento = COALESCE($5, fecha_nacimiento),
+        genero = COALESCE($6, genero),
+        grado_solicitado_id = COALESCE($7, grado_solicitado_id),
+        turno_solicitado_id = COALESCE($8, turno_solicitado_id),
+        tutor_nombre = COALESCE($9, tutor_nombre),
+        tutor_ci = COALESCE($10, tutor_ci),
+        tutor_parentesco = COALESCE($11, tutor_parentesco),
+        tutor_telefono = COALESCE($12, tutor_telefono),
+        observaciones = COALESCE($13, observaciones),
+        estado = COALESCE($14, estado),
+        updated_at = NOW()
+      WHERE id = $15
+    `, [
+      nombres ? nombres.trim() : null,
+      apellido_paterno ? apellido_paterno.trim() : null,
+      apellido_materno !== undefined ? (apellido_materno ? apellido_materno.trim() : null) : null,
+      ci ? ci.trim() : null,
+      fecha_nacimiento || null,
+      genero || null,
+      grado_solicitado_id ? parseInt(grado_solicitado_id, 10) : null,
+      turno_solicitado_id ? parseInt(turno_solicitado_id, 10) : null,
+      tutor_nombre ? tutor_nombre.trim() : null,
+      tutor_ci ? tutor_ci.trim() : null,
+      tutor_parentesco ? tutor_parentesco.trim() : null,
+      tutor_telefono ? tutor_telefono.trim() : null,
+      observaciones !== undefined ? observaciones : null,
+      estado || null,
+      id
+    ]);
+
+    return await this.obtenerPorId(id);
+  }
+
+  /**
+   * Actualizar completamente los datos de un hermano postulante (nombres, curso solicitado, turno, tutor, observaciones, estado)
+   */
+  static async actualizar(id, {
+    nombres,
+    apellido_paterno,
+    apellido_materno,
+    ci,
+    fecha_nacimiento,
+    genero,
+    grado_solicitado_id,
+    turno_solicitado_id,
+    tutor_nombre,
+    tutor_ci,
+    tutor_parentesco,
+    tutor_telefono,
+    observaciones,
+    estado
+  } = {}) {
+    const hermano = await this.obtenerPorId(id);
+    if (!hermano) throw new Error('Registro de hermano no encontrado');
+
+    // Si cambió el CI, verificar que no colisione con otro hermano activo
+    if (ci && ci.trim() !== (hermano.ci || '').trim()) {
+      const check = await pool.query(`
+        SELECT id, nombres, apellido_paterno FROM reserva_cupo_hermano
+        WHERE ci = $1 AND periodo_academico_id = $2 AND id != $3 AND deleted_at IS NULL
+      `, [ci.trim(), hermano.periodo_academico_id, id]);
+
+      if (check.rows.length > 0) {
+        throw new Error(`Ya existe otro hermano registrado con el CI ${ci.trim()}`);
+      }
+    }
+
+    await pool.query(`
+      UPDATE reserva_cupo_hermano
+      SET 
+        nombres = COALESCE($1, nombres),
+        apellido_paterno = COALESCE($2, apellido_paterno),
+        apellido_materno = COALESCE($3, apellido_materno),
+        ci = COALESCE($4, ci),
+        fecha_nacimiento = COALESCE($5, fecha_nacimiento),
+        genero = COALESCE($6, genero),
+        grado_solicitado_id = COALESCE($7, grado_solicitado_id),
+        turno_solicitado_id = COALESCE($8, turno_solicitado_id),
+        tutor_nombre = COALESCE($9, tutor_nombre),
+        tutor_ci = COALESCE($10, tutor_ci),
+        tutor_parentesco = COALESCE($11, tutor_parentesco),
+        tutor_telefono = COALESCE($12, tutor_telefono),
+        observaciones = COALESCE($13, observaciones),
+        estado = COALESCE($14, estado),
+        updated_at = NOW()
+      WHERE id = $15
+    `, [
+      nombres ? nombres.trim() : null,
+      apellido_paterno ? apellido_paterno.trim() : null,
+      apellido_materno !== undefined ? (apellido_materno ? apellido_materno.trim() : null) : null,
+      ci ? ci.trim() : null,
+      fecha_nacimiento || null,
+      genero || null,
+      grado_solicitado_id ? parseInt(grado_solicitado_id, 10) : null,
+      turno_solicitado_id ? parseInt(turno_solicitado_id, 10) : null,
+      tutor_nombre ? tutor_nombre.trim() : null,
+      tutor_ci ? tutor_ci.trim() : null,
+      tutor_parentesco ? tutor_parentesco.trim() : null,
+      tutor_telefono ? tutor_telefono.trim() : null,
+      observaciones !== undefined ? observaciones : null,
+      estado || null,
+      id
+    ]);
 
     return await this.obtenerPorId(id);
   }
@@ -1052,6 +1382,81 @@ class ReservaCupoHermano {
   }
 
   /**
+   * Actualizar completamente los datos de un hermano postulante (nombres, curso solicitado, turno, tutor, observaciones, estado)
+   */
+  static async actualizar(id, {
+    nombres,
+    apellido_paterno,
+    apellido_materno,
+    ci,
+    fecha_nacimiento,
+    genero,
+    grado_solicitado_id,
+    turno_solicitado_id,
+    tutor_nombre,
+    tutor_ci,
+    tutor_parentesco,
+    tutor_telefono,
+    observaciones,
+    estado
+  } = {}) {
+    const hermano = await this.obtenerPorId(id);
+    if (!hermano) throw new Error('Registro de hermano no encontrado');
+
+    // Si cambió el CI, verificar que no colisione con otro hermano activo
+    if (ci && ci.trim() !== (hermano.ci || '').trim()) {
+      const check = await pool.query(`
+        SELECT id, nombres, apellido_paterno FROM reserva_cupo_hermano
+        WHERE ci = $1 AND periodo_academico_id = $2 AND id != $3 AND deleted_at IS NULL
+      `, [ci.trim(), hermano.periodo_academico_id, id]);
+
+      if (check.rows.length > 0) {
+        throw new Error(`Ya existe otro hermano registrado con el CI ${ci.trim()}`);
+      }
+    }
+
+    await pool.query(`
+      UPDATE reserva_cupo_hermano
+      SET 
+        nombres = COALESCE($1, nombres),
+        apellido_paterno = COALESCE($2, apellido_paterno),
+        apellido_materno = COALESCE($3, apellido_materno),
+        ci = COALESCE($4, ci),
+        fecha_nacimiento = COALESCE($5, fecha_nacimiento),
+        genero = COALESCE($6, genero),
+        grado_solicitado_id = COALESCE($7, grado_solicitado_id),
+        turno_solicitado_id = COALESCE($8, turno_solicitado_id),
+        tutor_nombre = COALESCE($9, tutor_nombre),
+        tutor_ci = COALESCE($10, tutor_ci),
+        tutor_parentesco = COALESCE($11, tutor_parentesco),
+        tutor_telefono = COALESCE($12, tutor_telefono),
+        observaciones = COALESCE($13, observaciones),
+        estado = COALESCE($14, estado),
+        updated_at = NOW()
+      WHERE id = $15
+    `, [
+      nombres ? nombres.trim() : null,
+      apellido_paterno ? apellido_paterno.trim() : null,
+      apellido_materno !== undefined ? (apellido_materno ? apellido_materno.trim() : null) : null,
+      ci ? ci.trim() : null,
+      fecha_nacimiento || null,
+      genero || null,
+      grado_solicitado_id ? parseInt(grado_solicitado_id, 10) : null,
+      turno_solicitado_id ? parseInt(turno_solicitado_id, 10) : null,
+      tutor_nombre ? tutor_nombre.trim() : null,
+      tutor_ci ? tutor_ci.trim() : null,
+      tutor_parentesco ? tutor_parentesco.trim() : null,
+      tutor_telefono ? tutor_telefono.trim() : null,
+      observaciones !== undefined ? observaciones : null,
+      estado || null,
+      id
+    ]);
+
+    return await this.obtenerPorId(id);
+  }
+
+
+  /**
    * Actualizar el estado de la entrevista (realizada, aprobada, no_asistio, pendiente)
    */
   static async actualizarEstadoEntrevista(id, {
@@ -1077,6 +1482,81 @@ class ReservaCupoHermano {
 
     return await this.obtenerPorId(id);
   }
+
+  /**
+   * Actualizar completamente los datos de un hermano postulante (nombres, curso solicitado, turno, tutor, observaciones, estado)
+   */
+  static async actualizar(id, {
+    nombres,
+    apellido_paterno,
+    apellido_materno,
+    ci,
+    fecha_nacimiento,
+    genero,
+    grado_solicitado_id,
+    turno_solicitado_id,
+    tutor_nombre,
+    tutor_ci,
+    tutor_parentesco,
+    tutor_telefono,
+    observaciones,
+    estado
+  } = {}) {
+    const hermano = await this.obtenerPorId(id);
+    if (!hermano) throw new Error('Registro de hermano no encontrado');
+
+    // Si cambió el CI, verificar que no colisione con otro hermano activo
+    if (ci && ci.trim() !== (hermano.ci || '').trim()) {
+      const check = await pool.query(`
+        SELECT id, nombres, apellido_paterno FROM reserva_cupo_hermano
+        WHERE ci = $1 AND periodo_academico_id = $2 AND id != $3 AND deleted_at IS NULL
+      `, [ci.trim(), hermano.periodo_academico_id, id]);
+
+      if (check.rows.length > 0) {
+        throw new Error(`Ya existe otro hermano registrado con el CI ${ci.trim()}`);
+      }
+    }
+
+    await pool.query(`
+      UPDATE reserva_cupo_hermano
+      SET 
+        nombres = COALESCE($1, nombres),
+        apellido_paterno = COALESCE($2, apellido_paterno),
+        apellido_materno = COALESCE($3, apellido_materno),
+        ci = COALESCE($4, ci),
+        fecha_nacimiento = COALESCE($5, fecha_nacimiento),
+        genero = COALESCE($6, genero),
+        grado_solicitado_id = COALESCE($7, grado_solicitado_id),
+        turno_solicitado_id = COALESCE($8, turno_solicitado_id),
+        tutor_nombre = COALESCE($9, tutor_nombre),
+        tutor_ci = COALESCE($10, tutor_ci),
+        tutor_parentesco = COALESCE($11, tutor_parentesco),
+        tutor_telefono = COALESCE($12, tutor_telefono),
+        observaciones = COALESCE($13, observaciones),
+        estado = COALESCE($14, estado),
+        updated_at = NOW()
+      WHERE id = $15
+    `, [
+      nombres ? nombres.trim() : null,
+      apellido_paterno ? apellido_paterno.trim() : null,
+      apellido_materno !== undefined ? (apellido_materno ? apellido_materno.trim() : null) : null,
+      ci ? ci.trim() : null,
+      fecha_nacimiento || null,
+      genero || null,
+      grado_solicitado_id ? parseInt(grado_solicitado_id, 10) : null,
+      turno_solicitado_id ? parseInt(turno_solicitado_id, 10) : null,
+      tutor_nombre ? tutor_nombre.trim() : null,
+      tutor_ci ? tutor_ci.trim() : null,
+      tutor_parentesco ? tutor_parentesco.trim() : null,
+      tutor_telefono ? tutor_telefono.trim() : null,
+      observaciones !== undefined ? observaciones : null,
+      estado || null,
+      id
+    ]);
+
+    return await this.obtenerPorId(id);
+  }
+
 
   /**
    * Marcar la notificación de WhatsApp como enviada

@@ -911,6 +911,89 @@ class ReservaCupo {
   }
 
   /**
+   * Actualizar completamente los datos de una reserva regular (estudiante, curso destino, turno, tutor, observaciones)
+   */
+  static async actualizar(id, {
+    grado_destino_id,
+    turno_destino_id,
+    tutor_nombre,
+    tutor_ci,
+    tutor_parentesco,
+    tutor_telefono,
+    observaciones,
+    estado,
+    estudiante_nombres,
+    estudiante_apellido_paterno,
+    estudiante_apellido_materno,
+    estudiante_ci
+  } = {}) {
+    const reserva = await ReservaCupo.obtenerPorId(id);
+    if (!reserva) {
+      throw new Error('Reserva de cupo no encontrada');
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // 1. Si se enviaron datos del estudiante, actualizar en tabla estudiante
+      if (estudiante_nombres || estudiante_apellido_paterno || estudiante_ci) {
+        await client.query(`
+          UPDATE estudiante
+          SET 
+            nombres = COALESCE($1, nombres),
+            apellido_paterno = COALESCE($2, apellido_paterno),
+            apellido_materno = COALESCE($3, apellido_materno),
+            ci = COALESCE($4, ci),
+            updated_at = NOW()
+          WHERE id = $5
+        `, [
+          estudiante_nombres ? estudiante_nombres.trim() : null,
+          estudiante_apellido_paterno ? estudiante_apellido_paterno.trim() : null,
+          estudiante_apellido_materno !== undefined ? (estudiante_apellido_materno ? estudiante_apellido_materno.trim() : null) : null,
+          estudiante_ci ? estudiante_ci.trim() : null,
+          reserva.estudiante_id
+        ]);
+      }
+
+      // 2. Actualizar los campos de la reserva de cupo
+      await client.query(`
+        UPDATE reserva_cupo
+        SET 
+          grado_destino_id = COALESCE($1, grado_destino_id),
+          turno_destino_id = COALESCE($2, turno_destino_id),
+          tutor_nombre = COALESCE($3, tutor_nombre),
+          tutor_ci = COALESCE($4, tutor_ci),
+          tutor_parentesco = COALESCE($5, tutor_parentesco),
+          tutor_telefono = COALESCE($6, tutor_telefono),
+          observaciones = COALESCE($7, observaciones),
+          estado = COALESCE($8, estado),
+          updated_at = NOW()
+        WHERE id = $9
+      `, [
+        grado_destino_id ? parseInt(grado_destino_id, 10) : null,
+        turno_destino_id ? parseInt(turno_destino_id, 10) : null,
+        tutor_nombre ? tutor_nombre.trim() : null,
+        tutor_ci ? tutor_ci.trim() : null,
+        tutor_parentesco ? tutor_parentesco.trim() : null,
+        tutor_telefono ? tutor_telefono.trim() : null,
+        observaciones !== undefined ? observaciones : null,
+        estado || null,
+        id
+      ]);
+
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    return await ReservaCupo.obtenerPorId(id);
+  }
+
+  /**
    * Estadísticas generales de reservas de cupo para el dashboard administrativo
    */
   static async obtenerEstadisticas(periodoId = null) {
