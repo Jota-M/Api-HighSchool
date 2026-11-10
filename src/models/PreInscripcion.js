@@ -1215,6 +1215,16 @@ class PreInscripcion {
       }
 
       // 6. Actualizar datos de pre_estudiante
+      let generoNorm = undefined;
+      if (estudiante.genero !== undefined) {
+        if (estudiante.genero) {
+          const g = String(estudiante.genero).trim().toLowerCase();
+          generoNorm = g.startsWith('f') ? 'femenino' : 'masculino';
+        } else {
+          generoNorm = null;
+        }
+      }
+
       await client.query(`
         UPDATE pre_estudiante
         SET
@@ -1239,7 +1249,7 @@ class PreInscripcion {
         estudiante.ci !== undefined ? estudiante.ci : null,
         estudiante.rude !== undefined ? estudiante.rude : null,
         estudiante.fecha_nacimiento !== undefined ? estudiante.fecha_nacimiento : null,
-        estudiante.genero !== undefined ? estudiante.genero : null,
+        generoNorm !== undefined ? generoNorm : null,
         estudiante.telefono !== undefined ? estudiante.telefono : null,
         estudiante.email !== undefined ? estudiante.email : null,
         estudiante.direccion !== undefined ? estudiante.direccion : null,
