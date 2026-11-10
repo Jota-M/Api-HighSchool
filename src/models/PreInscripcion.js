@@ -442,6 +442,8 @@ class PreInscripcion {
     let dataQuery = `
       SELECT 
         pi.*,
+        row_to_json(pe.*) as estudiante,
+        row_to_json(pt.*) as tutor,
         pe.nombres || ' ' || pe.apellido_paterno || ' ' || COALESCE(pe.apellido_materno, '') as estudiante_nombre,
         pe.ci as estudiante_ci,
         pe.foto_url as estudiante_foto,
