@@ -76,7 +76,7 @@ class ReportesPreInscripcionController {
   // ==========================================
   static async reporteListado(req, res) {
     try {
-      const { estado, fecha_inicio, fecha_fin, grado, turno, search, formato = 'pdf' } = req.query;
+      const { estado, fecha_inicio, fecha_fin, grado, turno, search, formato = 'pdf', titulo_reporte } = req.query;
 
       let whereConditions = ['pi.deleted_at IS NULL'];
       let params = [];
@@ -136,6 +136,7 @@ class ReportesPreInscripcionController {
           pi.id,
           pi.codigo_inscripcion,
           pi.estado,
+          pi.observaciones,
           pi.created_at as fecha_solicitud,
           TRIM(CONCAT(pe.apellido_paterno, ' ', COALESCE(pe.apellido_materno, ''), ' ', pe.nombres)) as estudiante_nombre,
           pe.apellido_paterno,
@@ -171,6 +172,7 @@ class ReportesPreInscripcionController {
           COUNT(CASE WHEN pi.estado = 'iniciada' THEN 1 END) as iniciadas,
           COUNT(CASE WHEN pi.estado = 'datos_completos' THEN 1 END) as datos_completos,
           COUNT(CASE WHEN pi.estado = 'en_revision' THEN 1 END) as en_revision,
+          COUNT(CASE WHEN pi.estado = 'entrevista_programada' THEN 1 END) as entrevistas_programadas,
           COUNT(CASE WHEN pi.estado = 'aprobada' THEN 1 END) as aprobadas,
           COUNT(CASE WHEN pi.estado = 'rechazada' THEN 1 END) as rechazadas,
           COUNT(CASE WHEN pi.estado = 'convertida' THEN 1 END) as convertidas,
@@ -189,7 +191,8 @@ class ReportesPreInscripcionController {
       const data = {
         preinscripciones,
         stats,
-        filtros: { estado, fecha_inicio, fecha_fin, grado, turno, search }
+        filtros: { estado, fecha_inicio, fecha_fin, grado, turno, search },
+        titulo_reporte
       };
 
       if (formato === 'excel') {
@@ -384,56 +387,141 @@ class ReportesPreInscripcionController {
     pdf.end();
   }
 
+  // Helper para extraer datos de entrevista de observaciones
+  static _extraerInfoEntrevista(obs) {
+    if (!obs) return { fechaHora: 'Por confirmar', modalidad: 'Presencial', lugar: 'Colegio' };
+
+    const fechaHoraMatch = obs.match(/Fecha y Hora:\s*\*?([^\n\r*]+(?:\s+a\s+horas\s+[^\n\r*]+)?)\*?/i);
+    const modalidadMatch = obs.match(/Modalidad:\s*\*?([^\n\r*]+)\*?/i);
+    const lugarMatch = obs.match(/(?:Lugar|Enlace Virtual|📍|Enlace):\s*\*?([^\n\r*]+)\*?/i);
+
+    let fechaHora = fechaHoraMatch ? fechaHoraMatch[1].replace(/\*/g, '').trim() : '';
+    let modalidad = modalidadMatch ? modalidadMatch[1].replace(/\*/g, '').trim() : '';
+    let lugar = lugarMatch ? lugarMatch[1].replace(/\*/g, '').trim() : '';
+
+    if (!fechaHora) {
+      const matchFecha = obs.match(/\b\d{1,2}\/\d{1,2}\/\d{4}\b/);
+      const matchHora = obs.match(/\b\d{1,2}:\d{2}\b/);
+      if (matchFecha && matchHora) {
+        fechaHora = `${matchFecha[0]} a horas ${matchHora[0]}`;
+      } else if (matchFecha) {
+        fechaHora = matchFecha[0];
+      }
+    }
+
+    return {
+      fechaHora: fechaHora || 'Programada',
+      modalidad: modalidad || 'Presencial',
+      lugar: lugar || 'Dirección del Colegio'
+    };
+  }
+
   static async _generarPDFListado(res, data) {
     const pdf = new PDFGenerator({ margin: 50, size: 'letter', landscape: true });
 
+    const esEntrevistas = data.filtros.estado === 'entrevista_programada' || 
+      (data.titulo_reporte && data.titulo_reporte.toLowerCase().includes('entrevista'));
+
+    const filename = esEntrevistas ? 'entrevistas-programadas.pdf' : 'listado-preinscripciones.pdf';
+
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 'attachment; filename=listado-preinscripciones.pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
 
     pdf.pipe(res);
 
     // Encabezado
-    let subtitulo = 'Todas las pre-inscripciones';
+    let subtitulo = esEntrevistas ? 'Postulantes con Entrevistas Programadas' : 'Todas las pre-inscripciones';
     const partes = [];
-    if (data.filtros.estado && data.filtros.estado !== 'todos') partes.push(`Estado: ${data.filtros.estado.toUpperCase()}`);
+    if (!esEntrevistas && data.filtros.estado && data.filtros.estado !== 'todos') {
+      partes.push(`Estado: ${data.filtros.estado.toUpperCase()}`);
+    }
     if (data.filtros.turno && data.filtros.turno !== 'todos') partes.push(`Turno: ${data.filtros.turno.toUpperCase()}`);
     if (data.filtros.grado && data.filtros.grado !== 'todos') partes.push(`Grado: ${data.filtros.grado}`);
     if (partes.length > 0) subtitulo = partes.join(' | ');
-    pdf.drawHeader('LISTADO DE PRE-INSCRIPCIONES', subtitulo);
 
-    // Estadísticas
-    pdf.drawStatsGrid([
-      { label: 'Total', value: data.stats.total },
-      { label: 'Aprobadas', value: data.stats.aprobadas },
-      { label: 'En Revisión', value: data.stats.en_revision },
-      { label: 'Convertidas', value: data.stats.convertidas },
-      { label: 'Masculino', value: data.stats.masculino },
-      { label: 'Femenino', value: data.stats.femenino }
-    ], 6);
+    const mainTitle = data.titulo_reporte 
+      ? data.titulo_reporte.toUpperCase() 
+      : (esEntrevistas ? 'PADRÓN DE POSTULANTES CON ENTREVISTAS PROGRAMADAS' : 'LISTADO DE PRE-INSCRIPCIONES');
 
-    // Tabla de preinscripciones
-    pdf.drawSection('DETALLE DE PRE-INSCRIPCIONES');
-    
-    const rows = data.preinscripciones.map(p => [
-      p.codigo_inscripcion,
-      p.estudiante_nombre,
-      p.estudiante_ci || 'N/A',
-      p.grado_solicitado || 'N/A',
-      p.turno_solicitado || 'N/A',
-      p.tutor_nombre,
-      formatearTelefono(p.tutor_telefono),
-      p.estado,
-      formatearFecha(p.fecha_solicitud, 'corto')
-    ]);
+    pdf.drawHeader(mainTitle, subtitulo);
 
-    pdf.drawTable(
-      ['Código', 'Estudiante', 'CI', 'Grado', 'Turno', 'Tutor', 'Teléfono', 'Estado', 'Fecha'],
-      rows,
-      { 
-        columnWidths: [75, 120, 65, 60, 60, 100, 75, 75, 60],
-        rowHeight: 20
-      }
-    );
+    if (esEntrevistas) {
+      const totalEntrevistas = data.preinscripciones.length;
+      const presenciales = data.preinscripciones.filter(p => !p.observaciones || !p.observaciones.toLowerCase().includes('virtual')).length;
+      const virtuales = totalEntrevistas - presenciales;
+
+      pdf.drawStatsGrid([
+        { label: 'Total Entrevistas', value: totalEntrevistas },
+        { label: 'Presenciales', value: presenciales },
+        { label: 'Virtuales', value: virtuales },
+        { label: 'Varones', value: data.stats?.masculino || 0 },
+        { label: 'Mujeres', value: data.stats?.femenino || 0 }
+      ], 5);
+
+      pdf.drawSection('CRONOGRAMA DE ENTREVISTAS PROGRAMADAS');
+
+      const rows = data.preinscripciones.map(p => {
+        const ent = ReportesPreInscripcionController._extraerInfoEntrevista(p.observaciones);
+        const contacto = p.tutor_nombre 
+          ? `${p.tutor_nombre}\nTel: ${formatearTelefono(p.tutor_telefono)}`
+          : formatearTelefono(p.tutor_telefono);
+        const cita = `${ent.fechaHora}\n(${ent.modalidad})`;
+
+        return [
+          p.codigo_inscripcion,
+          p.estudiante_nombre,
+          p.estudiante_ci || 'S/CI',
+          p.grado_solicitado || 'N/A',
+          p.turno_solicitado || 'N/A',
+          contacto,
+          cita,
+          ent.lugar
+        ];
+      });
+
+      pdf.drawTable(
+        ['Código', 'Estudiante', 'CI', 'Grado', 'Turno', 'Tutor y Contacto', 'Cita Programada', 'Lugar / Enlace'],
+        rows,
+        { 
+          columnWidths: [70, 120, 60, 85, 55, 120, 95, 97],
+          rowHeight: 22
+        }
+      );
+    } else {
+      // Estadísticas
+      pdf.drawStatsGrid([
+        { label: 'Total', value: data.stats.total },
+        { label: 'Aprobadas', value: data.stats.aprobadas },
+        { label: 'En Revisión', value: data.stats.en_revision },
+        { label: 'Convertidas', value: data.stats.convertidas },
+        { label: 'Masculino', value: data.stats.masculino },
+        { label: 'Femenino', value: data.stats.femenino }
+      ], 6);
+
+      // Tabla de preinscripciones
+      pdf.drawSection('DETALLE DE PRE-INSCRIPCIONES');
+      
+      const rows = data.preinscripciones.map(p => [
+        p.codigo_inscripcion,
+        p.estudiante_nombre,
+        p.estudiante_ci || 'N/A',
+        p.grado_solicitado || 'N/A',
+        p.turno_solicitado || 'N/A',
+        p.tutor_nombre,
+        formatearTelefono(p.tutor_telefono),
+        p.estado,
+        formatearFecha(p.fecha_solicitud, 'corto')
+      ]);
+
+      pdf.drawTable(
+        ['Código', 'Estudiante', 'CI', 'Grado', 'Turno', 'Tutor', 'Teléfono', 'Estado', 'Fecha'],
+        rows,
+        { 
+          columnWidths: [75, 120, 65, 60, 60, 100, 75, 75, 60],
+          rowHeight: 20
+        }
+      );
+    }
 
     pdf.end();
   }
@@ -546,46 +634,94 @@ class ReportesPreInscripcionController {
     const excel = new ExcelGenerator();
     const ws = excel.createSheet('Listado');
 
-    let subtitulo = '';
+    const esEntrevistas = data.filtros.estado === 'entrevista_programada' || 
+      (data.titulo_reporte && data.titulo_reporte.toLowerCase().includes('entrevista'));
+
+    let subtitulo = esEntrevistas ? 'Postulantes con Entrevistas Programadas' : '';
     const partes = [];
-    if (data.filtros.estado && data.filtros.estado !== 'todos') partes.push(`Estado: ${data.filtros.estado.toUpperCase()}`);
+    if (!esEntrevistas && data.filtros.estado && data.filtros.estado !== 'todos') {
+      partes.push(`Estado: ${data.filtros.estado.toUpperCase()}`);
+    }
     if (data.filtros.turno && data.filtros.turno !== 'todos') partes.push(`Turno: ${data.filtros.turno.toUpperCase()}`);
     if (data.filtros.grado && data.filtros.grado !== 'todos') partes.push(`Grado: ${data.filtros.grado}`);
     if (partes.length > 0) subtitulo = `Filtros: ${partes.join(' | ')}`;
 
-    excel.addTitle(ws, 'LISTADO DE PRE-INSCRIPCIONES', subtitulo);
+    const mainTitle = data.titulo_reporte 
+      ? data.titulo_reporte.toUpperCase() 
+      : (esEntrevistas ? 'PADRÓN DE POSTULANTES CON ENTREVISTAS PROGRAMADAS' : 'LISTADO DE PRE-INSCRIPCIONES');
 
-    // Estadísticas
-    excel.addStats(ws, [
-      { label: 'Total', value: data.stats.total },
-      { label: 'Aprobadas', value: data.stats.aprobadas },
-      { label: 'En Revisión', value: data.stats.en_revision },
-      { label: 'Convertidas', value: data.stats.convertidas }
-    ], 2);
+    excel.addTitle(ws, mainTitle, subtitulo);
 
-    // Tabla principal
-    const rows = data.preinscripciones.map(p => [
-      p.codigo_inscripcion,
-      p.estudiante_nombre,
-      p.estudiante_ci || 'N/A',
-      p.grado_solicitado || 'N/A',
-      p.turno_solicitado || 'N/A',
-      p.tutor_nombre,
-      p.tutor_telefono,
-      p.estado,
-      formatearFecha(p.fecha_solicitud, 'corto')
-    ]);
+    if (esEntrevistas) {
+      const totalEntrevistas = data.preinscripciones.length;
+      const presenciales = data.preinscripciones.filter(p => !p.observaciones || !p.observaciones.toLowerCase().includes('virtual')).length;
+      const virtuales = totalEntrevistas - presenciales;
 
-    excel.addTable(ws,
-      ['Código', 'Estudiante', 'CI', 'Grado', 'Turno', 'Tutor', 'Teléfono', 'Estado', 'Fecha'],
-      rows,
-      { sectionTitle: 'DETALLE', columnWidths: [15, 30, 12, 15, 15, 25, 15, 15, 12] }
-    );
+      excel.addStats(ws, [
+        { label: 'Total Entrevistas', value: totalEntrevistas },
+        { label: 'Presenciales', value: presenciales },
+        { label: 'Virtuales', value: virtuales },
+        { label: 'Varones', value: data.stats?.masculino || 0 },
+        { label: 'Mujeres', value: data.stats?.femenino || 0 }
+      ], 2);
+
+      const rows = data.preinscripciones.map(p => {
+        const ent = ReportesPreInscripcionController._extraerInfoEntrevista(p.observaciones);
+        return [
+          p.codigo_inscripcion,
+          p.estudiante_nombre,
+          p.estudiante_ci || 'N/A',
+          p.grado_solicitado || 'N/A',
+          p.turno_solicitado || 'N/A',
+          p.tutor_nombre,
+          p.tutor_telefono || 'N/A',
+          ent.fechaHora,
+          ent.modalidad,
+          ent.lugar,
+          p.observaciones || ''
+        ];
+      });
+
+      excel.addTable(ws,
+        ['Código', 'Estudiante', 'CI', 'Grado', 'Turno', 'Tutor', 'Teléfono Tutor', 'Fecha/Hora Entrevista', 'Modalidad', 'Lugar / Enlace', 'Observaciones'],
+        rows,
+        { sectionTitle: 'CRONOGRAMA DE ENTREVISTAS', columnWidths: [15, 30, 12, 18, 12, 25, 16, 22, 14, 28, 35] }
+      );
+    } else {
+      // Estadísticas
+      excel.addStats(ws, [
+        { label: 'Total', value: data.stats.total },
+        { label: 'Aprobadas', value: data.stats.aprobadas },
+        { label: 'En Revisión', value: data.stats.en_revision },
+        { label: 'Convertidas', value: data.stats.convertidas }
+      ], 2);
+
+      // Tabla principal
+      const rows = data.preinscripciones.map(p => [
+        p.codigo_inscripcion,
+        p.estudiante_nombre,
+        p.estudiante_ci || 'N/A',
+        p.grado_solicitado || 'N/A',
+        p.turno_solicitado || 'N/A',
+        p.tutor_nombre,
+        p.tutor_telefono,
+        p.estado,
+        formatearFecha(p.fecha_solicitud, 'corto')
+      ]);
+
+      excel.addTable(ws,
+        ['Código', 'Estudiante', 'CI', 'Grado', 'Turno', 'Tutor', 'Teléfono', 'Estado', 'Fecha'],
+        rows,
+        { sectionTitle: 'DETALLE', columnWidths: [15, 30, 12, 15, 15, 25, 15, 15, 12] }
+      );
+    }
 
     excel.addFooter(ws);
 
+    const filename = esEntrevistas ? 'entrevistas-programadas.xlsx' : 'listado-preinscripciones.xlsx';
+
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', 'attachment; filename=listado-preinscripciones.xlsx');
+    res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
 
     await excel.write(res);
     res.end();
