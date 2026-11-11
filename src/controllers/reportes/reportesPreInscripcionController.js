@@ -163,7 +163,29 @@ class ReportesPreInscripcionController {
         ORDER BY pe.apellido_paterno ASC, pe.apellido_materno ASC, pe.nombres ASC, pi.created_at DESC
       `, params);
 
-      const preinscripciones = query.rows;
+      let preinscripciones = query.rows;
+
+      // Si es reporte de entrevistas, ordenar por fecha y hora de la entrevista (de la más reciente/próxima a la última)
+      const esReporteEntrevistas = estado === 'entrevista_programada' || 
+        (titulo_reporte && titulo_reporte.toLowerCase().includes('entrevista'));
+
+      if (esReporteEntrevistas) {
+        preinscripciones.sort((a, b) => {
+          const entA = ReportesPreInscripcionController._extraerInfoEntrevista(a.observaciones, a.fecha_solicitud);
+          const entB = ReportesPreInscripcionController._extraerInfoEntrevista(b.observaciones, b.fecha_solicitud);
+
+          if (entA.timestamp && entB.timestamp) {
+            if (entA.timestamp !== entB.timestamp) {
+              return entA.timestamp - entB.timestamp;
+            }
+          } else if (entA.timestamp && !entB.timestamp) {
+            return -1;
+          } else if (!entA.timestamp && entB.timestamp) {
+            return 1;
+          }
+          return (a.estudiante_nombre || '').localeCompare(b.estudiante_nombre || '');
+        });
+      }
 
       // Estadísticas
       const statsQuery = await pool.query(`
@@ -387,32 +409,81 @@ class ReportesPreInscripcionController {
     pdf.end();
   }
 
-  // Helper para extraer datos de entrevista de observaciones
-  static _extraerInfoEntrevista(obs) {
-    if (!obs) return { fechaHora: 'Por confirmar', modalidad: 'Presencial', lugar: 'Colegio' };
+  // Helper para extraer datos de entrevista de observaciones y calcular timestamp para ordenamiento
+  static _extraerInfoEntrevista(obs, fechaFallback) {
+    if (!obs) {
+      const fbDate = fechaFallback ? new Date(fechaFallback) : null;
+      return {
+        fecha: fbDate && !isNaN(fbDate.getTime()) ? formatearFecha(fbDate, 'corto') : 'Por agendar',
+        hora: fbDate && !isNaN(fbDate.getTime()) ? fbDate.toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' }) : '—',
+        modalidad: 'Presencial',
+        lugar: 'Dirección del Colegio',
+        timestamp: fbDate && !isNaN(fbDate.getTime()) ? fbDate.getTime() : 0
+      };
+    }
 
-    const fechaHoraMatch = obs.match(/Fecha y Hora:\s*\*?([^\n\r*]+(?:\s+a\s+horas\s+[^\n\r*]+)?)\*?/i);
+    // 1. Extraer Fecha (DD/MM/YYYY o YYYY-MM-DD)
+    let dia = null, mes = null, anio = null, fechaStr = '';
+    const ddmmyyyyMatch = obs.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/);
+    if (ddmmyyyyMatch) {
+      dia = parseInt(ddmmyyyyMatch[1], 10);
+      mes = parseInt(ddmmyyyyMatch[2], 10);
+      anio = parseInt(ddmmyyyyMatch[3], 10);
+      fechaStr = `${String(dia).padStart(2, '0')}/${String(mes).padStart(2, '0')}/${anio}`;
+    } else {
+      const yyyymmddMatch = obs.match(/\b(\d{4})-(\d{1,2})-(\d{1,2})\b/);
+      if (yyyymmddMatch) {
+        anio = parseInt(yyyymmddMatch[1], 10);
+        mes = parseInt(yyyymmddMatch[2], 10);
+        dia = parseInt(yyyymmddMatch[3], 10);
+        fechaStr = `${String(dia).padStart(2, '0')}/${String(mes).padStart(2, '0')}/${anio}`;
+      }
+    }
+
+    // 2. Extraer Hora (HH:mm)
+    let horaNum = 0, minNum = 0, horaStr = '';
+    const horaMatch = obs.match(/(?:horas\s*\*?|a\s+horas\s*\*?|\b)(\d{1,2}):(\d{2})(?:\s*(?:am|pm|AM|PM))?\b/i);
+    if (horaMatch) {
+      horaNum = parseInt(horaMatch[1], 10);
+      minNum = parseInt(horaMatch[2], 10);
+      const matchedText = horaMatch[0].toLowerCase();
+      if (matchedText.includes('pm') && horaNum < 12) horaNum += 12;
+      if (matchedText.includes('am') && horaNum === 12) horaNum = 0;
+      horaStr = `${String(horaNum).padStart(2, '0')}:${String(minNum).padStart(2, '0')}`;
+    }
+
+    // 3. Extraer Modalidad y Lugar
     const modalidadMatch = obs.match(/Modalidad:\s*\*?([^\n\r*]+)\*?/i);
     const lugarMatch = obs.match(/(?:Lugar|Enlace Virtual|📍|Enlace):\s*\*?([^\n\r*]+)\*?/i);
 
-    let fechaHora = fechaHoraMatch ? fechaHoraMatch[1].replace(/\*/g, '').trim() : '';
     let modalidad = modalidadMatch ? modalidadMatch[1].replace(/\*/g, '').trim() : '';
     let lugar = lugarMatch ? lugarMatch[1].replace(/\*/g, '').trim() : '';
 
-    if (!fechaHora) {
-      const matchFecha = obs.match(/\b\d{1,2}\/\d{1,2}\/\d{4}\b/);
-      const matchHora = obs.match(/\b\d{1,2}:\d{2}\b/);
-      if (matchFecha && matchHora) {
-        fechaHora = `${matchFecha[0]} a horas ${matchHora[0]}`;
-      } else if (matchFecha) {
-        fechaHora = matchFecha[0];
+    if (!modalidad) {
+      modalidad = obs.toLowerCase().includes('virtual') ? 'Virtual' : 'Presencial';
+    }
+    if (!lugar) {
+      lugar = modalidad.toLowerCase() === 'virtual' ? 'Enlace Virtual Meet' : 'Dirección del Colegio - Oficina Principal';
+    }
+
+    // 4. Calcular Timestamp exacto para ordenación
+    let timestamp = 0;
+    if (anio && mes && dia) {
+      timestamp = new Date(anio, mes - 1, dia, horaNum, minNum, 0).getTime();
+    } else if (fechaFallback) {
+      const fb = new Date(fechaFallback);
+      timestamp = isNaN(fb.getTime()) ? 0 : fb.getTime();
+      if (!fechaStr && !isNaN(fb.getTime())) {
+        fechaStr = formatearFecha(fb, 'corto');
       }
     }
 
     return {
-      fechaHora: fechaHora || 'Programada',
+      fecha: fechaStr || 'Por confirmar',
+      hora: horaStr || 'Por confirmar',
       modalidad: modalidad || 'Presencial',
-      lugar: lugar || 'Dirección del Colegio'
+      lugar: lugar || 'Dirección del Colegio',
+      timestamp
     };
   }
 
@@ -430,7 +501,7 @@ class ReportesPreInscripcionController {
     pdf.pipe(res);
 
     // Encabezado
-    let subtitulo = esEntrevistas ? 'Postulantes con Entrevistas Programadas' : 'Todas las pre-inscripciones';
+    let subtitulo = esEntrevistas ? 'Cronograma Oficial de Entrevistas Programadas' : 'Todas las pre-inscripciones';
     const partes = [];
     if (!esEntrevistas && data.filtros.estado && data.filtros.estado !== 'todos') {
       partes.push(`Estado: ${data.filtros.estado.toUpperCase()}`);
@@ -458,32 +529,34 @@ class ReportesPreInscripcionController {
         { label: 'Mujeres', value: data.stats?.femenino || 0 }
       ], 5);
 
-      pdf.drawSection('CRONOGRAMA DE ENTREVISTAS PROGRAMADAS');
+      pdf.drawSection('CRONOGRAMA DE ENTREVISTAS (ORDENADO POR HORA Y FECHA)');
 
-      const rows = data.preinscripciones.map(p => {
-        const ent = ReportesPreInscripcionController._extraerInfoEntrevista(p.observaciones);
+      const rows = data.preinscripciones.map((p, idx) => {
+        const ent = ReportesPreInscripcionController._extraerInfoEntrevista(p.observaciones, p.fecha_solicitud);
         const contacto = p.tutor_nombre 
           ? `${p.tutor_nombre}\nTel: ${formatearTelefono(p.tutor_telefono)}`
           : formatearTelefono(p.tutor_telefono);
-        const cita = `${ent.fechaHora}\n(${ent.modalidad})`;
+        const cursoTurno = `${p.grado_solicitado || 'N/A'}\nTurno: ${p.turno_solicitado || 'N/A'}`;
+        const modLugar = `${ent.modalidad}\n${ent.lugar}`;
+        const estudianteDoc = p.estudiante_ci ? `${p.estudiante_nombre}\nCI: ${p.estudiante_ci}` : p.estudiante_nombre;
 
         return [
+          idx + 1,
+          ent.hora,
+          ent.fecha,
           p.codigo_inscripcion,
-          p.estudiante_nombre,
-          p.estudiante_ci || 'S/CI',
-          p.grado_solicitado || 'N/A',
-          p.turno_solicitado || 'N/A',
+          estudianteDoc,
+          cursoTurno,
           contacto,
-          cita,
-          ent.lugar
+          modLugar
         ];
       });
 
       pdf.drawTable(
-        ['Código', 'Estudiante', 'CI', 'Grado', 'Turno', 'Tutor y Contacto', 'Cita Programada', 'Lugar / Enlace'],
+        ['#', 'Hora', 'Fecha', 'Código', 'Estudiante', 'Curso / Turno', 'Tutor y Teléfono', 'Modalidad / Lugar'],
         rows,
         { 
-          columnWidths: [70, 120, 60, 85, 55, 120, 95, 97],
+          columnWidths: [22, 52, 63, 68, 137, 105, 125, 130],
           rowHeight: 22
         }
       );
@@ -665,17 +738,19 @@ class ReportesPreInscripcionController {
         { label: 'Mujeres', value: data.stats?.femenino || 0 }
       ], 2);
 
-      const rows = data.preinscripciones.map(p => {
-        const ent = ReportesPreInscripcionController._extraerInfoEntrevista(p.observaciones);
+      const rows = data.preinscripciones.map((p, idx) => {
+        const ent = ReportesPreInscripcionController._extraerInfoEntrevista(p.observaciones, p.fecha_solicitud);
         return [
+          idx + 1,
+          ent.hora,
+          ent.fecha,
           p.codigo_inscripcion,
           p.estudiante_nombre,
           p.estudiante_ci || 'N/A',
           p.grado_solicitado || 'N/A',
           p.turno_solicitado || 'N/A',
-          p.tutor_nombre,
+          p.tutor_nombre || 'N/A',
           p.tutor_telefono || 'N/A',
-          ent.fechaHora,
           ent.modalidad,
           ent.lugar,
           p.observaciones || ''
@@ -683,9 +758,9 @@ class ReportesPreInscripcionController {
       });
 
       excel.addTable(ws,
-        ['Código', 'Estudiante', 'CI', 'Grado', 'Turno', 'Tutor', 'Teléfono Tutor', 'Fecha/Hora Entrevista', 'Modalidad', 'Lugar / Enlace', 'Observaciones'],
+        ['#', 'Hora Cita', 'Fecha Cita', 'Código', 'Estudiante', 'CI Estudiante', 'Grado Solicitado', 'Turno', 'Tutor', 'Teléfono Tutor', 'Modalidad', 'Lugar / Enlace', 'Observaciones'],
         rows,
-        { sectionTitle: 'CRONOGRAMA DE ENTREVISTAS', columnWidths: [15, 30, 12, 18, 12, 25, 16, 22, 14, 28, 35] }
+        { sectionTitle: 'CRONOGRAMA DE ENTREVISTAS (ORDENADO POR HORA Y FECHA)', columnWidths: [6, 12, 14, 16, 32, 14, 20, 14, 26, 16, 14, 30, 35] }
       );
     } else {
       // Estadísticas
