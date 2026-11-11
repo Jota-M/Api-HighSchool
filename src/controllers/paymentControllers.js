@@ -4,6 +4,7 @@ import ActividadLog from '../models/actividadLog.js';
 import RequestInfo from '../utils/requestInfo.js';
 import { pool } from '../db/pool.js';
 import { randomUUID } from 'crypto';
+import whatsappService from '../utils/whatsappService.js';
 
 // =============================================
 // CONTROLADOR: CostoMensualidadController
@@ -1071,7 +1072,7 @@ class ReportesPagosController {
 
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
-      // 🔧 QUERY CORREGIDA: Calcular días de mora directamente
+      // 🔧 QUERY CORREGIDA: Calcular días de mora y obtener tutor con contacto
       const query = `
         SELECT 
           e.id as estudiante_id,
@@ -1080,6 +1081,7 @@ class ReportesPagosController {
           e.apellidos,
           g.nombre as grado,
           p.nombre as paralelo,
+          m.id as mensualidad_id,
           m.numero_cuota,
           m.mes_correspondiente,
           m.fecha_vencimiento,
@@ -1095,13 +1097,35 @@ class ReportesPagosController {
             FROM pago_mensualidad pm
             WHERE pm.mensualidad_id = m.id
               AND NOT pm.anulado
-          ), 0)) as saldo_pendiente
+          ), 0)) as saldo_pendiente,
+
+          -- Datos del Tutor Principal
+          tutor.id as tutor_id,
+          tutor.tutor_nombre,
+          tutor.celular as tutor_celular,
+          tutor.telefono as tutor_telefono,
+          tutor.ci as tutor_ci,
+          tutor.parentesco as tutor_parentesco
           
         FROM mensualidad m
         INNER JOIN matricula mat ON m.matricula_id = mat.id
         INNER JOIN estudiante e ON mat.estudiante_id = e.id
         INNER JOIN paralelo p ON mat.paralelo_id = p.id
         INNER JOIN grado g ON p.grado_id = g.id
+        LEFT JOIN LATERAL (
+          SELECT 
+            pf.id, 
+            (pf.nombres || ' ' || pf.apellido_paterno || ' ' || COALESCE(pf.apellido_materno, '')) as tutor_nombre,
+            pf.celular, 
+            pf.telefono, 
+            pf.ci, 
+            pf.parentesco
+          FROM estudiante_tutor et
+          JOIN padre_familia pf ON et.padre_familia_id = pf.id AND pf.deleted_at IS NULL
+          WHERE et.estudiante_id = e.id
+          ORDER BY (CASE WHEN et.es_tutor_principal THEN 1 ELSE 2 END), et.prioridad_contacto ASC NULLS LAST, pf.id ASC
+          LIMIT 1
+        ) tutor ON true
         ${whereClause}
         ORDER BY dias_mora DESC, e.apellidos ASC
       `;
@@ -1133,6 +1157,36 @@ class ReportesPagosController {
         success: false,
         message: 'Error al obtener lista de morosos: ' + error.message
       });
+    }
+  }
+
+  // POST /api/reportes-pagos/notificar-whatsapp - Enviar recordatorio de mora por WhatsApp
+  static async notificarWhatsApp(req, res) {
+    try {
+      const { telefono, mensaje } = req.body;
+      if (!telefono || !mensaje) {
+        return res.status(400).json({ success: false, message: 'Se requiere teléfono y mensaje' });
+      }
+
+      const result = await whatsappService.enviarMensaje({
+        to: telefono,
+        body: mensaje
+      });
+
+      if (!result.success) {
+        return res.status(500).json({
+          success: false,
+          message: result.error || 'No se pudo enviar el mensaje por WhatsApp'
+        });
+      }
+
+      res.json({
+        success: true,
+        message: 'Recordatorio enviado exitosamente por WhatsApp'
+      });
+    } catch (error) {
+      console.error('Error al notificar por WhatsApp:', error);
+      res.status(500).json({ success: false, message: error.message });
     }
   }
 
@@ -1455,7 +1509,8 @@ class PagoMultipleController {
         numero_referencia,
         entrego_factura,
         numero_factura,
-        observaciones
+        observaciones,
+        fecha_pago
       } = req.body;
 
       // Validaciones
@@ -1561,7 +1616,8 @@ class PagoMultipleController {
           numero_factura,
           registrado_por: req.user.id,
           observaciones: observaciones || `Pago múltiple - ${mensualidades.length} mensualidades`,
-          transaccion_id: transaccionIdLote
+          transaccion_id: transaccionIdLote,
+          fecha_pago: fecha_pago || undefined
         });
 
         pagosRegistrados.push({

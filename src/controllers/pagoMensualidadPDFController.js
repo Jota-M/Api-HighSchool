@@ -8,6 +8,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import { pool } from '../db/pool.js';
+import whatsappService from '../utils/whatsappService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -300,6 +301,105 @@ class PagoMensualidadPDFController {
           message: 'Error al generar PDF: ' + error.message
         });
       }
+    }
+  }
+
+  /**
+   * Genera el buffer en memoria del PDF para envíos por WhatsApp u otros medios
+   */
+  static async generarBufferPDFMultiple(pago_ids, nombre_entrega, ci_entrega, quien_recibe) {
+    const pagosPromises = pago_ids.map(id => PagoMensualidad.findById(id));
+    const pagos = await Promise.all(pagosPromises);
+    const pagosValidos = pagos.filter(p => p !== null && p !== undefined);
+
+    if (pagosValidos.length === 0) {
+      throw new Error('No se encontraron pagos válidos');
+    }
+
+    const datosEntrega = {
+      nombre: nombre_entrega || 'Sin especificar',
+      ci: ci_entrega || 'N/A'
+    };
+
+    const personasQueReciben = {
+      patricia: { nombre: 'Patricia Ramírez Villca', ci: '5070770' },
+      oswaldo: { nombre: 'Oswaldo Esteban Bohorquez Velasco', ci: '5071886' }
+    };
+
+    const datosRecibe = personasQueReciben[quien_recibe] || personasQueReciben.patricia;
+
+    return new Promise((resolve, reject) => {
+      const doc = new PDFDocument({
+        size: 'LETTER',
+        margins: { top: 30, bottom: 30, left: 40, right: 40 }
+      });
+
+      const chunks = [];
+      doc.on('data', chunk => chunks.push(chunk));
+      doc.on('end', () => resolve({ buffer: Buffer.concat(chunks), pagos: pagosValidos }));
+      doc.on('error', err => reject(err));
+
+      PagoMensualidadPDFController.generatePDFContent(
+        doc,
+        pagosValidos,
+        datosEntrega,
+        datosRecibe
+      ).then(() => {
+        doc.end();
+      }).catch(reject);
+    });
+  }
+
+  /**
+   * Envía el comprobante oficial en formato PDF adjunto vía WhatsApp
+   * POST /api/pago-mensualidad/enviar-whatsapp
+   */
+  static async enviarPDFWhatsApp(req, res) {
+    try {
+      const { pago_ids, telefono, nombre_entrega, ci_entrega, quien_recibe } = req.body;
+
+      if (!pago_ids || !Array.isArray(pago_ids) || pago_ids.length === 0) {
+        return res.status(400).json({ success: false, message: 'Se requiere al menos un ID de pago' });
+      }
+
+      if (!telefono) {
+        return res.status(400).json({ success: false, message: 'El número de teléfono / WhatsApp es requerido' });
+      }
+
+      const { buffer, pagos } = await PagoMensualidadPDFController.generarBufferPDFMultiple(
+        pago_ids,
+        nombre_entrega,
+        ci_entrega,
+        quien_recibe
+      );
+
+      const base64Pdf = buffer.toString('base64');
+      const primerPago = pagos[0];
+      const fileName = `Recibo_${primerPago.codigo_pago}.pdf`;
+      const nombreEst = primerPago.estudiante || `${primerPago.nombres || ''} ${primerPago.apellidos || ''}`.trim() || nombre_entrega || 'Estudiante';
+      const caption = `📄 Recibo Oficial de Mensualidad - ${nombreEst} (U.E.P. La Voz de Cristo)`;
+
+      const resultado = await whatsappService.enviarDocumento({
+        to: telefono,
+        documentUrlOrBase64: base64Pdf,
+        fileName,
+        caption
+      });
+
+      if (!resultado.success) {
+        return res.status(500).json({
+          success: false,
+          message: resultado.error || 'No se pudo enviar el documento PDF por WhatsApp'
+        });
+      }
+
+      res.json({
+        success: true,
+        message: `Comprobante PDF enviado exitosamente a WhatsApp (${telefono})`
+      });
+    } catch (error) {
+      console.error('Error al enviar PDF por WhatsApp:', error);
+      res.status(500).json({ success: false, message: error.message });
     }
   }
 
@@ -1073,4 +1173,5 @@ class PagoMensualidadPDFController {
   }
 }
 
+export { PagoMensualidadPDFController };
 export default PagoMensualidadPDFController;

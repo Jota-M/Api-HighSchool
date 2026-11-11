@@ -1222,4 +1222,6 @@ class WhatsAppService {
     }
 }
 
-export default new WhatsAppService();
+const whatsappService = new WhatsAppService();
+export { whatsappService };
+export default whatsappService;

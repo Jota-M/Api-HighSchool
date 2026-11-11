@@ -481,18 +481,27 @@ class PagoMensualidad {
       numero_referencia,
       registrado_por,
       observaciones,
-      transaccion_id // opcional: id de lote para agrupar pagos de una misma operación
+      transaccion_id, // opcional: id de lote para agrupar pagos de una misma operación
+      fecha_pago
     } = data;
 
     const codigo_pago = await this.generarCodigoPago();
+
+    // Si se envía una fecha personalizada (ej: pagos históricos de migración), usarla.
+    // Si no se envía o está vacía, se usa la fecha actual.
+    const fechaPagoFinal = fecha_pago
+      ? (typeof fecha_pago === 'string' && fecha_pago.length === 10
+          ? new Date(`${fecha_pago}T12:00:00`)
+          : new Date(fecha_pago))
+      : new Date();
 
     const query = `
       INSERT INTO pago_mensualidad (
         codigo_pago, mensualidad_id, monto_pagado, metodo_pago,
         numero_comprobante, comprobante_url, entrego_factura, numero_factura,
         banco_origen, numero_referencia, registrado_por, observaciones,
-        transaccion_id
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        transaccion_id, fecha_pago
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       RETURNING *
     `;
 
@@ -509,7 +518,8 @@ class PagoMensualidad {
       numero_referencia,
       registrado_por,
       observaciones,
-      transaccion_id ?? null
+      transaccion_id ?? null,
+      fechaPagoFinal
     ]);
 
     return result.rows[0];

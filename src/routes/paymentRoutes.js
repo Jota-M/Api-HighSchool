@@ -239,6 +239,14 @@ router.get(
   ReportesPagosController.morosos
 );
 
+// POST /api/reportes-pagos/notificar-whatsapp - Enviar recordatorio de mora por WhatsApp
+router.post(
+  '/reportes-pagos/notificar-whatsapp',
+  authenticate,
+  authorize('pago_mensualidad.leer'),
+  ReportesPagosController.notificarWhatsApp
+);
+
 // GET /api/reportes-pagos/resumen - Resumen general
 router.get(
   '/reportes-pagos/resumen',
@@ -302,6 +310,14 @@ router.post(
   PagoMensualidadPDFController.generarPDFMultiple
 );
 router.post('/pago-mensualidad/pdf-directo', PagoMensualidadPDFController.generarPDFDirecto);
+
+// POST /api/pago-mensualidad/enviar-whatsapp - Enviar recibo PDF vía WhatsApp
+router.post(
+  '/pago-mensualidad/enviar-whatsapp',
+  authenticate,
+  authorize('pago_mensualidad.leer'),
+  PagoMensualidadPDFController.enviarPDFWhatsApp
+);
 // GET /api/reportes-pagos/exportar/estado-cuenta
 // ?periodo_academico_id=X&formato=pdf|excel&grado_id=Y&paralelo_id=Z
 router.get(
