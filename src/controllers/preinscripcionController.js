@@ -660,13 +660,14 @@ class PreInscripcionController {
         estado,
         req.user?.id,
         observaciones,
-        client
+        client,
+        notificarWhatsapp
       );
 
       await client.query('COMMIT');
 
       // Notificar cambio de estado si no se deshabilitó explícitamente
-      if (notificarWhatsapp !== false && notificarWhatsapp !== 'false') {
+      if (notificarWhatsapp !== false && notificarWhatsapp !== 'false' && notificarWhatsapp !== 0 && notificarWhatsapp !== '0') {
         setImmediate(async () => {
           try {
             const preinscripcionCompleta = await PreInscripcion.obtenerPorId(id);

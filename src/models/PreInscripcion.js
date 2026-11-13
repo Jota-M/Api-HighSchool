@@ -920,7 +920,7 @@ class PreInscripcion {
   // =============================================
   // CAMBIAR ESTADO
   // =============================================
-  static async cambiarEstado(id, nuevoEstado, usuarioId, observaciones = null, externalClient = null) {
+  static async cambiarEstado(id, nuevoEstado, usuarioId, observaciones = null, externalClient = null, notificarWhatsapp = true) {
     const client = externalClient || await pool.connect();
     const shouldManageTransaction = !externalClient;
 
@@ -992,8 +992,8 @@ class PreInscripcion {
         await client.query('COMMIT');
       }
 
-      // Enviar email asíncronamente
-      if (shouldManageTransaction) {
+      // Enviar WhatsApp asíncronamente solo si no se deshabilitó explícitamente
+      if (shouldManageTransaction && notificarWhatsapp !== false && notificarWhatsapp !== 'false' && notificarWhatsapp !== 0 && notificarWhatsapp !== '0') {
         setImmediate(async () => {
           try {
             const preinscripcionCompleta = await this.obtenerPorId(id);
