@@ -1,5 +1,6 @@
 // models/CupoPreinscripcion.js
 import { pool } from '../db/pool.js';
+import ReservaCupo from './ReservaCupo.js';
 
 class CupoPreinscripcion {
   
@@ -144,19 +145,28 @@ class CupoPreinscripcion {
     `;
     
     const result = await pool.query(dataQuery, [...params, limit, offset]);
+    const mapaRegulares = await ReservaCupo.obtenerMapaRegularesProtegidos({
+      periodoDestinoId: periodo_academico_id || null
+    });
 
-    // Calcular ocupación y vacantes en tiempo real
+    // Calcular ocupación y vacantes en tiempo real (protegiendo regulares activos y liberando no_continua)
     const cuposCalculados = result.rows.map(row => {
-      const reg = parseInt(row.regulares_confirmados || 0, 10);
+      const regConfirmados = parseInt(row.regulares_confirmados || 0, 10);
+      const infoReg = mapaRegulares.get(`${row.grado_id}:${row.turno_id}`);
+      const regProtegidos = infoReg ? infoReg.protegidos : regConfirmados;
+      const regNoContinua = infoReg ? infoReg.no_continua : 0;
       const herm = parseInt(row.hermanos_confirmados || 0, 10);
       const preAprob = parseInt(row.preinscripciones_aprobadas || 0, 10);
-      const ocupadosReales = reg + herm + preAprob;
+      const ocupadosReales = regProtegidos + herm + preAprob;
       const cuposTotales = parseInt(row.cupos_totales || 0, 10);
       const disponibles = Math.max(0, cuposTotales - ocupadosReales);
       const porcentaje = cuposTotales > 0 ? Number(((ocupadosReales / cuposTotales) * 100).toFixed(2)) : 0;
 
       return {
         ...row,
+        regulares_confirmados: regConfirmados,
+        regulares_protegidos: regProtegidos,
+        regulares_no_continua: regNoContinua,
         cupos_ocupados: ocupadosReales,
         cupos_disponibles: disponibles,
         porcentaje_ocupacion: porcentaje
@@ -311,17 +321,15 @@ class CupoPreinscripcion {
       }
     }
 
-    // 4. Regulares CONFIRMADOS (Opción A: de la tabla reserva_cupo)
-    const regConfRes = await conn.query(`
-      SELECT COUNT(*)::int as total
-      FROM reserva_cupo
-      WHERE grado_destino_id = $1 
-        AND turno_destino_id = $2 
-        AND periodo_academico_id = $3
-        AND estado = 'confirmada'
-        AND deleted_at IS NULL
-    `, [gradoId, turnoId, periodoId]);
-    const regularesConfirmados = regConfRes.rows[0]?.total || 0;
+    // 4. Regulares PROTEGIDOS (proyectados activos + confirmados, excluyendo no_continua/anuladas/canceladas y respetando cambios de turno)
+    const mapaRegulares = await ReservaCupo.obtenerMapaRegularesProtegidos({
+      periodoDestinoId: periodoId,
+      anioDestino: anioDestino || 2027,
+      client: conn
+    });
+    const infoReg = mapaRegulares.get(`${gradoId}:${turnoId}`) || { protegidos: 0, confirmados: 0, no_continua: 0 };
+    const regularesProtegidos = infoReg.protegidos;
+    const regularesConfirmados = infoReg.confirmados;
 
     // 5. Hermanos postulantes CONFIRMADOS (de reserva_cupo_hermano)
     const hermConfRes = await conn.query(`
@@ -359,8 +367,8 @@ class CupoPreinscripcion {
     `, [gradoId, turnoId, periodoId]);
     const totalEnEspera = preinsEspRes.rows[0]?.total_espera || 0;
 
-    // 7. Cálculo final de cupos disponibles
-    const cuposOcupados = regularesConfirmados + hermanosConfirmados + preinscripcionesActivas;
+    // 7. Cálculo final de cupos disponibles (protegiendo regulares pendientes y liberando no_continua)
+    const cuposOcupados = regularesProtegidos + hermanosConfirmados + preinscripcionesActivas;
     const cuposDisponibles = Math.max(0, aforoTotal - cuposOcupados);
     const tieneCupos = aforoTotal > 0 && cuposDisponibles > 0;
     const posicionEspera = tieneCupos ? 0 : totalEnEspera + 1;
@@ -382,20 +390,18 @@ class CupoPreinscripcion {
           const aforoAlt = aforoAltRes.rows[0]?.aforo || 0;
 
           if (aforoAlt > 0) {
-            const regAltRes = await conn.query(`
-              SELECT COUNT(*)::int as total FROM reserva_cupo
-              WHERE grado_destino_id = $1 AND turno_destino_id = $2 AND periodo_academico_id = $3 AND estado = 'confirmada' AND deleted_at IS NULL
-            `, [gradoId, tAlt.id, periodoId]);
+            const regAlt = (mapaRegulares.get(`${gradoId}:${tAlt.id}`) || { protegidos: 0 }).protegidos;
             const hermAltRes = await conn.query(`
               SELECT COUNT(*)::int as total FROM reserva_cupo_hermano
               WHERE grado_solicitado_id = $1 AND turno_solicitado_id = $2 AND periodo_academico_id = $3 AND estado = 'confirmada' AND deleted_at IS NULL
             `, [gradoId, tAlt.id, periodoId]);
+            const hermAltResTotal = hermAltRes.rows[0]?.total || 0;
             const preinsAltRes = await conn.query(`
               SELECT COUNT(*)::int as total FROM pre_inscripcion
               WHERE grado_id = $1 AND turno_preferido_id = $2 AND periodo_academico_id = $3 AND estado NOT IN ('cancelada', 'rechazada', 'convertida', 'en_espera') AND deleted_at IS NULL
             `, [gradoId, tAlt.id, periodoId]);
 
-            const ocupadosAlt = (regAltRes.rows[0]?.total || 0) + (hermAltRes.rows[0]?.total || 0) + (preinsAltRes.rows[0]?.total || 0);
+            const ocupadosAlt = regAlt + hermAltResTotal + (preinsAltRes.rows[0]?.total || 0);
             const disponiblesAlt = Math.max(0, aforoAlt - ocupadosAlt);
             if (disponiblesAlt > 0) {
               turnoAlternativo = {
@@ -453,6 +459,8 @@ class CupoPreinscripcion {
       turno_nombre: turnoNombre,
       aforo_total: aforoTotal,
       cupos_totales: aforoTotal,
+      regulares_protegidos: regularesProtegidos,
+      regulares_no_continua: infoReg.no_continua,
       regulares_confirmados: regularesConfirmados,
       hermanos_confirmados: hermanosConfirmados,
       preinscripciones_activas: preinscripcionesActivas,
@@ -549,17 +557,11 @@ class CupoPreinscripcion {
       });
     }
 
-    // 2. Regulares confirmados agrupados
-    const regRes = await pool.query(`
-      SELECT grado_destino_id as grado_id, turno_destino_id as turno_id, COUNT(*)::int as total
-      FROM reserva_cupo
-      WHERE (periodo_academico_id = $1 OR periodo_academico_id IS NULL) 
-        AND estado = 'confirmada' 
-        AND deleted_at IS NULL
-      GROUP BY grado_destino_id, turno_destino_id
-    `, [periodoId]);
-    const mapRegulares = new Map();
-    regRes.rows.forEach(r => mapRegulares.set(`${r.grado_id}:${r.turno_id}`, r.total));
+    // 2. Regulares protegidos agrupados (excluyendo no_continua/anuladas/canceladas y respetando cambios de turno)
+    const mapaRegulares = await ReservaCupo.obtenerMapaRegularesProtegidos({
+      periodoDestinoId: periodoId,
+      anioDestino: anioDestino || 2027
+    });
 
     // 3. Hermanos confirmados agrupados
     const hermRes = await pool.query(`
@@ -603,7 +605,8 @@ class CupoPreinscripcion {
       for (const row of todasCombos.rows) {
         const key = `${row.grado_id}:${row.turno_id}`;
         const aforo = mapAforo.get(key) || 25;
-        const ocupados = (mapRegulares.get(key) || 0) + (mapHermanos.get(key) || 0) + (mapPreins.get(key) || 0);
+        const regProt = (mapaRegulares.get(key) || { protegidos: 0 }).protegidos;
+        const ocupados = regProt + (mapHermanos.get(key) || 0) + (mapPreins.get(key) || 0);
         const disponibles = Math.max(0, aforo - ocupados);
 
         await client.query(`

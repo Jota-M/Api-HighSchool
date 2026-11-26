@@ -64,36 +64,14 @@ class ReservaCupoHermano {
     const aforoTotal = aforoRes.rows[0]?.aforo_total || 0;
     const totalParalelos = aforoRes.rows[0]?.total_paralelos || 0;
 
-    // 3. Regulares proyectados (protegidos): vienen del grado anterior matriculados en el año actual (2026) con ese turno
-    const gradoAnterior = await this.obtenerGradoAnterior(gradoId, conn);
-    let regularesProyectados = 0;
-
-    if (gradoAnterior) {
-      // Buscar periodo del año actual (ej. 2026)
-      const periodoActualRes = await conn.query(`
-        SELECT id FROM periodo_academico WHERE nombre ILIKE $1 LIMIT 1
-      `, [`%${anioActual}%`]);
-      const periodoActualId = periodoActualRes.rows[0]?.id;
-
-      if (periodoActualId) {
-        // Estudiantes matriculados activos en el grado anterior con ese turno
-        const regRes = await conn.query(`
-          SELECT COUNT(DISTINCT m.estudiante_id)::int as total_regulares
-          FROM matricula m
-          INNER JOIN paralelo p ON m.paralelo_id = p.id
-          INNER JOIN estudiante e ON m.estudiante_id = e.id
-          WHERE p.grado_id = $1 
-            AND p.turno_id = $2 
-            AND m.periodo_academico_id = $3
-            AND m.estado = 'activo'
-            AND m.deleted_at IS NULL
-            AND e.activo = true
-            AND e.deleted_at IS NULL
-        `, [gradoAnterior.id, turnoId, periodoActualId]);
-
-        regularesProyectados = regRes.rows[0]?.total_regulares || 0;
-      }
-    }
+    // 3. Regulares protegidos (proyectados activos + confirmados, excluyendo no_continua/anuladas/canceladas y respetando cambios de turno)
+    const mapaRegulares = await ReservaCupo.obtenerMapaRegularesProtegidos({
+      periodoDestinoId: periodo.id,
+      anioDestino,
+      client: conn
+    });
+    const infoRegulares = mapaRegulares.get(`${gradoId}:${turnoId}`) || { protegidos: 0 };
+    const regularesProyectados = infoRegulares.protegidos;
 
     // 4. Hermanos ya confirmados para ese grado, turno y periodo
     const hermanosConfRes = await conn.query(`
@@ -140,31 +118,7 @@ class ReservaCupoHermano {
       `, [gradoId, tAlt.id, anioDestino]);
 
       const aforoAlt = aforoAltRes.rows[0]?.aforo_total || 0;
-      let regAlt = 0;
-
-      if (gradoAnterior) {
-        const periodoActualRes = await conn.query(`
-          SELECT id FROM periodo_academico WHERE nombre ILIKE $1 LIMIT 1
-        `, [`%${anioActual}%`]);
-        const periodoActualId = periodoActualRes.rows[0]?.id;
-
-        if (periodoActualId) {
-          const regAltRes = await conn.query(`
-            SELECT COUNT(DISTINCT m.estudiante_id)::int as total_regulares
-            FROM matricula m
-            INNER JOIN paralelo p ON m.paralelo_id = p.id
-            INNER JOIN estudiante e ON m.estudiante_id = e.id
-            WHERE p.grado_id = $1 
-              AND p.turno_id = $2 
-              AND m.periodo_academico_id = $3
-              AND m.estado = 'activo'
-              AND m.deleted_at IS NULL
-              AND e.activo = true
-              AND e.deleted_at IS NULL
-          `, [gradoAnterior.id, tAlt.id, periodoActualId]);
-          regAlt = regAltRes.rows[0]?.total_regulares || 0;
-        }
-      }
+      const regAlt = (mapaRegulares.get(`${gradoId}:${tAlt.id}`) || { protegidos: 0 }).protegidos;
 
       const hermAltConfRes = await conn.query(`
         SELECT COUNT(*)::int as total_confirmados

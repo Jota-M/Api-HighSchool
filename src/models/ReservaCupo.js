@@ -1246,11 +1246,13 @@ class ReservaCupo {
           manana: {
             asegurados: tManana.asegurados || 0,
             confirmados: tManana.confirmados || 0,
+            no_continua: tManana.no_continua || 0,
             restantes: tManana.restantes || 0
           },
           tarde: {
             asegurados: tTarde.asegurados || 0,
             confirmados: tTarde.confirmados || 0,
+            no_continua: tTarde.no_continua || 0,
             restantes: tTarde.restantes || 0
           }
         }
@@ -1476,6 +1478,118 @@ class ReservaCupo {
     }
 
     return { gradoNombre, turnoNombre, nivelNombre };
+  }
+
+  /**
+   * Calcula por (grado_id, turno_id) la cantidad de regulares que retienen cupo
+   * (proyectados activos + confirmados manuales, excluyendo no_continua/anulada/cancelada,
+   * y respetando cambios de turno o grado en reserva_cupo).
+   */
+  static async obtenerMapaRegularesProtegidos({
+    periodoDestinoId = null,
+    anioDestino = 2027,
+    client = null
+  } = {}) {
+    const conn = client || pool;
+    const anioActual = anioDestino - 1;
+
+    let perDestinoId = periodoDestinoId;
+    if (!perDestinoId) {
+      const perDestinoRes = await conn.query(
+        'SELECT id FROM periodo_academico WHERE nombre ILIKE $1 LIMIT 1',
+        [`%${anioDestino}%`]
+      );
+      perDestinoId = perDestinoRes.rows[0]?.id || null;
+    }
+
+    const perActualRes = await conn.query(
+      'SELECT id FROM periodo_academico WHERE nombre ILIKE $1 LIMIT 1',
+      [`%${anioActual}%`]
+    );
+    const periodoActualId = perActualRes.rows[0]?.id || null;
+
+    const result = await conn.query(`
+      WITH estudiantes_proyectados AS (
+        SELECT 
+          m.estudiante_id,
+          p.turno_id as turno_origen_id,
+          (
+            SELECT g_sig.id 
+            FROM grado g_sig
+            INNER JOIN nivel_academico na_sig ON g_sig.nivel_academico_id = na_sig.id
+            WHERE (na_sig.orden > na_act.orden) OR (na_sig.orden = na_act.orden AND g_sig.orden > g_act.orden)
+            ORDER BY na_sig.orden ASC, g_sig.orden ASC
+            LIMIT 1
+          ) as grado_destino_id
+        FROM matricula m
+        INNER JOIN periodo_academico pa ON m.periodo_academico_id = pa.id
+        INNER JOIN paralelo p ON m.paralelo_id = p.id
+        INNER JOIN grado g_act ON p.grado_id = g_act.id
+        INNER JOIN nivel_academico na_act ON g_act.nivel_academico_id = na_act.id
+        INNER JOIN estudiante e ON m.estudiante_id = e.id
+        WHERE m.estado = 'activo' AND m.deleted_at IS NULL AND e.activo = true AND e.deleted_at IS NULL
+          ${periodoActualId ? 'AND m.periodo_academico_id = ' + periodoActualId : "AND pa.nombre ILIKE '%" + anioActual + "%'"}
+      ),
+      regulares_unificados AS (
+        SELECT 
+          ep.estudiante_id,
+          COALESCE(r.grado_destino_id, ep.grado_destino_id) as grado_id,
+          COALESCE(r.turno_destino_id, ep.turno_origen_id) as turno_id,
+          r.estado as reserva_estado
+        FROM estudiantes_proyectados ep
+        LEFT JOIN reserva_cupo r ON r.estudiante_id = ep.estudiante_id
+          AND r.deleted_at IS NULL
+          AND ($1::int IS NULL OR r.periodo_academico_id = $1 OR r.periodo_academico_id IS NULL)
+        UNION
+        SELECT
+          rc.estudiante_id,
+          rc.grado_destino_id as grado_id,
+          rc.turno_destino_id as turno_id,
+          rc.estado as reserva_estado
+        FROM reserva_cupo rc
+        WHERE rc.deleted_at IS NULL
+          AND rc.estado = 'confirmada'
+          AND ($1::int IS NULL OR rc.periodo_academico_id = $1 OR rc.periodo_academico_id IS NULL)
+          AND NOT EXISTS (SELECT 1 FROM estudiantes_proyectados ep2 WHERE ep2.estudiante_id = rc.estudiante_id)
+      )
+      SELECT 
+        grado_id,
+        turno_id,
+        COUNT(DISTINCT CASE WHEN reserva_estado IS NULL OR reserva_estado NOT IN ('no_continua', 'anulada', 'cancelada') THEN estudiante_id END)::int as regulares_protegidos,
+        COUNT(DISTINCT CASE WHEN reserva_estado = 'confirmada' THEN estudiante_id END)::int as regulares_confirmados,
+        COUNT(DISTINCT CASE WHEN reserva_estado = 'no_continua' THEN estudiante_id END)::int as regulares_no_continua
+      FROM regulares_unificados
+      WHERE grado_id IS NOT NULL AND turno_id IS NOT NULL
+      GROUP BY grado_id, turno_id
+    `, [perDestinoId]);
+
+    const mapa = new Map();
+    for (const row of result.rows) {
+      mapa.set(`${row.grado_id}:${row.turno_id}`, {
+        protegidos: row.regulares_protegidos || 0,
+        confirmados: row.regulares_confirmados || 0,
+        no_continua: row.regulares_no_continua || 0,
+      });
+    }
+    return mapa;
+  }
+
+  /**
+   * Cuenta los regulares que retienen cupo para un (gradoId, turnoId) específico.
+   */
+  static async contarRegularesProtegidos({
+    gradoId,
+    turnoId,
+    periodoDestinoId = null,
+    anioDestino = 2027,
+    client = null
+  }) {
+    const mapa = await ReservaCupo.obtenerMapaRegularesProtegidos({
+      periodoDestinoId,
+      anioDestino,
+      client
+    });
+    return mapa.get(`${gradoId}:${turnoId}`) || { protegidos: 0, confirmados: 0, no_continua: 0 };
   }
 }
 
