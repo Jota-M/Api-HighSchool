@@ -39,8 +39,11 @@ class CupoPreinscripcionController {
           cupo: disp.cupo_id ? {
             id: disp.cupo_id,
             periodo_academico_id: disp.periodo_academico_id,
+            periodo_nombre: disp.periodo_nombre,
             grado_id: disp.grado_id,
+            grado_nombre: disp.grado_nombre,
             turno_id: disp.turno_id,
+            turno_nombre: disp.turno_nombre,
             cupos_totales: disp.cupos_totales,
             cupos_ocupados: disp.cupos_ocupados,
             cupos_disponibles: disp.cupos_disponibles,
