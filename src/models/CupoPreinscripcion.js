@@ -89,13 +89,12 @@ class CupoPreinscripcion {
         g.nombre as grado_nombre,
         t.nombre as turno_nombre,
         na.nombre as nivel_academico_nombre,
-        ROUND((cp.cupos_ocupados::decimal / NULLIF(cp.cupos_totales, 0) * 100), 2) as porcentaje_ocupacion,
         COALESCE((
           SELECT COUNT(*)::int 
           FROM reserva_cupo rc 
           WHERE rc.grado_destino_id = cp.grado_id 
             AND rc.turno_destino_id = cp.turno_id 
-            AND rc.periodo_academico_id = cp.periodo_academico_id 
+            AND (rc.periodo_academico_id = cp.periodo_academico_id OR cp.periodo_academico_id IS NULL OR rc.periodo_academico_id IS NULL)
             AND rc.estado = 'confirmada' 
             AND rc.deleted_at IS NULL
         ), 0) as regulares_confirmados,
@@ -104,7 +103,7 @@ class CupoPreinscripcion {
           FROM reserva_cupo_hermano rch 
           WHERE rch.grado_solicitado_id = cp.grado_id 
             AND rch.turno_solicitado_id = cp.turno_id 
-            AND rch.periodo_academico_id = cp.periodo_academico_id 
+            AND (rch.periodo_academico_id = cp.periodo_academico_id OR cp.periodo_academico_id IS NULL OR rch.periodo_academico_id IS NULL)
             AND rch.estado = 'confirmada' 
             AND rch.deleted_at IS NULL
         ), 0) as hermanos_confirmados,
@@ -113,7 +112,7 @@ class CupoPreinscripcion {
           FROM pre_inscripcion pi 
           WHERE pi.grado_id = cp.grado_id 
             AND pi.turno_preferido_id = cp.turno_id 
-            AND pi.periodo_academico_id = cp.periodo_academico_id 
+            AND (pi.periodo_academico_id = cp.periodo_academico_id OR cp.periodo_academico_id IS NULL OR pi.periodo_academico_id IS NULL)
             AND (pi.tiene_cupo_asignado = true OR pi.estado = 'aprobada')
             AND pi.deleted_at IS NULL
         ), 0) as preinscripciones_aprobadas,
@@ -122,7 +121,7 @@ class CupoPreinscripcion {
           FROM pre_inscripcion pi 
           WHERE pi.grado_id = cp.grado_id 
             AND pi.turno_preferido_id = cp.turno_id 
-            AND pi.periodo_academico_id = cp.periodo_academico_id 
+            AND (pi.periodo_academico_id = cp.periodo_academico_id OR cp.periodo_academico_id IS NULL OR pi.periodo_academico_id IS NULL)
             AND pi.deleted_at IS NULL
         ), 0) as preinscripciones_total,
         COALESCE((
@@ -130,7 +129,7 @@ class CupoPreinscripcion {
           FROM pre_inscripcion pi 
           WHERE pi.grado_id = cp.grado_id 
             AND pi.turno_preferido_id = cp.turno_id 
-            AND pi.periodo_academico_id = cp.periodo_academico_id 
+            AND (pi.periodo_academico_id = cp.periodo_academico_id OR cp.periodo_academico_id IS NULL OR pi.periodo_academico_id IS NULL)
             AND pi.estado = 'en_espera'
             AND pi.deleted_at IS NULL
         ), 0) as preinscripciones_en_espera
@@ -145,9 +144,27 @@ class CupoPreinscripcion {
     `;
     
     const result = await pool.query(dataQuery, [...params, limit, offset]);
+
+    // Calcular ocupación y vacantes en tiempo real
+    const cuposCalculados = result.rows.map(row => {
+      const reg = parseInt(row.regulares_confirmados || 0, 10);
+      const herm = parseInt(row.hermanos_confirmados || 0, 10);
+      const preAprob = parseInt(row.preinscripciones_aprobadas || 0, 10);
+      const ocupadosReales = reg + herm + preAprob;
+      const cuposTotales = parseInt(row.cupos_totales || 0, 10);
+      const disponibles = Math.max(0, cuposTotales - ocupadosReales);
+      const porcentaje = cuposTotales > 0 ? Number(((ocupadosReales / cuposTotales) * 100).toFixed(2)) : 0;
+
+      return {
+        ...row,
+        cupos_ocupados: ocupadosReales,
+        cupos_disponibles: disponibles,
+        porcentaje_ocupacion: porcentaje
+      };
+    });
     
     return {
-      cupos: result.rows,
+      cupos: cuposCalculados,
       paginacion: {
         total,
         page: parseInt(page),
@@ -478,15 +495,26 @@ class CupoPreinscripcion {
     }
 
     if (!periodoId) {
-      const pSig = await pool.query(`
+      const p2027 = await pool.query(`
         SELECT id, nombre, fecha_inicio FROM periodo_academico
-        WHERE permite_inscripciones = true AND deleted_at IS NULL
+        WHERE nombre ILIKE '%2027%' AND deleted_at IS NULL
         ORDER BY fecha_inicio DESC LIMIT 1
       `);
-      if (pSig.rows.length === 0) return { total_sincronizados: 0, mensaje: 'No hay periodos académicos activos' };
-      periodoId = pSig.rows[0].id;
-      const matchYear = pSig.rows[0].nombre.match(/\d{4}/);
-      anioDestino = matchYear ? parseInt(matchYear[0], 10) : new Date(pSig.rows[0].fecha_inicio).getFullYear();
+      if (p2027.rows.length > 0) {
+        periodoId = p2027.rows[0].id;
+        const matchYear = p2027.rows[0].nombre.match(/\d{4}/);
+        anioDestino = matchYear ? parseInt(matchYear[0], 10) : 2027;
+      } else {
+        const pSig = await pool.query(`
+          SELECT id, nombre, fecha_inicio FROM periodo_academico
+          WHERE (permite_inscripciones = true OR activo = true) AND deleted_at IS NULL
+          ORDER BY fecha_inicio DESC LIMIT 1
+        `);
+        if (pSig.rows.length === 0) return { total_sincronizados: 0, mensaje: 'No hay periodos académicos activos' };
+        periodoId = pSig.rows[0].id;
+        const matchYear = pSig.rows[0].nombre.match(/\d{4}/);
+        anioDestino = matchYear ? parseInt(matchYear[0], 10) : new Date(pSig.rows[0].fecha_inicio).getFullYear();
+      }
     }
 
     // 1. Obtener aforos de paralelos agrupados por grado y turno
@@ -525,7 +553,9 @@ class CupoPreinscripcion {
     const regRes = await pool.query(`
       SELECT grado_destino_id as grado_id, turno_destino_id as turno_id, COUNT(*)::int as total
       FROM reserva_cupo
-      WHERE periodo_academico_id = $1 AND estado = 'confirmada' AND deleted_at IS NULL
+      WHERE (periodo_academico_id = $1 OR periodo_academico_id IS NULL) 
+        AND estado = 'confirmada' 
+        AND deleted_at IS NULL
       GROUP BY grado_destino_id, turno_destino_id
     `, [periodoId]);
     const mapRegulares = new Map();
@@ -535,7 +565,9 @@ class CupoPreinscripcion {
     const hermRes = await pool.query(`
       SELECT grado_solicitado_id as grado_id, turno_solicitado_id as turno_id, COUNT(*)::int as total
       FROM reserva_cupo_hermano
-      WHERE periodo_academico_id = $1 AND estado = 'confirmada' AND deleted_at IS NULL
+      WHERE (periodo_academico_id = $1 OR periodo_academico_id IS NULL) 
+        AND estado = 'confirmada' 
+        AND deleted_at IS NULL
       GROUP BY grado_solicitado_id, turno_solicitado_id
     `, [periodoId]);
     const mapHermanos = new Map();
@@ -545,7 +577,9 @@ class CupoPreinscripcion {
     const preinsRes = await pool.query(`
       SELECT grado_id, turno_preferido_id as turno_id, COUNT(*)::int as total
       FROM pre_inscripcion
-      WHERE periodo_academico_id = $1 AND estado NOT IN ('cancelada', 'rechazada', 'convertida', 'en_espera') AND deleted_at IS NULL
+      WHERE (periodo_academico_id = $1 OR periodo_academico_id IS NULL) 
+        AND (tiene_cupo_asignado = true OR estado = 'aprobada')
+        AND deleted_at IS NULL
       GROUP BY grado_id, turno_preferido_id
     `, [periodoId]);
     const mapPreins = new Map();

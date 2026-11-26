@@ -1081,7 +1081,7 @@ class ReservaCupo {
     );
     const periodoActualId = perActualRes.rows[0]?.id || null;
 
-    // 1. Consulta consolidada por Grado Destino
+    // 1. Consulta consolidada por Grado Destino (refleja cambios de grado en reserva)
     const queryGrados = `
       WITH estudiantes_proyectados AS (
         SELECT 
@@ -1105,6 +1105,17 @@ class ReservaCupo {
         INNER JOIN estudiante e ON m.estudiante_id = e.id
         WHERE m.estado = 'activo' AND m.deleted_at IS NULL AND e.activo = true AND e.deleted_at IS NULL
           ${periodoActualId ? 'AND m.periodo_academico_id = ' + periodoActualId : "AND pa.nombre ILIKE '%" + anioActual + "%'"}
+      ),
+      estudiantes_con_reserva AS (
+        SELECT 
+          ep.estudiante_id,
+          COALESCE(r.grado_destino_id, ep.grado_destino_id) as grado_destino_id,
+          r.estado as reserva_estado,
+          r.id as reserva_id
+        FROM estudiantes_proyectados ep
+        LEFT JOIN reserva_cupo r ON r.estudiante_id = ep.estudiante_id 
+          AND r.deleted_at IS NULL 
+          ${periodoDestinoId ? 'AND (r.periodo_academico_id = ' + periodoDestinoId + ' OR r.periodo_academico_id IS NULL)' : ''}
       )
       SELECT 
         gd.id as grado_destino_id,
@@ -1113,23 +1124,20 @@ class ReservaCupo {
         nd.id as nivel_id,
         nd.nombre as nivel_nombre,
         nd.orden as nivel_orden,
-        COALESCE(COUNT(ep.estudiante_id), 0)::int as total_asegurados,
-        COALESCE(COUNT(CASE WHEN r.estado = 'confirmada' THEN 1 END), 0)::int as total_confirmados,
-        COALESCE(COUNT(CASE WHEN r.estado = 'no_continua' THEN 1 END), 0)::int as total_no_continua,
-        COALESCE(COUNT(CASE WHEN r.estado = 'solicitud_anulacion' THEN 1 END), 0)::int as total_solicitud_anulacion,
-        COALESCE(COUNT(CASE WHEN r.estado IN ('anulada', 'cancelada') THEN 1 END), 0)::int as total_anuladas,
-        (COALESCE(COUNT(ep.estudiante_id), 0) - COALESCE(COUNT(CASE WHEN r.id IS NOT NULL AND r.deleted_at IS NULL THEN 1 END), 0))::int as total_restantes
+        COALESCE(COUNT(ecr.estudiante_id), 0)::int as total_asegurados,
+        COALESCE(COUNT(CASE WHEN ecr.reserva_estado = 'confirmada' THEN 1 END), 0)::int as total_confirmados,
+        COALESCE(COUNT(CASE WHEN ecr.reserva_estado = 'no_continua' THEN 1 END), 0)::int as total_no_continua,
+        COALESCE(COUNT(CASE WHEN ecr.reserva_estado = 'solicitud_anulacion' THEN 1 END), 0)::int as total_solicitud_anulacion,
+        COALESCE(COUNT(CASE WHEN ecr.reserva_estado IN ('anulada', 'cancelada') THEN 1 END), 0)::int as total_anuladas,
+        (COALESCE(COUNT(ecr.estudiante_id), 0) - COALESCE(COUNT(CASE WHEN ecr.reserva_id IS NOT NULL THEN 1 END), 0))::int as total_restantes
       FROM grado gd
       INNER JOIN nivel_academico nd ON gd.nivel_academico_id = nd.id
-      LEFT JOIN estudiantes_proyectados ep ON ep.grado_destino_id = gd.id
-      LEFT JOIN reserva_cupo r ON r.estudiante_id = ep.estudiante_id 
-        AND r.deleted_at IS NULL 
-        ${periodoDestinoId ? 'AND r.periodo_academico_id = ' + periodoDestinoId : ''}
+      LEFT JOIN estudiantes_con_reserva ecr ON ecr.grado_destino_id = gd.id
       GROUP BY gd.id, gd.nombre, gd.orden, nd.id, nd.nombre, nd.orden
       ORDER BY nd.orden ASC, gd.orden ASC
     `;
 
-    // 2. Consulta de turnos desglosados
+    // 2. Consulta de turnos desglosados (refleja cambios de turno en reserva)
     const queryTurnos = `
       WITH estudiantes_proyectados AS (
         SELECT 
@@ -1153,22 +1161,33 @@ class ReservaCupo {
         INNER JOIN estudiante e ON m.estudiante_id = e.id
         WHERE m.estado = 'activo' AND m.deleted_at IS NULL AND e.activo = true AND e.deleted_at IS NULL
           ${periodoActualId ? 'AND m.periodo_academico_id = ' + periodoActualId : "AND pa.nombre ILIKE '%" + anioActual + "%'"}
+      ),
+      estudiantes_con_reserva AS (
+        SELECT 
+          ep.estudiante_id,
+          COALESCE(r.grado_destino_id, ep.grado_destino_id) as grado_destino_id,
+          COALESCE(r.turno_destino_id, ep.turno_origen_id) as turno_id,
+          COALESCE(td.nombre, ep.turno_origen_nombre, 'Sin Turno') as turno_nombre,
+          r.estado as reserva_estado,
+          r.id as reserva_id
+        FROM estudiantes_proyectados ep
+        LEFT JOIN reserva_cupo r ON r.estudiante_id = ep.estudiante_id 
+          AND r.deleted_at IS NULL 
+          ${periodoDestinoId ? 'AND (r.periodo_academico_id = ' + periodoDestinoId + ' OR r.periodo_academico_id IS NULL)' : ''}
+        LEFT JOIN turno td ON COALESCE(r.turno_destino_id, ep.turno_origen_id) = td.id
       )
       SELECT 
-        ep.grado_destino_id,
-        ep.turno_origen_id as turno_id,
-        COALESCE(ep.turno_origen_nombre, td.nombre, 'Sin Turno') as turno_nombre,
-        COUNT(ep.estudiante_id)::int as asegurados,
-        COUNT(CASE WHEN r.estado = 'confirmada' THEN 1 END)::int as confirmados,
-        COUNT(CASE WHEN r.estado = 'no_continua' THEN 1 END)::int as no_continua,
-        (COUNT(ep.estudiante_id) - COUNT(CASE WHEN r.id IS NOT NULL AND r.deleted_at IS NULL THEN 1 END))::int as restantes
-      FROM estudiantes_proyectados ep
-      LEFT JOIN turno td ON ep.turno_origen_id = td.id
-      LEFT JOIN reserva_cupo r ON r.estudiante_id = ep.estudiante_id 
-        AND r.deleted_at IS NULL 
-        ${periodoDestinoId ? 'AND r.periodo_academico_id = ' + periodoDestinoId : ''}
-      GROUP BY ep.grado_destino_id, ep.turno_origen_id, ep.turno_origen_nombre, td.nombre
-      ORDER BY ep.grado_destino_id, ep.turno_origen_id
+        ecr.grado_destino_id,
+        ecr.turno_id,
+        ecr.turno_nombre,
+        COUNT(ecr.estudiante_id)::int as asegurados,
+        COUNT(CASE WHEN ecr.reserva_estado = 'confirmada' THEN 1 END)::int as confirmados,
+        COUNT(CASE WHEN ecr.reserva_estado = 'no_continua' THEN 1 END)::int as no_continua,
+        (COUNT(ecr.estudiante_id) - COUNT(CASE WHEN ecr.reserva_id IS NOT NULL THEN 1 END))::int as restantes
+      FROM estudiantes_con_reserva ecr
+      WHERE ecr.grado_destino_id IS NOT NULL
+      GROUP BY ecr.grado_destino_id, ecr.turno_id, ecr.turno_nombre
+      ORDER BY ecr.grado_destino_id, ecr.turno_id
     `;
 
     const [gradosRes, turnosRes] = await Promise.all([
@@ -1210,8 +1229,8 @@ class ReservaCupo {
       sumaRestantes += restantes;
 
       const tList = turnosPorGrado[g.grado_destino_id] || [];
-      const tManana = tList.find(t => t.turno_id === 1) || { asegurados: 0, confirmados: 0, restantes: 0 };
-      const tTarde = tList.find(t => t.turno_id === 2) || { asegurados: 0, confirmados: 0, restantes: 0 };
+      const tManana = tList.find(t => t.turno_id === 1 || (t.turno_nombre || '').toLowerCase().includes('mañ') || (t.turno_nombre || '').toLowerCase().includes('man')) || { asegurados: 0, confirmados: 0, restantes: 0 };
+      const tTarde = tList.find(t => t.turno_id === 2 || (t.turno_nombre || '').toLowerCase().includes('tard')) || { asegurados: 0, confirmados: 0, restantes: 0 };
 
       return {
         ...g,

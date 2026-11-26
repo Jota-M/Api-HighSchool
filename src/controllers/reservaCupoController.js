@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import fs from 'fs';
 import ReservaCupo from '../models/ReservaCupo.js';
 import ReservaCupoHermano from '../models/ReservaCupoHermano.js';
+import { CupoPreinscripcion } from '../models/CupoPreinscripcion.js';
 import ActividadLog from '../models/actividadLog.js';
 import RequestInfo from '../utils/requestInfo.js';
 import PDFGenerator from '../services/reportes/pdfGenerator.js';
@@ -437,6 +438,11 @@ class ReservaCupoController {
         mensaje: `Reserva ${resultado.codigo_reserva} anulada por administración`
       }).catch(err => console.error('Error log anulación admin:', err));
 
+      // Sincronizar cupos y vacantes tras anulación
+      CupoPreinscripcion.sincronizarTodos(resultado.periodo_academico_id).catch(err =>
+        console.warn('Advertencia al sincronizar cupos tras anulación:', err.message)
+      );
+
       res.json({
         success: true,
         message: 'Reserva anulada exitosamente.',
@@ -482,6 +488,11 @@ class ReservaCupoController {
         mensaje: `Reserva ${resultado.codigo_reserva} reactivada por administración`
       }).catch(err => console.error('Error log reactivación admin:', err));
 
+      // Sincronizar cupos y vacantes tras reactivación
+      CupoPreinscripcion.sincronizarTodos(resultado.periodo_academico_id).catch(err =>
+        console.warn('Advertencia al sincronizar cupos tras reactivación:', err.message)
+      );
+
       res.json({
         success: true,
         message: 'Reserva reactivada y confirmada exitosamente.',
@@ -522,6 +533,11 @@ class ReservaCupoController {
         resultado: 'exitoso',
         mensaje: `Actualización de reserva regular ${resultado.codigo_reserva} (${resultado.estudiante_nombre_completo})`
       }).catch(err => console.error('Error log actualización:', err));
+
+      // Sincronizar automáticamente cupos y vacantes para reflejar el cambio de turno/grado de inmediato
+      CupoPreinscripcion.sincronizarTodos(resultado.periodo_academico_id).catch(err =>
+        console.warn('Advertencia al sincronizar cupos tras actualización admin:', err.message)
+      );
 
       res.json({
         success: true,
@@ -1020,6 +1036,11 @@ class ReservaCupoController {
         resultado: 'exitoso',
         mensaje: `Actualización de datos del hermano ${resultado.nombre_completo} (${resultado.codigo_reserva})`
       }).catch(err => console.error('Error log actualización hermano:', err));
+
+      // Sincronizar cupos y vacantes tras actualizar hermano
+      CupoPreinscripcion.sincronizarTodos(resultado.periodo_academico_id).catch(err =>
+        console.warn('Advertencia al sincronizar cupos tras actualización hermano:', err.message)
+      );
 
       res.json({
         success: true,
