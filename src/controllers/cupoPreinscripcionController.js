@@ -10,7 +10,7 @@ class CupoPreinscripcionController {
    */
   static async verificarDisponibilidad(req, res) {
     try {
-      const { grado_id, turno_id, periodo_academico_id } = req.query;
+      const { grado_id, turno_id, periodo_academico_id, exclude_preinscripcion_id, solo_aprobadas } = req.query;
 
       if (!grado_id || !turno_id) {
         return res.status(400).json({
@@ -22,7 +22,9 @@ class CupoPreinscripcionController {
       const disp = await CupoPreinscripcion.calcularDisponibilidadDinamica({
         gradoId: parseInt(grado_id),
         turnoId: parseInt(turno_id),
-        periodoAcademicoId: periodo_academico_id ? parseInt(periodo_academico_id) : null
+        periodoAcademicoId: periodo_academico_id ? parseInt(periodo_academico_id) : null,
+        excludePreinscripcionId: exclude_preinscripcion_id ? parseInt(exclude_preinscripcion_id) : null,
+        soloAprobadas: solo_aprobadas === 'true' || solo_aprobadas === '1'
       });
 
       res.json({
@@ -33,7 +35,16 @@ class CupoPreinscripcionController {
           cupos_totales: disp.cupos_totales,
           cupos_ocupados: disp.cupos_ocupados,
           mensaje: disp.mensaje,
-          cupo_id: disp.cupo_id
+          cupo_id: disp.cupo_id,
+          cupo: disp.cupo_id ? {
+            id: disp.cupo_id,
+            periodo_academico_id: disp.periodo_academico_id,
+            grado_id: disp.grado_id,
+            turno_id: disp.turno_id,
+            cupos_totales: disp.cupos_totales,
+            cupos_ocupados: disp.cupos_ocupados,
+            cupos_disponibles: disp.cupos_disponibles,
+          } : null
         }
       });
     } catch (error) {

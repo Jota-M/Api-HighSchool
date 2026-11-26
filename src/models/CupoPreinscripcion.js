@@ -240,7 +240,14 @@ class CupoPreinscripcion {
   // MOTOR DINÁMICO DE CUPOS (INTEGRACIÓN RESERVA ⟷ PREINSCRIPCIÓN)
   // Opción A: Aforo total de paralelos - Regulares confirmados - Hermanos confirmados - Preinscritos activos
   // =============================================
-  static async calcularDisponibilidadDinamica({ gradoId, turnoId, periodoAcademicoId, client = null }) {
+  static async calcularDisponibilidadDinamica({
+    gradoId,
+    turnoId,
+    periodoAcademicoId,
+    client = null,
+    excludePreinscripcionId = null,
+    soloAprobadas = false
+  }) {
     const conn = client || pool;
 
     // 1. Obtener información del periodo académico
@@ -343,16 +350,29 @@ class CupoPreinscripcion {
     `, [gradoId, turnoId, periodoId]);
     const hermanosConfirmados = hermConfRes.rows[0]?.total || 0;
 
-    // 6. Preinscripciones activas de nuevos alumnos (sin contar las que están en espera)
-    const preinsRes = await conn.query(`
-      SELECT COUNT(*)::int as total
-      FROM pre_inscripcion
+    // 6. Preinscripciones activas o aprobadas (excluyendo la actual si aplica)
+    const preinsParams = [gradoId, turnoId, periodoId];
+    let preinsWhere = `
       WHERE grado_id = $1 
         AND turno_preferido_id = $2 
         AND periodo_academico_id = $3
-        AND estado NOT IN ('cancelada', 'rechazada', 'convertida', 'en_espera')
         AND deleted_at IS NULL
-    `, [gradoId, turnoId, periodoId]);
+    `;
+    if (soloAprobadas) {
+      preinsWhere += ` AND (tiene_cupo_asignado = true OR estado = 'aprobada') AND estado NOT IN ('cancelada', 'rechazada', 'convertida', 'en_espera')`;
+    } else {
+      preinsWhere += ` AND estado NOT IN ('cancelada', 'rechazada', 'convertida', 'en_espera')`;
+    }
+    if (excludePreinscripcionId) {
+      preinsParams.push(excludePreinscripcionId);
+      preinsWhere += ` AND id != $${preinsParams.length}`;
+    }
+
+    const preinsRes = await conn.query(`
+      SELECT COUNT(*)::int as total
+      FROM pre_inscripcion
+      ${preinsWhere}
+    `, preinsParams);
     const preinscripcionesActivas = preinsRes.rows[0]?.total || 0;
 
     // 6.b Preinscripciones en lista de espera
@@ -420,7 +440,7 @@ class CupoPreinscripcion {
 
     // 8. Sincronizar registro en cupo_preinscripcion para consistencia en dashboards
     let cupoId = cupoFila?.id || null;
-    if (cupoFila) {
+    if (cupoFila && !soloAprobadas && !excludePreinscripcionId) {
       await conn.query(`
         UPDATE cupo_preinscripcion
         SET cupos_totales = $1,
