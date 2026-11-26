@@ -440,14 +440,16 @@ class CupoPreinscripcion {
 
     // 8. Sincronizar registro en cupo_preinscripcion para consistencia en dashboards
     let cupoId = cupoFila?.id || null;
-    if (cupoFila && !soloAprobadas && !excludePreinscripcionId) {
-      await conn.query(`
-        UPDATE cupo_preinscripcion
-        SET cupos_totales = $1,
-            cupos_ocupados = $2,
-            updated_at = NOW()
-        WHERE id = $3
-      `, [aforoTotal, cuposOcupados, cupoFila.id]);
+    if (cupoFila) {
+      if (!soloAprobadas && !excludePreinscripcionId) {
+        await conn.query(`
+          UPDATE cupo_preinscripcion
+          SET cupos_totales = $1,
+              cupos_ocupados = $2,
+              updated_at = NOW()
+          WHERE id = $3
+        `, [aforoTotal, cuposOcupados, cupoFila.id]);
+      }
     } else if (aforoTotal > 0 && periodoId) {
       try {
         const nuevoCupo = await conn.query(`
