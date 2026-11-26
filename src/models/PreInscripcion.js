@@ -966,14 +966,40 @@ class PreInscripcion {
         throw new Error('Preinscripción no encontrada');
       }
 
-      // Liberar cupo si se rechaza o cancela
-      const cupoId = result.rows[0]?.cupo_preinscripcion_id;
+      // Liberar cupo si se rechaza, cancela o pasa a lista de espera
+      const rowActualizada = result.rows[0];
+      const cupoId = rowActualizada?.cupo_preinscripcion_id;
       if (['rechazada', 'cancelada'].includes(nuevoEstado) && !['rechazada', 'cancelada'].includes(estadoAnterior) && cupoId) {
         await this.liberarCupo(cupoId, client);
         await client.query(
           'UPDATE pre_inscripcion SET tiene_cupo_asignado = false WHERE id = $1',
           [id]
         );
+        rowActualizada.tiene_cupo_asignado = false;
+      }
+
+      // Si se mueve manualmente a lista de espera, liberar cupo asignado y asignar último puesto en cola
+      if (nuevoEstado === 'en_espera' && estadoAnterior !== 'en_espera') {
+        if (cupoId && rowActualizada.tiene_cupo_asignado) {
+          await this.liberarCupo(cupoId, client);
+        }
+        const maxPosRes = await client.query(`
+          SELECT COALESCE(MAX(posicion_espera), 0)::int + 1 as next_pos
+          FROM pre_inscripcion
+          WHERE grado_id = $1
+            AND turno_preferido_id = $2
+            AND periodo_academico_id = $3
+            AND estado = 'en_espera'
+            AND id != $4
+            AND deleted_at IS NULL
+        `, [rowActualizada.grado_id, rowActualizada.turno_preferido_id, rowActualizada.periodo_academico_id, id]);
+        const nextPos = maxPosRes.rows[0]?.next_pos || 1;
+        await client.query(
+          'UPDATE pre_inscripcion SET tiene_cupo_asignado = false, posicion_espera = $1 WHERE id = $2',
+          [nextPos, id]
+        );
+        rowActualizada.tiene_cupo_asignado = false;
+        rowActualizada.posicion_espera = nextPos;
       }
 
       // Si estaba en lista de espera y cambió a otro estado, reordenar a los demás
