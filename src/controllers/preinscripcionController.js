@@ -619,7 +619,9 @@ class PreInscripcionController {
             gradoId: preInscripcion.grado_id,
             turnoId: preInscripcion.turno_preferido_id,
             periodoAcademicoId: preInscripcion.periodo_academico_id,
-            client
+            client,
+            excludePreinscripcionId: parseInt(id, 10),
+            soloAprobadas: true
           });
 
           if (!disp.tiene_cupos) {

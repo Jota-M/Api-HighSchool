@@ -275,43 +275,6 @@ class CupoPreinscripcionController {
   }
 
   /**
-   * VERIFICAR DISPONIBILIDAD (PÚBLICO)
-   */
-  static async verificarDisponibilidad(req, res) {
-    try {
-      const { grado_id, turno_id, periodo_academico_id } = req.query;
-
-      if (!grado_id || !turno_id || !periodo_academico_id) {
-        return res.status(400).json({
-          success: false,
-          message: 'Faltan parámetros: grado_id, turno_id, periodo_academico_id'
-        });
-      }
-
-      const cupo = await CupoPreinscripcion.verificarDisponibilidad(
-        parseInt(grado_id),
-        parseInt(turno_id),
-        parseInt(periodo_academico_id)
-      );
-
-      res.json({
-        success: true,
-        data: {
-          tiene_cupos: cupo ? cupo.tiene_cupos : false,
-          cupo: cupo || null
-        }
-      });
-
-    } catch (error) {
-      console.error('Error al verificar disponibilidad:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Error al verificar disponibilidad: ' + error.message
-      });
-    }
-  }
-
-  /**
    * OBTENER RESUMEN POR PERÍODO
    */
   static async obtenerResumenPorPeriodo(req, res) {
